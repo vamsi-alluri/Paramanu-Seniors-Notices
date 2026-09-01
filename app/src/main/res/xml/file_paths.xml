@@ -1,0 +1,11 @@
+<!--
+  Exposes only the cached notification images, and nothing else the app stores.
+
+  `path` is relative to filesDir and matches NotificationImageStore.DIR, so widening it would hand
+  other apps read access to the Room database sitting alongside it.
+-->
+<paths>
+    <files-path
+        name="notification_images"
+        path="notif_images/" />
+</paths>

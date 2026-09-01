@@ -1,0 +1,18 @@
+<!--
+  Info glyph, punched out of the level chip by LevelIcon.
+
+  Info messages post to the silent channel, so this chip is the only thing marking them; the dot is
+  kept clear of the stem so the two stay separate holes at chip size instead of merging into a bar.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,5.4 m-1.65,0 a1.65,1.65 0 1,0 3.3,0 a1.65,1.65 0 1,0 -3.3,0 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M10.6,9.6 L13.4,9.6 L13.4,19 L10.6,19 Z" />
+</vector>

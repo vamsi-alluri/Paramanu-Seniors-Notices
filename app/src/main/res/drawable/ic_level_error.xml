@@ -1,0 +1,24 @@
+<!--
+  Error glyph: an exclamation inside a warning triangle, punched out of the level chip by LevelIcon.
+
+  The triangle is stroked rather than filled so the chip's colour survives inside it; a solid
+  triangle would leave nowhere for the exclamation to read against. Round joins keep the corners
+  from spiking at small sizes.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:pathData="M12,3.6 L21.4,19.9 L2.6,19.9 Z"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeLineJoin="round"
+        android:strokeWidth="2.1" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M11.15,9.3 L12.85,9.3 L12.55,15 L11.45,15 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,17.25 m-1.15,0 a1.15,1.15 0 1,0 2.3,0 a1.15,1.15 0 1,0 -2.3,0 Z" />
+</vector>

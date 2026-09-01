@@ -1,0 +1,36 @@
+<resources>
+    <string name="app_name">Paramanu Notices</string>
+    <string name="empty_state">No notices yet.</string>
+    <string name="notification_channel_name">Alerts</string>
+    <string name="notification_channel_description">Messages pushed from the server</string>
+    <string name="notification_channel_silent_name">Updates</string>
+    <string name="notification_channel_silent_description">Informational messages, delivered without sound</string>
+    <string name="permission_banner_title">Notifications are off</string>
+    <string name="permission_banner_body">Notices won\'t reach you until notifications are turned on for Paramanu Notices.</string>
+    <string name="permission_banner_action">Turn on</string>
+    <string name="filter_select_all">Select all</string>
+    <string name="filter_select_none">Select none</string>
+    <string name="filter_error">Error</string>
+    <string name="filter_warning">Warning</string>
+    <string name="filter_success">Success</string>
+    <string name="filter_info">Info</string>
+    <string name="filter_other">Other</string>
+    <string name="list_conjunction">and</string>
+    <string name="dialog_clear">Clear</string>
+    <string name="dialog_cancel">Cancel</string>
+    <string name="empty_filtered">No notifications match the selected types.</string>
+    <string name="action_clear">Clear</string>
+    <string name="action_share">Share</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_exit_selection">Exit selection</string>
+    <string name="selection_count">%1$d selected</string>
+    <string name="share_chooser">Share notifications</string>
+    <string name="clear_shown_title">Clear these notifications?</string>
+    <string name="clear_shown_message">This deletes %1$d notifications in %2$s. It cannot be undone.</string>
+    <string name="clear_shown_message_hidden">This deletes %1$d notifications in %2$s. %3$d hidden by the filter are kept. It cannot be undone.</string>
+    <string name="delete_selection_title">Delete selected notifications?</string>
+    <string name="delete_selection_message">This deletes %1$d selected notifications. It cannot be undone.</string>
+    <string name="image_open">Open image</string>
+    <string name="snackbar_deleted">Notification deleted</string>
+    <string name="action_undo">Undo</string>
+</resources>

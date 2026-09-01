@@ -1,0 +1,23 @@
+<!--
+  The bell-with-power glyph from the launcher icon, redrawn for a 24dp icon so the notification
+  matches the app's identity rather than using a generic bell.
+
+  Two consumers, which is why the tint is not baked in here:
+    - setSmallIcon, where the system masks the whole shape to a colour of its own choosing;
+    - LevelIcon, which tints it white and draws it onto the level-coloured disc.
+
+  In the second case the power symbol is a hole rather than a dark glyph, so the level colour shows
+  through it. That requires a single evenOdd path whose subpaths do not overlap, since two
+  overlapping filled regions cancel; hence the knob forms part of the bell's outline instead of
+  being a separate circle, and the clapper starts just below the flange.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M4,18 L4,16 L5.5,16 L5.5,11.5 C5.5,9 6.9,7 9,6.2 A3.2,3.2 0 1 1 15,6.2 C17.1,7 18.5,9 18.5,11.5 L18.5,16 L20,16 L20,18 Z M9.5,18.6 A2.5,2.5 0 0 0 14.5,18.6 Z M14.475,8.925 A3.5,3.5 0 1 1 9.525,8.925 L10.303,9.703 A2.4,2.4 0 1 0 13.697,9.703 Z M11.4,7 L12.6,7 L12.6,11.6 L11.4,11.6 Z" />
+</vector>
