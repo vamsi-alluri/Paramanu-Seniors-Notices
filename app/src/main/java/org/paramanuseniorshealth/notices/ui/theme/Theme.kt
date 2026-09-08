@@ -1,58 +1,79 @@
 package org.paramanuseniorshealth.notices.ui.theme
 
-import android.app.Activity
-import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.platform.LocalContext
 
-private val DarkColorScheme = darkColorScheme(
-    primary = Purple80,
-    secondary = PurpleGrey80,
-    tertiary = Pink80
+private val LightColors = lightColorScheme(
+    primary = NavyPrimary,
+    onPrimary = NavyOnPrimary,
+    primaryContainer = NavyContainer,
+    onPrimaryContainer = NavyOnContainer,
+    secondary = NavyPrimary,
+    onSecondary = NavyOnPrimary,
+    secondaryContainer = NavyContainer,
+    onSecondaryContainer = NavyOnContainer,
+    error = RedAccent,
+    onError = RedOnAccent,
+    errorContainer = RedContainer,
+    onErrorContainer = RedOnContainer,
+    background = SurfaceLight,
+    onBackground = OnSurfaceLight,
+    surface = SurfaceLight,
+    onSurface = OnSurfaceLight,
+    surfaceVariant = SurfaceVariantLight,
+    onSurfaceVariant = OnSurfaceVariantLight,
 )
 
-private val LightColorScheme = lightColorScheme(
-    primary = Purple40,
-    secondary = PurpleGrey40,
-    tertiary = Pink40
-
-    /* Other default colors to override
-    background = Color(0xFFFFFBFE),
-    surface = Color(0xFFFFFBFE),
-    onPrimary = Color.White,
-    onSecondary = Color.White,
-    onTertiary = Color.White,
-    onBackground = Color(0xFF1C1B1F),
-    onSurface = Color(0xFF1C1B1F),
-    */
+private val DarkColors = darkColorScheme(
+    primary = NavyPrimaryDark,
+    onPrimary = NavyOnPrimaryDark,
+    primaryContainer = NavyContainerDark,
+    onPrimaryContainer = NavyOnContainerDark,
+    secondary = NavyPrimaryDark,
+    onSecondary = NavyOnPrimaryDark,
+    secondaryContainer = NavyContainerDark,
+    onSecondaryContainer = NavyOnContainerDark,
+    error = RedAccentDark,
+    onError = RedOnAccentDark,
+    errorContainer = RedContainerDark,
+    onErrorContainer = RedOnContainerDark,
+    background = SurfaceDark,
+    onBackground = OnSurfaceDark,
+    surface = SurfaceDark,
+    onSurface = OnSurfaceDark,
+    surfaceVariant = SurfaceVariantDark,
+    onSurfaceVariant = OnSurfaceVariantDark,
 )
 
+/**
+ * Follows the device's light/dark setting, and nothing else.
+ *
+ * Dynamic colour is deliberately **off**. It derives the palette from the user's wallpaper, which
+ * means neither the contrast nor the brand survives contact with a real phone -- a pale wallpaper
+ * can produce a washed-out primary that is legible on a reviewer's desk and not legible to someone
+ * in their nineties. A fixed, checked palette is the right trade for this audience.
+ *
+ * The [Surface] wrapper matters as much as the colours: it makes Compose paint the window
+ * background itself, so the app can never again show one scheme's text on the other scheme's
+ * background the way it did when only the platform theme decided.
+ */
 @Composable
 fun ParamanuNoticesTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
-    // Dynamic color is available on Android 12+
-    dynamicColor: Boolean = true,
-    content: @Composable () -> Unit
+    content: @Composable () -> Unit,
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
     MaterialTheme(
-        colorScheme = colorScheme,
+        colorScheme = if (darkTheme) DarkColors else LightColors,
         typography = Typography,
-        content = content
-    )
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.background,
+            contentColor = MaterialTheme.colorScheme.onBackground,
+            content = content,
+        )
+    }
 }

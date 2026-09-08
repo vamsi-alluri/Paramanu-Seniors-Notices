@@ -2,11 +2,11 @@
   "formatVersion": 1,
   "database": {
     "version": 2,
-    "identityHash": "f508e463234327c4d1ccd2065e109245",
+    "identityHash": "14b2d2f72686086c1457f203ada454fd",
     "entities": [
       {
-        "tableName": "notifications",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `logId` TEXT, `title` TEXT NOT NULL, `body` TEXT NOT NULL, `receivedAt` INTEGER NOT NULL, `imageUrl` TEXT, `level` TEXT, `color` TEXT)",
+        "tableName": "notices",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `logId` TEXT, `title` TEXT NOT NULL, `body` TEXT NOT NULL, `receivedAt` INTEGER NOT NULL, `imageUrl` TEXT, `pdfUrl` TEXT)",
         "fields": [
           {
             "fieldPath": "id",
@@ -43,13 +43,8 @@
             "affinity": "TEXT"
           },
           {
-            "fieldPath": "level",
-            "columnName": "level",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "color",
-            "columnName": "color",
+            "fieldPath": "pdfUrl",
+            "columnName": "pdfUrl",
             "affinity": "TEXT"
           }
         ],
@@ -61,20 +56,20 @@
         },
         "indices": [
           {
-            "name": "index_notifications_logId",
+            "name": "index_notices_logId",
             "unique": true,
             "columnNames": [
               "logId"
             ],
             "orders": [],
-            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_notifications_logId` ON `${TABLE_NAME}` (`logId`)"
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_notices_logId` ON `${TABLE_NAME}` (`logId`)"
           }
         ]
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'f508e463234327c4d1ccd2065e109245')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '14b2d2f72686086c1457f203ada454fd')"
     ]
   }
 }

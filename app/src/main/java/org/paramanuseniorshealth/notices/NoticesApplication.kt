@@ -1,72 +1,48 @@
 package org.paramanuseniorshealth.notices
 
 import android.app.Application
-import android.util.Log
-import coil3.ImageLoader
-import coil3.PlatformContext
-import coil3.SingletonImageLoader
-import coil3.disk.DiskCache
-import okio.Path.Companion.toOkioPath
-import org.paramanuseniorshealth.notices.data.NotificationRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import org.paramanuseniorshealth.notices.activation.ActivationRepository
+import org.paramanuseniorshealth.notices.activation.Subscription
+import org.paramanuseniorshealth.notices.data.InfoRepository
+import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.data.NoticesDatabase
-import org.paramanuseniorshealth.notices.fcm.NotificationChannels
-import com.google.firebase.messaging.FirebaseMessaging
+import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
 
-class NoticesApplication : Application(), SingletonImageLoader.Factory {
+class NoticesApplication : Application() {
 
     /**
-     * Hand-rolled container. The graph is one database -> one DAO -> one repository, shared by the
-     * Activity and the FCM service; Hilt would add a KSP round and an extra Gradle plugin without
-     * removing any wiring. See README notes for the Hilt migration if the graph grows.
+     * Hand-rolled container. The graph is one database -> one DAO -> one repository plus the
+     * activation repository, shared by the Activity and the FCM service; Hilt would add a KSP round
+     * and a Gradle plugin without removing any wiring.
      */
-    val repository: NotificationRepository by lazy {
-        NotificationRepository(NoticesDatabase.getInstance(this).notificationDao(), this)
+    val repository: NoticeRepository by lazy {
+        NoticeRepository(NoticesDatabase.getInstance(this).noticeDao(), this)
     }
 
-    /**
-     * Caps Coil's disk cache, which the list relies on once it falls back to fetching images by URL
-     * for alerts whose local copy has been pruned.
-     *
-     * Coil's default is a share of free space up to roughly 250MB. That would quietly replace a
-     * deliberately bounded ten-image store with a very large one, on a device where this app is a
-     * background utility. Coil keys its cache by URL, so alerts sharing an image share one entry.
-     */
-    override fun newImageLoader(context: PlatformContext): ImageLoader =
-        ImageLoader.Builder(context)
-            .diskCache {
-                DiskCache.Builder()
-                    .directory(cacheDir.resolve("image_cache").toOkioPath())
-                    .maxSizeBytes(IMAGE_CACHE_BYTES)
-                    .build()
-            }
-            .build()
+    val activationRepository: ActivationRepository by lazy { ActivationRepository(this) }
+
+    val infoRepository: InfoRepository by lazy { InfoRepository(this) }
+
+    private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
 
-        // Must exist before the first notification is posted, and the FCM service can start
-        // without an Activity ever having run, so create it here.
-        NotificationChannels.create(this)
+        // Must exist before the first notification is posted, and the FCM service can start without
+        // an Activity ever having run, so the channel is created here.
+        NoticeNotifications.create(this)
+        if (activationRepository.isSubscribed(Subscription.TESTING)) {
+            NoticeNotifications.createTestingChannel(this)
+        }
 
-        subscribeToTopic()
-    }
-
-    private fun subscribeToTopic() {
-        // Idempotent and locally persisted: the SDK retries on its own if there is no network at
-        // launch, so calling it on every start is cheap and self-healing.
-        FirebaseMessaging.getInstance().subscribeToTopic(TOPIC)
-            .addOnCompleteListener { task ->
-                if (task.isSuccessful) {
-                    Log.d(TAG, "Subscribed to topic '$TOPIC'")
-                } else {
-                    Log.w(TAG, "Failed to subscribe to topic '$TOPIC'", task.exception)
-                }
-            }
-    }
-
-    companion object {
-        private const val TAG = "NoticesApplication"
-        private const val IMAGE_CACHE_BYTES = 50L * 1024 * 1024
-        const val TOPIC = "all"
+        // Unlike the app this was forked from, there is no unconditional subscribe on launch. A
+        // device subscribes only once a code has been redeemed, and stays unsubscribed if the user
+        // has switched notices off in Settings -- otherwise an un-activated install would sit on
+        // the topic receiving payloads it merely declines to draw.
+        appScope.launch { activationRepository.syncSubscriptions() }
     }
 }

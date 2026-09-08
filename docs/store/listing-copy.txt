@@ -1,5 +1,5 @@
 TITLE (max 30)
-Paramanu Notices
+Paramanu Seniors Notices
 
 SHORT DESCRIPTION (max 80)
 Dispensary hours, closures and notices from Paramanu Seniors Health.
@@ -7,7 +7,7 @@ Dispensary hours, closures and notices from Paramanu Seniors Health.
 FULL DESCRIPTION (max 4000)
 Published by <YOUR NAME> on behalf of Paramanu Seniors Health.
 
-Paramanu Notices delivers announcements from Paramanu Seniors Health directly to
+Paramanu Seniors Notices delivers announcements from Paramanu Seniors Health directly to
 your phone, so you know about a change before you travel to the dispensary.
 
 WHAT YOU RECEIVE

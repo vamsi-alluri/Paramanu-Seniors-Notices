@@ -1,6 +1,6 @@
 package org.paramanuseniorshealth.notices.ui
 
-import org.paramanuseniorshealth.notices.data.NotificationEntity
+import org.paramanuseniorshealth.notices.data.NoticeEntity
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -23,11 +23,11 @@ object ShareText {
     private const val SEPARATOR = "\n\n\n"
 
     fun build(
-        notifications: List<NotificationEntity>,
+        notifications: List<NoticeEntity>,
         zone: ZoneId = ZoneId.systemDefault(),
     ): String = notifications.joinToString(SEPARATOR) { entry(it, zone) }
 
-    private fun entry(notification: NotificationEntity, zone: ZoneId): String = buildString {
+    private fun entry(notification: NoticeEntity, zone: ZoneId): String = buildString {
         appendLine(notification.title)
         // A blank body is possible: the push contract only requires a title.
         if (notification.body.isNotBlank()) appendLine(notification.body)

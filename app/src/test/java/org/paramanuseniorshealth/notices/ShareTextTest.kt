@@ -1,6 +1,6 @@
 package org.paramanuseniorshealth.notices
 
-import org.paramanuseniorshealth.notices.data.NotificationEntity
+import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.ui.ShareText
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -10,7 +10,7 @@ class ShareTextTest {
 
     private val utc = ZoneId.of("UTC")
 
-    private fun entity(id: Long, title: String, body: String, at: Long) = NotificationEntity(
+    private fun entity(id: Long, title: String, body: String, at: Long) = NoticeEntity(
         id = id,
         logId = at.toString(),
         title = title,

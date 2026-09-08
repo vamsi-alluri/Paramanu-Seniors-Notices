@@ -1,0 +1,45 @@
+{
+  "codes": {
+    "P1AYREVQ": {
+      "issued": 1788239736597,
+      "note": "play-review"
+    },
+    "Y4EJ65B1": {
+      "issued": 1788250388929,
+      "usedBy": "fqEViqYtLbNPONhrBVXiiuj4Mdj2",
+      "activatedAt": 1788250388929,
+      "note": "restored after accidental root import"
+    },
+    "THHVWEHJ": {
+      "issued": 1788239736597
+    },
+    "MQCAMGPC": {
+      "issued": 1788239736597
+    },
+    "NQX18XAT": {
+      "issued": 1788239736597
+    },
+    "XE29ND28": {
+      "issued": 1788239736597
+    },
+    "AP4R172Z": {
+      "issued": 1788239736597
+    },
+    "7B23AFX6": {
+      "issued": 1788239736597
+    },
+    "GR9G36QF": {
+      "issued": 1788239736597
+    },
+    "16MN3D3F": {
+      "issued": 1788239736597
+    },
+    "QSPP3X8R": {
+      "issued": 1788239736597
+    }
+  },
+  "info": {
+    "heading": "Dispensary timings",
+    "lines": "OPD: 9.00 am to 1.00 pm, Monday to Saturday\nEvening OPD: 4.00 pm to 6.00 pm, Monday to Friday\nPharmacy: 9.00 am to 5.00 pm\nClosed on Sundays and public holidays\nBARC Hospital casualty: 2558 2112 / 2559 8100"
+  }
+}

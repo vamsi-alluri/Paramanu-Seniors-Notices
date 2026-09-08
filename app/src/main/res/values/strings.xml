@@ -1,36 +1,83 @@
 <resources>
-    <string name="app_name">Paramanu Notices</string>
-    <string name="empty_state">No notices yet.</string>
-    <string name="notification_channel_name">Alerts</string>
-    <string name="notification_channel_description">Messages pushed from the server</string>
-    <string name="notification_channel_silent_name">Updates</string>
-    <string name="notification_channel_silent_description">Informational messages, delivered without sound</string>
+    <string name="app_name">Paramanu Seniors Notices</string>
+    <!-- The header on the notice list. The launcher and the store carry the app name;
+         repeating it at the top of the screen tells the reader nothing they do not know. -->
+    <string name="screen_notices">Notices</string>
+    <string name="logo_description">Paramanu Seniors Health logo</string>
+
+    <!-- Notifications -->
+    <string name="notification_channel_name">Notices</string>
+    <string name="notification_channel_description">Dispensary hours, closures and notices</string>
+    <string name="notification_channel_status_name">Daily open and closed</string>
+    <string name="notification_channel_status_description">The routine morning and evening status. Silent by default.</string>
+    <string name="notification_channel_testing_name">Testing</string>
+    <string name="notification_channel_testing_description">Messages used to check delivery on this phone. Only appears if testing is switched on.</string>
     <string name="permission_banner_title">Notifications are off</string>
-    <string name="permission_banner_body">Notices won\'t reach you until notifications are turned on for Paramanu Notices.</string>
+    <string name="permission_banner_body">Notices will not reach you until notifications are turned on for Paramanu Seniors Notices.</string>
     <string name="permission_banner_action">Turn on</string>
-    <string name="filter_select_all">Select all</string>
-    <string name="filter_select_none">Select none</string>
-    <string name="filter_error">Error</string>
-    <string name="filter_warning">Warning</string>
-    <string name="filter_success">Success</string>
-    <string name="filter_info">Info</string>
-    <string name="filter_other">Other</string>
-    <string name="list_conjunction">and</string>
-    <string name="dialog_clear">Clear</string>
-    <string name="dialog_cancel">Cancel</string>
-    <string name="empty_filtered">No notifications match the selected types.</string>
-    <string name="action_clear">Clear</string>
-    <string name="action_share">Share</string>
+
+    <!-- Activation ("PIN") gate -->
+    <string name="activation_title">Enter your code</string>
+    <string name="activation_explainer">Type the eight-character code from your slip. Letters and numbers only.</string>
+    <string name="activation_submit">Continue</string>
+    <string name="activation_where_to_get_code">You can collect a code from the dispensary counter.</string>
+    <string name="activation_error_mistyped">That code does not look right. Please check each character and try again.</string>
+    <string name="activation_error_not_accepted">That code was not accepted. It may already have been used. Please ask at the counter.</string>
+    <string name="activation_error_offline">Could not connect. Please check your internet and try again.</string>
+
+    <!-- Notice list -->
+    <string name="empty_state">No notices yet.</string>
+    <string name="selection_count">%1$d selected</string>
+    <string name="action_settings">Settings</string>
     <string name="action_delete">Delete</string>
     <string name="action_exit_selection">Exit selection</string>
-    <string name="selection_count">%1$d selected</string>
-    <string name="share_chooser">Share notifications</string>
-    <string name="clear_shown_title">Clear these notifications?</string>
-    <string name="clear_shown_message">This deletes %1$d notifications in %2$s. It cannot be undone.</string>
-    <string name="clear_shown_message_hidden">This deletes %1$d notifications in %2$s. %3$d hidden by the filter are kept. It cannot be undone.</string>
-    <string name="delete_selection_title">Delete selected notifications?</string>
-    <string name="delete_selection_message">This deletes %1$d selected notifications. It cannot be undone.</string>
-    <string name="image_open">Open image</string>
-    <string name="snackbar_deleted">Notification deleted</string>
-    <string name="action_undo">Undo</string>
+    <string name="action_back">Back</string>
+    <string name="action_open_pdf">Open the full notice</string>
+    <string name="dialog_cancel">Cancel</string>
+
+    <!-- Viewer -->
+    <string name="viewer_no_image">The notice image is not saved on this phone.</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_subscriptions">What you receive</string>
+    <string name="settings_receive_notices">Notices</string>
+    <string name="settings_receive_notices_explainer">Closures, timing changes and circulars. Sent only when there is something to tell you.</string>
+    <string name="settings_receive_status">Daily open and closed</string>
+    <string name="settings_receive_status_explainer">A quiet message each morning and evening saying whether the dispensary is open. Arrives without a sound.</string>
+    <string name="settings_receive_testing">Testing messages</string>
+    <string name="settings_receive_testing_explainer">For checking delivery on this phone. Leave off unless you have been asked to turn it on.</string>
+
+    <string name="settings_check">Check notifications</string>
+    <string name="settings_check_explainer">Sends a notification to this phone straight away, so you can see that they are working.</string>
+    <string name="settings_check_action">Send a test notification</string>
+    <string name="test_notification_title">This is a test</string>
+    <string name="test_notification_body">Notifications are working on this phone. Real notices will look like this.</string>
+    <string name="toast_test_sent">Test notification sent. Look at the top of your screen.</string>
+    <string name="toast_test_blocked">Notifications are turned off for this app, so nothing can be sent. Turn them on first.</string>
+    <string name="toast_testing_unlocked">Testing messages can now be switched on.</string>
+
+    <string name="settings_contact">Contact</string>
+    <string name="settings_contact_org">Paramanu Seniors Health</string>
+    <string name="settings_contact_helpdesk">HELPDESK, CHSS BENEFICIARIES GROUP</string>
+    <string name="settings_contact_address">201 Satavahana CHS Ltd, Plot Nos 392 &amp; 403, Sector 31, Vashi (Post), Navi Mumbai, Maharashtra 400 703</string>
+    <string name="settings_contact_phone">+91 99202 19522</string>
+    <string name="settings_contact_email">venubabumumbai@gmail.com</string>
+    <string name="settings_contact_website">paramanuseniorshealth.org</string>
+    <string name="settings_privacy">Privacy policy</string>
+    <string name="settings_privacy_url">https://paramanuseniorshealth.org/privacy-policy-app/</string>
+    <string name="settings_website_url">https://paramanuseniorshealth.org/</string>
+    <string name="settings_your_code">Your code</string>
+    <string name="settings_reset">Reset this app</string>
+    <string name="settings_reset_explainer">Removes your code and all saved notices from this phone. You will need a new code from the counter.</string>
+    <string name="settings_reset_action">Reset</string>
+    <string name="settings_reset_confirm_title">Reset this app?</string>
+    <string name="settings_reset_confirm_body">Your code and every saved notice will be removed from this phone. This cannot be undone, and you will need a new code from the dispensary counter.</string>
+    <string name="toast_access_removed">Your access has been removed. Please ask at the dispensary counter for a new code.</string>
+    <string name="settings_about">Notices are published by Helpdesk, CHSS Beneficiaries Group, Vashi, Navi Mumbai, Maharashtra, India.</string>
+    <string name="settings_version">Version %1$s</string>
+
+    <!-- The first entry in a new install's list, written locally when a code is redeemed. -->
+    <string name="welcome_title">Your app is ready</string>
+    <string name="welcome_body">Notices from Paramanu Seniors Health will appear here. You can open this app at any time to read one again.</string>
 </resources>

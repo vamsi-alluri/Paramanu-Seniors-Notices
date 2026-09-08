@@ -17,8 +17,8 @@ android {
         applicationId "org.paramanuseniorshealth.notices"
         minSdk 26
         targetSdk 36
-        versionCode 1
-        versionName "1.0"
+        versionCode 6
+        versionName "0.3.2"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -36,6 +36,8 @@ android {
     }
     buildFeatures {
         compose true
+        // VERSION_NAME is shown in Settings, and doubles as the hidden testing unlock.
+        buildConfig true
     }
 }
 
@@ -55,19 +57,19 @@ dependencies {
     implementation libs.androidx.lifecycle.runtime.ktx
     implementation libs.androidx.lifecycle.runtime.compose
     implementation libs.androidx.lifecycle.viewmodel.compose
-    implementation(platform("com.google.firebase:firebase-bom:34.18.0"))
-    implementation(libs.firebase.analytics)
-
     implementation platform(libs.firebase.bom)
     implementation libs.firebase.messaging
+    implementation libs.firebase.auth
+    implementation libs.firebase.database
+
+    implementation libs.coil.compose
+    // Coil 3 keeps network fetching in a separate artifact; without it https models fail.
+    implementation libs.coil.network.okhttp
 
     implementation libs.androidx.room.runtime
     implementation libs.androidx.room.ktx
     ksp libs.androidx.room.compiler
 
-    implementation libs.coil.compose
-    // Coil 3 keeps network fetching in a separate artifact; without it https models fail.
-    implementation libs.coil.network.okhttp
 
     testImplementation libs.junit
     androidTestImplementation platform(libs.androidx.compose.bom)

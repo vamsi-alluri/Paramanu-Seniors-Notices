@@ -1,68 +1,127 @@
 package org.paramanuseniorshealth.notices.fcm
 
-import org.paramanuseniorshealth.notices.NoticesApplication
+import android.util.Log
 import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.runBlocking
+import org.paramanuseniorshealth.notices.NoticesApplication
+import org.paramanuseniorshealth.notices.activation.ActivationState
+import org.paramanuseniorshealth.notices.activation.Subscription
 
 class NoticeMessagingService : FirebaseMessagingService() {
 
     /**
      * Called for every message while the app is in the foreground, and for **data-only** messages
      * in the background too. A payload containing a `notification` block is handled by the SDK and
-     * drawn straight into the tray while backgrounded -- this method does not run, which is why the
-     * backend must send data-only messages. See MainActivity for the tap-intent fallback.
+     * drawn straight into the tray while backgrounded -- this method never runs, the entitlement
+     * check below is bypassed, and nothing is written to history. The sender must therefore send
+     * data-only messages; see docs/sender-contract.md.
      */
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
-        // Prefer the data payload; fall back to the notification block for hybrid payloads.
         val title = data["title"] ?: message.notification?.title ?: return
         val body = data["body"] ?: message.notification?.body.orEmpty()
         val logId = data["logId"]
         val imageUrl = data["imageUrl"]?.takeIf { it.isNotBlank() }
-        val level = data["level"]
-        val color = data["color"]
+        val pdfUrl = data["pdfUrl"]?.takeIf { it.isNotBlank() }
+        val subscription = Subscription.fromCategory(data["category"])
 
         // onMessageReceived already runs off the main thread and the service is held alive for the
         // duration of this call, so blocking here guarantees the work lands before teardown.
         runBlocking {
             val app = applicationContext as NoticesApplication
 
-            // Saved before the image is fetched: a slow or dead URL must never cost a history entry.
+            if (!isEntitled(app)) return@runBlocking
+
+            // A second check behind the topic subscription. Unsubscribing is not instant -- FCM can
+            // keep delivering for a short while afterwards -- so without this a user who has just
+            // switched the daily status off still gets the next one, and reasonably concludes the
+            // switch does not work.
+            if (!app.activationRepository.isSubscribed(subscription)) {
+                Log.i(TAG, "Dropped a ${'$'}{subscription.name} message: not subscribed")
+                return@runBlocking
+            }
+
+            // Saved before the PDF is fetched: a slow or dead URL must never cost a history entry.
             val isNew = app.repository.save(
                 title = title,
                 body = body,
                 logId = logId,
                 imageUrl = imageUrl,
-                level = level,
-                color = color,
+                pdfUrl = pdfUrl,
             )
 
-            // Fetching serves double duty -- the bitmap goes straight into the tray notification and
-            // the same file backs the in-app list, so the UI never performs network I/O.
-            val image = if (imageUrl != null && logId != null) {
-                NotificationImageStore.fetch(applicationContext, imageUrl, logId)
+            // Both attachments are fetched when both are present -- they are not alternatives, and
+            // the expanded row shows each. Fetching serves double duty: one of these bitmaps goes
+            // into the tray notification and the same files back the in-app row, so the UI never
+            // performs network I/O and the notice stays readable offline.
+            val picture = if (logId != null) {
+                val photo = imageUrl?.let { NoticeImageStore.fetchImage(applicationContext, it, logId) }
+                val rendered = pdfUrl?.let { NoticeImageStore.fetchPdfRender(applicationContext, it, logId) }
+                // The sender's own picture wins the tray: it was chosen for a small frame, whereas
+                // an A4 page shrunk to notification size is barely legible.
+                photo ?: rendered
             } else {
                 null
             }
 
-            // Only draw the tray notification ourselves for data-only payloads. If the server also
-            // sent a `notification` block while we were in the foreground, posting again would
-            // duplicate it. `isNew` additionally suppresses re-delivered messages.
+            // Only draw the tray notification for data-only payloads: if the sender also included a
+            // `notification` block while we were foregrounded, posting again would duplicate it.
+            // `isNew` additionally suppresses FCM's at-least-once re-deliveries.
             if (isNew && message.notification == null) {
-                NotificationChannels.post(
+                NoticeNotifications.post(
                     context = this@NoticeMessagingService,
                     title = title,
                     body = body,
                     logId = logId,
-                    image = image,
-                    level = level,
-                    color = color,
+                    image = picture,
+                    subscription = subscription,
                 )
             }
         }
     }
 
+    /**
+     * The client-side entitlement gate.
+     *
+     * Note what this is and is not. The payload has already reached the device by the time this
+     * runs -- the app is declining to *show* it, not being prevented from receiving it. That is
+     * adequate here because every notice is also published publicly on the website, and it must not
+     * later be mistaken for access control.
+     *
+     * The asymmetry in the failure handling is deliberate:
+     *
+     * - [ActivationState.Revoked] is a definitive answer, so delivery stops and the local claim is
+     *   cleared, which returns the app to the code-entry screen.
+     * - [ActivationState.Unknown] means the check could not be completed -- offline, slow signal,
+     *   backend unreachable. The notice is shown. Suppressing it would mean a user in their
+     *   eighties misses a closure notice because of a weak signal, which is a far worse outcome
+     *   than an already-revoked device seeing one more public announcement.
+     */
+    private suspend fun isEntitled(app: NoticesApplication): Boolean =
+        when (app.activationRepository.verify()) {
+            ActivationState.Active -> true
+            ActivationState.Unknown -> {
+                Log.i(TAG, "Entitlement inconclusive; showing the notice anyway")
+                true
+            }
+            ActivationState.NotActivated -> {
+                // Subscribed but never activated: possible after a data wipe. Stop the delivery.
+                Log.i(TAG, "Notice dropped: not activated")
+                app.activationRepository.unsubscribeAll()
+                false
+            }
+            ActivationState.Revoked -> {
+                Log.i(TAG, "Notice dropped: activation revoked")
+                app.activationRepository.clearRevoked()
+                false
+            }
+        }
+
     // onNewToken is intentionally not overridden: this app is addressed only by topic, and the SDK
     // re-establishes topic subscriptions itself after a token rotation.
+
+    private companion object {
+        private const val TAG = "NoticeFCM"
+    }
 }

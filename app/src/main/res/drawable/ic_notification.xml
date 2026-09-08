@@ -4,7 +4,7 @@
 
   Two consumers, which is why the tint is not baked in here:
     - setSmallIcon, where the system masks the whole shape to a colour of its own choosing;
-    - LevelIcon, which tints it white and draws it onto the level-coloured disc.
+    - the status bar, monochrome, at the system-chosen size.
 
   In the second case the power symbol is a hole rather than a dark glyph, so the level colour shows
   through it. That requires a single evenOdd path whose subpaths do not overlap, since two

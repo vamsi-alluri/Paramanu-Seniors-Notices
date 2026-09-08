@@ -13,3 +13,17 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Signing keys — never commit
+keystore
+*.jks
+*.keystore
+keystore.properties
+
+# Build outputs
+/app/release/
+*.aab
+*.apk
+
+# IDE
+/.idea/

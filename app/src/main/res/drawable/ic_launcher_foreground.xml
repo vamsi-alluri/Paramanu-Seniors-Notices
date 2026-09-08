@@ -1,32 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
 <!--
-  Launcher foreground: a bell with a power symbol knocked out of it.
+  Launcher icon foreground: the website logo, inset to sit inside the adaptive icon safe zone.
 
-  One path with evenOdd fill, not a white bell with a coloured glyph painted on top: the same
-  drawable is the <monochrome> layer, and Android 13+ themed icons re-tint it from its alpha, so
-  anything "cut out" has to be genuinely transparent rather than background-coloured.
+  An adaptive icon is 108dp with only the central 72dp guaranteed visible; the launcher masks the
+  rest to whatever shape the device uses. The 22% inset keeps the whole mark inside that circle.
 
-  Consequently the subpaths must not overlap, two overlapping filled regions cancel to a hole
-  under evenOdd, which is why the knob is drawn as part of the bell's outline rather than as a
-  separate circle, and the clapper starts just below the flange.
-
-  The group scales the artwork into the adaptive-icon safe zone (the centre 72dp of the 108dp
-  viewport; the launcher may mask anything outside it) and lifts it, since the clapper makes the
-  silhouette bottom-heavy.
+  The source is a JPEG with a white background and no transparency, which is why the background
+  layer below is white rather than a brand colour: anything else would show as a square of white
+  behind the mark. A transparent source is what would let this be done properly.
 -->
-<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <group
-        android:pivotX="54"
-        android:pivotY="54"
-        android:scaleX="0.86"
-        android:scaleY="0.86"
-        android:translateY="-1">
-        <path
-            android:fillColor="#FFFFFFFF"
-            android:fillType="evenOdd"
-            android:pathData="M28,80 L28,72 L34,72 L34,54 C34,44 40,36 48,33 A7,7 0 1 1 60,33 C68,36 74,44 74,54 L74,72 L80,72 L80,80 Z M45,81 A9,9 0 0 0 63,81 Z M62.7,45.34 A13,13 0 1 1 45.3,45.34 L47.31,47.57 A10,10 0 1 0 60.69,47.57 Z M51.8,39 L56.2,39 L56.2,57 L51.8,57 Z" />
-    </group>
-</vector>
+<inset xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/logo"
+    android:inset="22%" />

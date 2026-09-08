@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<style>
+  :root { color-scheme: light; }
+  html { scroll-behavior: smooth; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
+         background: #f4f6fb; color: #10131a; }
+
+  .page { max-width: 1040px; margin: 0 auto; padding: 0 20px 60px; }
+
+  /* Sticky so the section links stay reachable from anywhere on a long page. */
+  .topbar { position: sticky; top: 0; z-index: 10; background: #fcfcffee;
+            backdrop-filter: blur(6px); border-bottom: 1px solid #e0e4ee;
+            padding: 12px 20px; margin-bottom: 24px; }
+  .topbar .inner { max-width: 1040px; margin: 0 auto; display: flex; gap: 18px;
+                   align-items: baseline; flex-wrap: wrap; }
+  .topbar .brand { font-weight: 600; font-size: 15px; color: #14315c; margin-right: 4px; }
+  .topbar a { font-size: 14px; color: #4a5162; text-decoration: none; padding: 4px 0;
+              border-bottom: 2px solid transparent; }
+  .topbar a:hover { color: #14315c; border-bottom-color: #14315c; }
+
+  /* Each section is its own card, so it is obvious where one job ends and the next begins. */
+  .card { background: #fff; border: 1px solid #e0e4ee; border-radius: 14px;
+          padding: 22px 24px; margin-bottom: 22px; }
+  /* Clears the sticky bar when an anchor is jumped to. */
+  .card { scroll-margin-top: 76px; }
+
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 4px; color: #10131a; }
+  .sub { color: #4a5162; font-size: 13px; margin-bottom: 18px; line-height: 1.5; }
+  .divider { height: 1px; background: #e6e9f0; margin: 22px 0; }
+
+  .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 1px solid #14315c;
+           background: #14315c; color: #fff; cursor: pointer; }
+  button.ghost { background: #fff; color: #14315c; }
+  button:disabled { opacity: .5; cursor: default; }
+  input, textarea { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
+                    background: #fff; color: #10131a; }
+  input[type=number] { width: 72px; }
+  input[type=text] { min-width: 280px; flex: 1; }
+  input[type=color] { padding: 2px; width: 38px; }
+  .wide { width: 100%; box-sizing: border-box; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e6e9f0;
+           vertical-align: top; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #4a5162; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 17px; letter-spacing: .06em; }
+  .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
+  .free { background: #d6e2f5; color: #03152e; }
+  .used { background: #e6e9f0; color: #2a2f3a; }
+  .revoked { background: #f9dedc; color: #410e0b; }
+
+  /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
+  .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
+         margin-bottom: 16px; display: none; }
+  .msg.err { background: #f9dedc; color: #410e0b; display: block; }
+  .msg.ok { background: #d6e2f5; color: #03152e; display: block; }
+
+  /* Slips: one code per cut-out, big enough to read and to type from. */
+  #slips { display: none; }
+  @media print {
+    .noprint { display: none !important; }
+    #slips { display: grid !important; grid-template-columns: 1fr 1fr;
+             gap: 10mm; page-break-inside: auto; }
+    .slip { border: 1px dashed #666; padding: 8mm; text-align: center; }
+    .slip .code { font-family: ui-monospace, monospace; font-size: 30pt;
+                  letter-spacing: .1em; margin: 6mm 0; }
+  }
+</style>
+</head>
+<body>
+
+<div class="noprint">
+
+  <div class="topbar">
+    <div class="inner">
+      <span class="brand">Paramanu Seniors Notices &mdash; Admin</span>
+      <a href="#codes">Activation codes</a>
+      <a href="#messages">Saved messages</a>
+      <a href="#banner-section">Dispensary banner</a>
+      <a href="#status">Daily open and closed</a>
+    </div>
+  </div>
+
+  <div class="page">
+
+    <div id="msg" class="msg"></div>
+
+    <div class="card" id="codes">
+      <h1>Activation codes</h1>
+      <div class="sub">
+        Each code works once. Hand one slip to each person at the counter.
+        Codes never contain the letters I, L, O or U.
+      </div>
+
+      <div class="bar">
+        <input type="number" id="count" value="10" min="1" max="200">
+        <input type="text" id="note" maxlength="120" placeholder="Note (optional) e.g. printed for 12 Sep counter">
+        <button id="make" onclick="makeCodes()">Generate</button>
+        <button class="ghost" onclick="refresh()">Refresh</button>
+        <button class="ghost" onclick="window.print()">Print slips</button>
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>Code</th><th>Status</th><th>Note</th><th>Issued</th><th></th></tr>
+        </thead>
+        <tbody id="rows">
+          <tr><td colspan="5">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card" id="messages">
+      <h2>Saved messages</h2>
+      <div class="sub">
+        These appear as one-tap choices in the sender. Edit the wording here once and every sender
+        sees it. Nothing on this page sends anything.
+      </div>
+
+      <div class="bar">
+        <input type="text" id="tLabel" maxlength="60" placeholder="Button name, e.g. Closed tomorrow">
+        <button class="ghost" onclick="newTemplate()">New</button>
+      </div>
+      <input type="text" id="tTitle" class="wide" maxlength="120"
+             placeholder="Title (what people read first)" style="margin-bottom:8px">
+      <textarea id="tBody" class="wide" maxlength="900" placeholder="Message"
+                style="min-height:90px"></textarea>
+      <input type="hidden" id="tId">
+      <div class="bar" style="margin-top:10px">
+        <button onclick="saveTemplateForm()">Save message</button>
+        <button class="ghost" id="tDelete" onclick="deleteTemplateForm()" style="display:none">Delete</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <table>
+        <thead><tr><th>Name</th><th>Title</th><th>Message</th><th></th></tr></thead>
+        <tbody id="templates"><tr><td colspan="4">Loading...</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="card" id="banner-section">
+      <h2>Dispensary banner</h2>
+      <div class="sub">
+        Shown at the top of the app, above the notices. Paste straight from Word or Gmail if you
+        like: bold, underline, text colour and highlight are kept, everything else is cleaned away.
+        Text size is deliberately not kept &mdash; the app uses whatever size the reader has set on
+        their own phone.
+      </div>
+
+      <div class="bar">
+        <button class="ghost" onmousedown="fmt(event,'bold')"><b>B</b></button>
+        <button class="ghost" onmousedown="fmt(event,'italic')"><i>I</i></button>
+        <button class="ghost" onmousedown="fmt(event,'underline')"><u>U</u></button>
+        <label style="font-size:13px;color:#4a5162">Text
+          <input type="color" value="#3f51b5" onchange="fmt(event,'foreColor',this.value)"></label>
+        <label style="font-size:13px;color:#4a5162">Highlight
+          <input type="color" value="#ffeb3b" onchange="fmt(event,'hiliteColor',this.value)"></label>
+        <button class="ghost" onmousedown="fmt(event,'removeFormat')">Clear formatting</button>
+      </div>
+
+      <div id="banner" contenteditable="true" oninput="renderBannerPreview()"
+           style="min-height:120px;border:1px solid #c3c9d6;border-radius:8px;padding:12px;
+                  background:#fff;font-size:15px;line-height:1.5"></div>
+
+      <div class="bar" style="margin-top:10px">
+        <button onclick="saveBannerForm()">Save banner</button>
+        <button class="ghost" onclick="refreshBanner()">Discard changes</button>
+        <button class="ghost" onclick="removeBannerForm()">Remove banner</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="sub">How it will look in the app:</div>
+      <div id="bannerPreview"
+           style="background:#faf4e6;border:1px solid #e6e9f0;border-radius:12px;padding:16px;
+                  color:#10131a;font-size:16px;line-height:1.5;max-width:420px"></div>
+    </div>
+
+    <div class="card" id="status">
+      <h2>Daily open and closed messages</h2>
+      <div class="sub">
+        The exact wording the two counter QR codes send. Changes take effect on the next scan.
+      </div>
+      <div id="statuses"><span class="sub">Loading...</span></div>
+    </div>
+
+  </div>
+</div>
+
+<div id="slips"></div>
+
+<script>
+  var CODES = [];
+
+  function show(text, isError) {
+    var el = document.getElementById('msg');
+    el.textContent = text;
+    el.className = 'msg ' + (isError ? 'err' : 'ok');
+  }
+
+  // Notes are free text typed by whoever staffs the counter and are rendered back into the page,
+  // so they are escaped rather than trusted.
+  function escapeHtml(s) {
+    return String(s || '').replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function stamp(ms) {
+    if (!ms) return '';
+    var d = new Date(ms);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function render(rows) {
+    CODES = rows;
+    var body = document.getElementById('rows');
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="5">No codes yet. Generate some.</td></tr>';
+      document.getElementById('slips').innerHTML = '';
+      return;
+    }
+    body.innerHTML = rows.map(function (r) {
+      var state = r.revoked ? '<span class="pill revoked">Revoked</span>'
+                : r.claimed ? '<span class="pill used">In use</span>'
+                            : '<span class="pill free">Not used</span>';
+
+      var actions = [];
+      if (r.revoked) {
+        actions.push('<button class="ghost" onclick="unrevoke(\'' + r.code + '\')">Restore</button>');
+      } else if (r.claimed) {
+        actions.push('<button class="ghost" onclick="revoke(\'' + r.code + '\')">Revoke</button>');
+      }
+      // Only offered for a claimed code: releasing an unclaimed one would do nothing.
+      if (r.claimed || r.revoked) {
+        actions.push('<button class="ghost" onclick="release(\'' + r.code + '\')">Release</button>');
+      }
+      actions.push('<button class="ghost" onclick="editNote(\'' + r.code + '\')">Note</button>');
+
+      return '<tr><td class="mono">' + r.formatted + '</td><td>' + state +
+             '</td><td>' + escapeHtml(r.note) + '</td><td>' + stamp(r.issued) +
+             '</td><td>' + actions.join(' ') + '</td></tr>';
+    }).join('');
+
+    // Only unclaimed codes are worth printing; the rest already belong to somebody.
+    document.getElementById('slips').innerHTML = rows.filter(function (r) {
+      return !r.claimed && !r.revoked;
+    }).map(function (r) {
+      return '<div class="slip"><div>Paramanu Seniors Notices</div><div class="code">' + r.formatted +
+             '</div><div>Open the app and type this code.<br>It works once.</div></div>';
+    }).join('');
+  }
+
+  function busy(on) { document.getElementById('make').disabled = on; }
+
+  function refresh() {
+    google.script.run
+      .withSuccessHandler(render)
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .listCodes();
+  }
+
+  function makeCodes() {
+    busy(true);
+    show('Generating...', false);
+    google.script.run
+      .withSuccessHandler(function (created) {
+        busy(false);
+        show('Created ' + created.length + ' code(s): ' + created.join(', '), false);
+        refresh();
+      })
+      .withFailureHandler(function (e) { busy(false); show(e.message, true); })
+      .createCodes(document.getElementById('count').value,
+                   document.getElementById('note').value);
+  }
+
+  function editNote(code) {
+    var current = '';
+    for (var i = 0; i < CODES.length; i++) if (CODES[i].code === code) current = CODES[i].note || '';
+    var next = prompt('Note for ' + code + ' (leave blank to clear):', current);
+    if (next === null) return;
+    google.script.run.withSuccessHandler(render)
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .setNote(code, next);
+  }
+
+  function release(code) {
+    if (!confirm(
+      'Release ' + code + '?\n\n' +
+      'It becomes available for somebody else to use.\n\n' +
+      'Only do this if the phone that claimed it is gone (uninstalled, replaced, or its data ' +
+      'was cleared). If a working phone still holds this code, releasing it will cut that phone ' +
+      'off at its next check.'
+    )) return;
+    google.script.run.withSuccessHandler(function (rows) {
+      show(code + ' released. It can be handed out again.', false);
+      render(rows);
+    }).withFailureHandler(function (e) { show(e.message, true); })
+      .releaseCode(code);
+  }
+
+  function revoke(code) {
+    if (!confirm('Revoke ' + code + '? That phone stops receiving notices.')) return;
+    google.script.run.withSuccessHandler(render)
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .revokeCode(code);
+  }
+
+  function unrevoke(code) {
+    google.script.run.withSuccessHandler(render)
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .unrevokeCode(code);
+  }
+
+  // ---- saved messages ----
+
+  var TEMPLATES = [];
+
+  function renderTemplates(rows) {
+    TEMPLATES = rows;
+    var body = document.getElementById('templates');
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="4">No saved messages yet.</td></tr>';
+      return;
+    }
+    body.innerHTML = rows.map(function (r) {
+      return '<tr><td>' + escapeHtml(r.label) + '</td><td>' + escapeHtml(r.title) +
+             '</td><td>' + escapeHtml(r.body) +
+             '</td><td><button class="ghost" onclick="editTemplate(\'' + r.id + '\')">Edit</button></td></tr>';
+    }).join('');
+  }
+
+  function newTemplate() {
+    document.getElementById('tId').value = '';
+    document.getElementById('tLabel').value = '';
+    document.getElementById('tTitle').value = '';
+    document.getElementById('tBody').value = '';
+    document.getElementById('tDelete').style.display = 'none';
+  }
+
+  function editTemplate(id) {
+    for (var i = 0; i < TEMPLATES.length; i++) {
+      if (TEMPLATES[i].id !== id) continue;
+      document.getElementById('tId').value = TEMPLATES[i].id;
+      document.getElementById('tLabel').value = TEMPLATES[i].label;
+      document.getElementById('tTitle').value = TEMPLATES[i].title;
+      document.getElementById('tBody').value = TEMPLATES[i].body;
+      document.getElementById('tDelete').style.display = '';
+      document.getElementById('tLabel').focus();
+      return;
+    }
+  }
+
+  function saveTemplateForm() {
+    google.script.run
+      .withSuccessHandler(function (rows) {
+        show('Saved.', false);
+        newTemplate();
+        renderTemplates(rows);
+      })
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .saveTemplate(
+        document.getElementById('tId').value,
+        document.getElementById('tLabel').value,
+        document.getElementById('tTitle').value,
+        document.getElementById('tBody').value
+      );
+  }
+
+  function deleteTemplateForm() {
+    var id = document.getElementById('tId').value;
+    if (!id) return;
+    if (!confirm('Delete this saved message? Notices already sent are not affected.')) return;
+    google.script.run
+      .withSuccessHandler(function (rows) {
+        show('Deleted.', false);
+        newTemplate();
+        renderTemplates(rows);
+      })
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .deleteTemplate(id);
+  }
+
+  function refreshTemplates() {
+    google.script.run.withSuccessHandler(renderTemplates)
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .listTemplates();
+  }
+
+  // ---- daily status wording ----
+
+  function renderStatuses(rows) {
+    document.getElementById('statuses').innerHTML = rows.map(function (r) {
+      var id = 's-' + r.which;
+      return '<div style="margin-bottom:18px">' +
+        '<div style="font-weight:600;text-transform:capitalize">' + escapeHtml(r.which) +
+        (r.customised ? '' : ' <span class="pill used">shipped default</span>') + '</div>' +
+        '<input type="text" class="wide" id="' + id + '-title" maxlength="120" value="' +
+        escapeHtml(r.title) + '" style="margin-top:6px">' +
+        '<textarea class="wide" id="' + id + '-body" maxlength="900" ' +
+        'style="min-height:70px;margin-top:6px">' + escapeHtml(r.body) + '</textarea>' +
+        '<div class="bar" style="margin-top:8px">' +
+        '<button onclick="saveStatus(\'' + r.which + '\')">Save</button>' +
+        (r.customised ? '<button class="ghost" onclick="resetStatus(\'' + r.which + '\')">Use the default</button>' : '') +
+        '</div></div>';
+    }).join('');
+  }
+
+  function saveStatus(which) {
+    google.script.run
+      .withSuccessHandler(function (rows) { show('Saved. The next scan will send the new wording.', false); renderStatuses(rows); })
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .saveStatusMessage(which,
+        document.getElementById('s-' + which + '-title').value,
+        document.getElementById('s-' + which + '-body').value);
+  }
+
+  function resetStatus(which) {
+    if (!confirm('Go back to the wording shipped with the app?')) return;
+    google.script.run
+      .withSuccessHandler(function (rows) { show('Reset to the default.', false); renderStatuses(rows); })
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .resetStatusMessage(which);
+  }
+
+  function refreshStatuses() {
+    google.script.run.withSuccessHandler(renderStatuses)
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .listStatusMessages();
+  }
+
+  // ---- dispensary banner ----
+
+  // FONT is here only because contenteditable still produces it. It is converted to a span on the
+  // way through, so nothing downstream has to know about it.
+  var BANNER_TAGS = ['B', 'STRONG', 'I', 'EM', 'U', 'BR', 'P', 'SPAN', 'A', 'DIV', 'FONT'];
+  var BANNER_STYLES = ['color', 'background-color', 'background'];
+
+  function isBannerColour(value) {
+    return /^#[0-9a-fA-F]{3,8}$/.test(value) ||
+           /^rgba?\(\s*[0-9.,\s%]+\)$/i.test(value) ||
+           /^[a-zA-Z]{3,20}$/.test(value);
+  }
+
+  /**
+   * Cleans a pasted fragment using the browser's own parser.
+   *
+   * Far safer than matching markup with regular expressions: the browser has already resolved the
+   * tag soup Word and Gmail produce, so this only has to walk a real tree and decide what to keep.
+   * The server sanitises again on save, because a page can be bypassed.
+   */
+  function cleanNode(node, out) {
+    for (var i = 0; i < node.childNodes.length; i++) {
+      var child = node.childNodes[i];
+
+      if (child.nodeType === 3) { out.appendChild(document.createTextNode(child.nodeValue)); continue; }
+      if (child.nodeType !== 1) continue;
+
+      var tag = child.tagName.toUpperCase();
+      if (BANNER_TAGS.indexOf(tag) < 0) { cleanNode(child, out); continue; }
+      if (tag === 'BR') { out.appendChild(document.createElement('br')); continue; }
+
+      // <font color="#f44336"> becomes <span style="color:#f44336">, so the whitelist downstream
+      // only ever deals with one shape.
+      if (tag === 'FONT') {
+        var fontColour = String(child.getAttribute('color') || '').trim();
+        var fontSpan = document.createElement('span');
+        if (fontColour && isBannerColour(fontColour)) fontSpan.setAttribute('style', 'color:' + fontColour);
+        cleanNode(child, fontSpan);
+        // A <font> carrying only a size is not worth a wrapper; fold its contents in directly.
+        if (fontSpan.getAttribute('style')) out.appendChild(fontSpan);
+        else while (fontSpan.firstChild) out.appendChild(fontSpan.firstChild);
+        continue;
+      }
+
+      var copy = document.createElement(tag.toLowerCase());
+
+      if (tag === 'A') {
+        var href = String(child.getAttribute('href') || '').trim();
+        // An unsafe link loses its tag but keeps its words.
+        if (!/^(https?:\/\/|mailto:|tel:)/i.test(href)) { cleanNode(child, out); continue; }
+        copy.setAttribute('href', href);
+      }
+
+      var kept = [];
+      BANNER_STYLES.forEach(function (property) {
+        var value = String(child.style.getPropertyValue(property) || '').trim();
+        if (!value || !isBannerColour(value)) return;
+        kept.push((property === 'background' ? 'background-color' : property) + ':' + value);
+      });
+      if (kept.length) copy.setAttribute('style', kept.join(';'));
+
+      cleanNode(child, copy);
+      out.appendChild(copy);
+    }
+    return out;
+  }
+
+  function sanitiseFragment(html) {
+    var parsed = new DOMParser().parseFromString('<body>' + html + '</body>', 'text/html');
+    return cleanNode(parsed.body, document.createElement('div')).innerHTML;
+  }
+
+  // Paste is intercepted so the cleaning happens on the way in. Cleaning at save time instead
+  // would mean the editor shows one thing and the phone shows another.
+  document.getElementById('banner').addEventListener('paste', function (e) {
+    e.preventDefault();
+    var clipboard = e.clipboardData || window.clipboardData;
+    var html = clipboard.getData('text/html');
+    var clean = html ? sanitiseFragment(html)
+                     : String(clipboard.getData('text/plain') || '').replace(/[&<>]/g, function (c) {
+                         return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c];
+                       }).replace(/\n/g, '<br>');
+    document.execCommand('insertHTML', false, clean);
+    renderBannerPreview();
+  });
+
+  // onmousedown, not onclick: the editor must not lose its selection before the command runs.
+  function fmt(event, command, value) {
+    event.preventDefault();
+    document.getElementById('banner').focus();
+    // Without this, foreColor and hiliteColor emit <font color> instead of a styled span. The
+    // whitelist then threw the colour away the instant it was applied, which looked like the
+    // colour buttons doing nothing. Browsers can reset this, so it is set before every command.
+    try { document.execCommand('styleWithCSS', false, true); } catch (e) { /* not everywhere */ }
+    document.execCommand(command, false, value || null);
+    renderBannerPreview();
+  }
+
+  function renderBannerPreview() {
+    try {
+      document.getElementById('bannerPreview').innerHTML =
+        sanitiseFragment(document.getElementById('banner').innerHTML);
+    } catch (e) {
+      // A silent failure here is the worst outcome: the editor would keep showing the old preview
+      // and the author would trust it.
+      show('The preview could not be drawn: ' + e.message, true);
+    }
+  }
+
+  function renderBanner(info) {
+    document.getElementById('banner').innerHTML = info.html || '';
+    renderBannerPreview();
+  }
+
+  function refreshBanner() {
+    google.script.run.withSuccessHandler(renderBanner)
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .getBanner();
+  }
+
+  function saveBannerForm() {
+    google.script.run
+      .withSuccessHandler(function (info) { show('Banner saved. It appears in the app the next time it is opened.', false); renderBanner(info); })
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .saveBanner(sanitiseFragment(document.getElementById('banner').innerHTML));
+  }
+
+  function removeBannerForm() {
+    if (!confirm('Remove the banner? The app falls back to the plain timings list.')) return;
+    google.script.run
+      .withSuccessHandler(function (info) { show('Banner removed.', false); renderBanner(info); })
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .removeBanner();
+  }
+
+  /**
+   * Redraws the preview on any change to the editor.
+   *
+   * `oninput` alone is not enough: it does not fire for every execCommand, nor for a drag-and-drop
+   * within the box, so the preview could sit there showing something the editor no longer said.
+   * Watching the tree itself catches every case, whatever caused it.
+   */
+  new MutationObserver(renderBannerPreview).observe(
+    document.getElementById('banner'),
+    { childList: true, subtree: true, characterData: true, attributes: true }
+  );
+
+  refresh();
+  refreshTemplates();
+  refreshStatuses();
+  refreshBanner();
+</script>
+</body>
+</html>

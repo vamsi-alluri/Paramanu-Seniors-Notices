@@ -8,41 +8,51 @@ import androidx.room.migration.Migration
 import androidx.sqlite.SQLiteConnection
 import androidx.sqlite.execSQL
 
+/**
+ * Started at version 1 with no inherited history, deliberately.
+ *
+ * The forked app carried a 1->2 migration adding severity columns; this app has a differently named
+ * table and those columns do not exist here, so reintroducing that history would have meant
+ * maintaining a path no installed device could ever have been on. Version 2 below is this app's own
+ * first migration, and it is real -- there are already installs holding redeemed codes and received
+ * notices. Every migration from here must stay real, because the stored history is the only
+ * copy a user has of a notice they have already dismissed.
+ */
 @Database(
-    entities = [NotificationEntity::class],
+    entities = [NoticeEntity::class],
     version = 2,
     exportSchema = true,
 )
 abstract class NoticesDatabase : RoomDatabase() {
 
-    abstract fun notificationDao(): NotificationDao
+    abstract fun noticeDao(): NoticeDao
 
     companion object {
         @Volatile
         private var instance: NoticesDatabase? = null
 
         /**
-         * Adds the rich-notification columns. A real migration rather than a destructive fallback:
-         * the stored history is the entire point of the app and must survive the upgrade.
+         * Adds [NoticeEntity.imageUrl]. A real migration rather than a destructive fallback: the
+         * stored history is the only copy a user has of a notice they have already dismissed, and
+         * there are already installs carrying redeemed codes and received notices.
          */
         private val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(connection: SQLiteConnection) {
-                connection.execSQL("ALTER TABLE notifications ADD COLUMN imageUrl TEXT")
-                connection.execSQL("ALTER TABLE notifications ADD COLUMN level TEXT")
-                connection.execSQL("ALTER TABLE notifications ADD COLUMN color TEXT")
+                connection.execSQL("ALTER TABLE notices ADD COLUMN imageUrl TEXT")
             }
         }
 
         /**
-         * The database is opened from two processes-worth of entry points (the Activity and the
-         * FCM service), so instance creation is double-checked rather than lazy-per-caller.
+         * Opened from two entry points that can race -- the Activity and the FCM service, the
+         * latter able to start with no Activity ever having run -- so creation is double-checked
+         * rather than lazy-per-caller.
          */
         fun getInstance(context: Context): NoticesDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     NoticesDatabase::class.java,
-                    "notifier.db",
+                    "notices.db",
                 ).addMigrations(MIGRATION_1_2).build().also { instance = it }
             }
     }

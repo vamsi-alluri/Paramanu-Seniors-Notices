@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!--
+      Dark counterpart of values/themes.xml.
+
+      Without this the window stays pinned to the Light platform theme while Compose follows the
+      system into dark mode, and the result is dark scheme text painted on a light scheme window:
+      white on white. The platform theme also paints the very first frame, before Compose composes,
+      so a missing night variant shows as a white flash on launch even once Compose is correct.
+    -->
+    <style name="Theme.ParamanuNotices" parent="android:Theme.Material.NoActionBar" />
+</resources>

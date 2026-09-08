@@ -268,3 +268,127 @@ Then the build is unblocked and Phase 1 finishes with a real delivery test.
 **Still open before Phase 2:** decision B (topic vs registration tokens) — it
 determines what `NoticeMessagingService` does on arrival and whether `onNewToken`
 must be overridden.
+
+**2026-08-31 (later) — Phases 2-4 implemented, NOT COMPILED.**
+
+Written without a build at the user's request. Nothing below has been compiled, linted or run.
+
+Added: `activation/` (ActivationCode, ActivationState, ActivationRepository),
+`fcm/PdfPageRenderer`, `fcm/NoticeImageStore`, `fcm/NoticeNotifications`, UI
+(ActivationScreen, NoticeListScreen, SettingsScreen, NoticeViewerScreen,
+NoticeViewModel, NoticesApp routing in MainActivity), `database.rules.json`,
+`docs/sender-contract.md`, tests for ActivationCode and PdfPageRenderer geometry.
+
+Removed: NotificationAccent, LevelIcon, LevelFilter, NotificationChannels,
+NotificationImageStore, NotificationListScreen, NotificationViewModel, the level
+drawables and their three tests. Coil dropped (no longer referenced).
+
+Renamed: Notification{Entity,Dao,Repository} -> Notice*, table `notifications` ->
+`notices`, DB reset to version 1 (never shipped), `imageUrl` -> `pdfUrl`,
+level/color columns gone.
+
+Decision B resolved as TOPIC + client-side gate, per the user's stated design.
+Decision C resolved as NO backend at all: RTDB security rules are the validator for
+code redemption, which also keeps the project on the free Spark plan.
+
+Deviation from the plan: WorkManager was NOT used. The proven inline-coroutine
+pattern from the forked app was kept instead, because adding a dependency that
+cannot be compile-checked was the larger risk. Upgrade path if delivery proves
+flaky.
+
+Deviation: bitmap BigPicture, not `Icon.createWithContentUri`. The URI path needs a
+`grantUriPermission` dance to SystemUI that is OEM-variable and untestable here;
+sizing was fixed instead (800x400 RGB_565 = 640KB, well under the 1MB cap).
+
+**Blocking before this can run:** deploy `database.rules.json` to the
+paramanu-seniors database, enable Anonymous sign-in in Firebase Auth, and seed at
+least one `/codes/{CODE}` node.
+
+**2026-09-01 — UI fixes, verified on device (SM-S928U1, Android 16).**
+
+- Theme: added `values-night/themes.xml` (missing night variant was pinning the
+  window to the Light platform theme while Compose went dark: white on white).
+  `ParamanuNoticesTheme` now wraps content in a Surface so Compose paints the
+  window itself. Dynamic colour turned OFF; fixed logo-derived palette instead.
+- Revocation now announces itself. `ActivationRepository.clearRevoked()` leaves a
+  flag; `resetByUser()` deliberately does not, so a user-initiated reset is not
+  reported as "your access has been removed". ViewModel emits a one-shot message,
+  MainActivity shows a Toast. Covers the common case where revocation is
+  discovered by the messaging service with no UI running.
+- Code entry: `CodeDashTransformation` paints `XXXX-XXXX` while the stored value
+  stays unpunctuated, so the dash cannot be deleted or land mid-paste. Typed
+  dashes/spaces are cleaned; O/I/L fold to 0/1. `imePadding()` keeps the field and
+  button above the keyboard.
+- Launcher icon rebuilt from the website logo as an adaptive icon (22% inset,
+  white background layer, legacy mipmap webps deleted).
+
+Verified: 25 unit tests pass, including GeneratedCodeCompatibilityTest which pins
+the Kotlin validator against codes produced by the Apps Script generator.
+
+## Still pending
+
+1. **Console account.** Use a separate Google account for the console that sends
+   notices, rather than the personal one. Decided 2026-09-01; build after the
+   items below.
+2. **Notice sending.** The Apps Script console generates codes but cannot yet send
+   a notice. Needs the same service account plus the payload in
+   `docs/sender-contract.md`. This is the last functional gap.
+3. **Restrict console access** to a few named people after alpha testing.
+4. **Dark-mode logo.** The current mark is a white-background JPEG; it shows as a
+   white square in the app's dark theme and forces a white adaptive-icon
+   background. Needs a transparent-background version.
+5. **Analytics decision** (see the note in app/build.gradle) before release.
+6. **App access code for Play review**: `P1AYREVQ` is reserved and must never be
+   handed out at the counter.
+
+**2026-09-01 (later) — attachments, links, subscriptions, QR status. COMPILED, NOT DEVICE-TESTED.**
+
+ADB was disconnected partway through, so everything below is compile- and
+unit-test verified only. Nothing has run on a phone.
+
+- `imageUrl` restored alongside `pdfUrl`; they are not alternatives. Both are
+  fetched when both are present. Caching strategy copied from Notifier
+  (download, downsample, prune, local-file-first with Coil URL fallback), split
+  into `-img.jpg` and `-pdf.jpg` so neither overwrites the other. Coil re-added.
+  Room v2 + MIGRATION_1_2 adds the column.
+- `BodyText` finds links in a notice body; `LinkedText` renders them tappable and
+  underlined. 11 tests, mostly about where a link ends.
+- Notification tap resolves by logId, expands that row, highlights it, and scrolls
+  to it. Resolution retries ~1s because the tap races the database write.
+- Rows expand inline: linked body, both attachments, an "open the full notice"
+  link. Tapping an attachment still opens the zoomable viewer.
+- Office-hours header from RTDB `/info`, cached locally so it reads offline.
+  Sized by content, not to a fixed 20%: a hard fraction is empty space on a large
+  phone and a cramped scroller on a small one. Rules now allow authenticated read
+  of `/info` (redeploy required).
+- Subscriptions: `Subscription` enum (NOTICES on by default, STATUS off), one FCM
+  topic and one notification channel each. STATUS is IMPORTANCE_LOW because it is
+  ~60 messages a month. Settings has a per-subscription switch. The messaging
+  service checks the local switch as well as the topic, since unsubscribing is not
+  instant.
+- QR status: sender exposes `?status=open|closed`, which renders a confirmation
+  page. Sending requires a STAFF_PIN and happens only via google.script.run, never
+  a GET, because link prefetchers would otherwise broadcast to 400 people. Repeat
+  of the same status inside 10 minutes is refused as a mis-scan.
+
+## Still pending
+
+1. **Device verification of everything in this entry.** Nothing above has run.
+2. **Deploy `database.rules.json` again** (adds `/info` and `note`).
+3. **Seed `/info`** with the dispensary hours, and add an editor for it in the
+   console (not yet built).
+4. **Generate the two QR images** for `<sender url>?status=open|closed`.
+5. **Console account**, restricted access after alpha, dark-mode logo, Analytics
+   decision, `P1AYREVQ` reserved for Play review.
+6. **Open question:** STATUS is off by default and daily, so uptake will be near
+   zero unless it is offered at the counter when the code is handed over.
+
+
+---
+
+**2026-09-01 — superseded by `docs/SYSTEM.md`.**
+
+The app shipped to Play closed testing. This plan documented the route from a fork of Notifier to a
+working system, and the decisions it left open have all been made. Current state, the pending list,
+the quirks and the runbooks now live in `docs/SYSTEM.md`; keep that one current and treat this file
+as history.

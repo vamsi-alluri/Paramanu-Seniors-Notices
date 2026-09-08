@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
+         padding: 28px 22px; background: #fcfcff; color: #10131a; max-width: 520px; }
+  h1 { font-size: 22px; margin: 0 0 18px; }
+
+  /* Sized for a phone held at the counter, often one-handed, often in a hurry. */
+  .preview { border: 1px solid #e6e9f0; border-radius: 12px; padding: 16px; background: #fff; }
+  .preview .who { font-size: 11px; color: #4a5162; text-transform: uppercase;
+                  letter-spacing: .06em; }
+  .preview .t { font-size: 19px; font-weight: 600; margin-top: 5px; }
+  .preview .b { font-size: 16px; margin-top: 4px; }
+
+  label { display: block; font-size: 14px; color: #4a5162; margin: 22px 0 6px; }
+  input { font: inherit; font-size: 26px; letter-spacing: .3em; text-align: center;
+          width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #c3c9d6;
+          box-sizing: border-box; background: #fff; color: #10131a; }
+
+  button { font: inherit; font-size: 18px; width: 100%; padding: 18px; margin-top: 18px;
+           border-radius: 10px; border: none; background: #14315c; color: #fff; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+
+  .msg { padding: 13px 15px; border-radius: 10px; margin-top: 18px; font-size: 16px; display: none; }
+  .msg.err { background: #f9dedc; color: #410e0b; display: block; }
+  .msg.ok { background: #d6e2f5; color: #03152e; display: block; }
+  .note { font-size: 13px; color: #4a5162; margin-top: 20px; }
+</style>
+</head>
+<!--
+  The status travels in a data attribute rather than through a scriptlet inside <script>.
+  Apps Script contextually escapes printing scriptlets, so emitting JSON.stringify() into JavaScript
+  produced a
+  value that still carried its quote characters and matched neither branch server-side. An attribute
+  is escaped on the way in and decoded by getAttribute on the way out, which is the one path that is
+  correct in both directions.
+
+  Do not write a scriptlet's delimiters literally anywhere in this file, including inside a comment
+  like this one. Apps Script scans the whole template for them and does not skip HTML comments, so
+  an empty scriptlet compiles to invalid JavaScript and the page dies with a SyntaxError that names
+  no useful location.
+-->
+<body data-status="<?= status ?>">
+
+<h1>Send this message?</h1>
+
+<div class="preview">
+  <div class="who">Paramanu Seniors Notices</div>
+  <div class="t"><?= message.title ?></div>
+  <div class="b"><?= message.body ?></div>
+</div>
+
+<label for="pin">Staff PIN</label>
+<input type="password" id="pin" inputmode="numeric" autocomplete="off" oninput="onPin()">
+
+<button id="go" onclick="send()" disabled>Send to everyone</button>
+
+<div id="msg" class="msg"></div>
+
+<div class="note">
+  Nothing has been sent yet. Scanning the code only opens this page: the message goes out when you
+  press the button. The PIN is not saved on this phone.
+</div>
+
+<script>
+  var STATUS = document.body.getAttribute('data-status');
+  var sending = false;
+
+  function el(id) { return document.getElementById(id); }
+
+  function onPin() {
+    el('go').disabled = sending || el('pin').value.trim().length < 4;
+  }
+
+  function show(text, isError) {
+    var m = el('msg');
+    m.textContent = text;
+    m.className = 'msg ' + (isError ? 'err' : 'ok');
+  }
+
+  function send() {
+    sending = true;
+    el('go').disabled = true;
+    show('Sending...', false);
+
+    google.script.run
+      .withSuccessHandler(function (result) {
+        // Deliberately not re-enabled. The page's job is done, and leaving a live Send button on a
+        // phone lying on the counter is how the same message goes out three times.
+        show('Sent. You can close this page.', false);
+        el('pin').value = '';
+        el('pin').disabled = true;
+      })
+      .withFailureHandler(function (e) {
+        sending = false;
+        show(e.message, true);
+        el('pin').value = '';
+        el('pin').focus();
+        onPin();
+      })
+      .sendStatus(STATUS, el('pin').value);
+  }
+
+  el('pin').focus();
+</script>
+</body>
+</html>

@@ -62,9 +62,6 @@ fun rememberNotificationAccessState(): NotificationAccessState {
     }
 
     var access by remember { mutableStateOf(readAccess(context, activity, prefs)) }
-    // Guards against re-prompting in a loop if the user dismisses the dialog by tapping outside,
-    // which leaves the state as NeedsPermission and immediately triggers another resume.
-    var promptedThisSession by remember { mutableStateOf(false) }
 
     val launcher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -84,13 +81,16 @@ fun rememberNotificationAccessState(): NotificationAccessState {
         }
     }
 
+    // Re-reads on resume, but never prompts by itself.
+    //
+    // The forked app raised the dialog here, which is right for a tool its author installed
+    // deliberately. Here it fired on the code screen, before the user has entered anything or has
+    // any reason to expect notices -- which is how a denial happens, and on Android 13+ a denial
+    // silently disables the whole app for someone who will not go hunting in system settings.
+    // The caller decides when to ask; see the screen-keyed effect in MainActivity.
     LifecycleResumeEffect(Unit) {
         access = readAccess(context, activity, prefs)
-        if (access == NotificationAccess.NeedsPermission && !promptedThisSession) {
-            promptedThisSession = true
-            launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        onPauseOrDispose { promptedThisSession = false }
+        onPauseOrDispose { }
     }
 
     return NotificationAccessState(access = access, onRequest = ::request)

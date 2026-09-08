@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+<base target="_top">
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px;
+         background: #fcfcff; color: #10131a; max-width: 780px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: #4a5162;
+       margin: 26px 0 10px; }
+  .sub { color: #4a5162; font-size: 13px; margin-bottom: 18px; }
+
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  .chip { font: inherit; font-size: 13px; padding: 7px 13px; border-radius: 999px;
+          border: 1px solid #c3c9d6; background: #fff; color: #14315c; cursor: pointer; }
+  .chip:hover { border-color: #14315c; }
+  .chip.blank { border-style: dashed; }
+
+  label { display: block; font-size: 13px; color: #4a5162; margin: 14px 0 5px; }
+  input, textarea { font: inherit; width: 100%; padding: 11px; border-radius: 8px;
+                    border: 1px solid #c3c9d6; box-sizing: border-box; background: #fff;
+                    color: #10131a; }
+  textarea { min-height: 110px; resize: vertical; }
+  .count { font-size: 12px; color: #4a5162; text-align: right; margin-top: 4px; }
+  .count.over { color: #b3261e; font-weight: 600; }
+
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
+  button.send { font: inherit; padding: 12px 22px; border-radius: 8px; border: 1px solid #14315c;
+                background: #14315c; color: #fff; cursor: pointer; }
+  button.send:disabled { opacity: .45; cursor: default; }
+  button.ghost { font: inherit; padding: 10px 16px; border-radius: 8px; border: 1px solid #c3c9d6;
+                 background: #fff; color: #14315c; cursor: pointer; }
+
+  .msg { padding: 11px 13px; border-radius: 8px; margin: 14px 0; display: none; }
+  .msg.err { background: #f9dedc; color: #410e0b; display: block; }
+  .msg.ok { background: #d6e2f5; color: #03152e; display: block; }
+
+  /* Deliberately styled like the phone's notification, so what you approve is what they see. */
+  .preview { border: 1px solid #e6e9f0; border-radius: 12px; padding: 14px 16px; background: #fff;
+             margin-top: 10px; }
+  .preview .who { font-size: 11px; color: #4a5162; text-transform: uppercase;
+                  letter-spacing: .06em; }
+  .preview .t { font-size: 17px; font-weight: 600; margin-top: 4px; word-wrap: break-word; }
+  .preview .b { font-size: 15px; margin-top: 3px; white-space: pre-wrap; word-wrap: break-word; }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid #e6e9f0;
+           vertical-align: top; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #4a5162; }
+  .failed { color: #b3261e; }
+</style>
+</head>
+<body>
+
+<h1>Send a notice</h1>
+<div class="sub">
+  Goes to every phone that has activated the app. There is no way to unsend it.
+</div>
+
+<div id="msg" class="msg"></div>
+
+<h2>Saved messages</h2>
+<div class="chips" id="chips"><span class="sub">Loading...</span></div>
+<div class="sub">Pick one to fill the fields below, then edit it if you need to. Saved messages are managed in the code console.</div>
+
+<label for="title">Title</label>
+<input type="text" id="title" maxlength="120" oninput="onEdit()"
+       placeholder="Dispensary closed on Thursday 28 August">
+<div class="count" id="titleCount"></div>
+
+<label for="body">Message</label>
+<textarea id="body" maxlength="900" oninput="onEdit()"
+          placeholder="OPD will reopen at 9 am on Friday."></textarea>
+<div class="count" id="bodyCount"></div>
+
+<h2>How it will look</h2>
+<div class="preview">
+  <div class="who">Paramanu Seniors Notices</div>
+  <div class="t" id="pvTitle">Title</div>
+  <div class="b" id="pvBody"></div>
+</div>
+
+<label for="pin">Staff PIN</label>
+<input type="password" id="pin" inputmode="numeric" autocomplete="off" oninput="onEdit()"
+       placeholder="Required for every send">
+<div class="sub" style="margin-top:6px">
+  Typed each time on purpose. It is never saved in this browser, so a page left open on a shared
+  computer cannot be used to send.
+</div>
+
+<div class="actions">
+  <button class="send" id="send" onclick="send()" disabled>Send to everyone</button>
+  <button class="ghost" onclick="clearFields()">Clear</button>
+</div>
+
+<h2>Recently sent</h2>
+<table>
+  <thead><tr><th>When</th><th>Title</th><th>Message</th></tr></thead>
+  <tbody id="sent"><tr><td colspan="3">Loading...</td></tr></tbody>
+</table>
+
+<script>
+  var TITLE_MAX = 120, BODY_MAX = 900;
+  var sending = false;
+
+  function el(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s || '').replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function show(text, isError) {
+    var m = el('msg');
+    m.textContent = text;
+    m.className = 'msg ' + (isError ? 'err' : 'ok');
+  }
+
+  function onEdit() {
+    var t = el('title').value, b = el('body').value;
+
+    el('titleCount').textContent = t.length + ' / ' + TITLE_MAX;
+    el('bodyCount').textContent = b.length + ' / ' + BODY_MAX;
+    el('titleCount').className = 'count' + (t.length > TITLE_MAX ? ' over' : '');
+    el('bodyCount').className = 'count' + (b.length > BODY_MAX ? ' over' : '');
+
+    // The preview is the whole point of the title being mandatory: an A4 notice shrunk into a
+    // notification is unreadable, so the text is the message.
+    el('pvTitle').textContent = t || 'Title';
+    el('pvBody').textContent = b;
+
+    el('send').disabled = sending || !t.trim() || el('pin').value.trim().length < 4;
+  }
+
+  function clearFields() {
+    el('title').value = '';
+    el('body').value = '';
+    onEdit();
+  }
+
+  function useTemplate(title, body) {
+    el('title').value = title;
+    el('body').value = body;
+    onEdit();
+    el('title').focus();
+  }
+
+  function renderTemplates(rows) {
+    var box = el('chips');
+    var chips = ['<button class="chip blank" onclick="clearFields()">Write my own</button>'];
+    rows.forEach(function (r) {
+      chips.push('<button class="chip" onclick="useTemplate(' +
+        JSON.stringify(r.title).replace(/"/g, '&quot;') + ',' +
+        JSON.stringify(r.body).replace(/"/g, '&quot;') + ')">' + esc(r.label) + '</button>');
+    });
+    if (!rows.length) {
+      chips.push('<span class="sub">No saved messages yet. Add them in the code console.</span>');
+    }
+    box.innerHTML = chips.join('');
+  }
+
+  function renderSent(rows) {
+    var body = el('sent');
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="3">Nothing sent yet.</td></tr>'; return; }
+    body.innerHTML = rows.map(function (r) {
+      var when = r.sentAt ? new Date(r.sentAt).toLocaleString() : '';
+      return '<tr class="' + (r.failed ? 'failed' : '') + '"><td>' + esc(when) +
+             '</td><td>' + esc(r.title) + (r.failed ? ' (failed)' : '') +
+             '</td><td>' + esc(r.body) + '</td></tr>';
+    }).join('');
+  }
+
+  function send() {
+    var t = el('title').value.trim(), b = el('body').value.trim();
+    if (!t) return;
+    // Everyone means everyone, and it cannot be undone, so the confirmation shows the actual text
+    // rather than asking an abstract "are you sure".
+    if (!confirm('Send this to every activated phone?\n\n' + t + '\n\n' + b +
+                 '\n\nThis cannot be undone.')) return;
+
+    sending = true;
+    el('send').disabled = true;
+    show('Sending...', false);
+
+    google.script.run
+      .withSuccessHandler(function (result) {
+        sending = false;
+        show('Sent at ' + new Date(result.sentAt).toLocaleTimeString() + ': ' + result.title, false);
+        clearFields();
+        // Cleared on success as well as failure: the next send is a fresh decision, and an unlocked
+        // page on the counter should not be able to broadcast.
+        el('pin').value = '';
+        loadSent();
+      })
+      .withFailureHandler(function (e) {
+        sending = false;
+        el('pin').value = '';
+        onEdit();
+        show(e.message, true);
+      })
+      .sendNotice(t, b, 'NOTICES', el('pin').value);
+  }
+
+  function loadSent() {
+    google.script.run.withSuccessHandler(renderSent)
+      .withFailureHandler(function (e) { show(e.message, true); })
+      .listSent(25);
+  }
+
+  google.script.run.withSuccessHandler(renderTemplates)
+    .withFailureHandler(function (e) { show(e.message, true); })
+    .listTemplates();
+  loadSent();
+  onEdit();
+</script>
+</body>
+</html>

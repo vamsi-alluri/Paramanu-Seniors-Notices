@@ -3,6 +3,18 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      The advertising ID is explicitly removed, not merely unused.
+
+      Play reads the merged manifest: any dependency declaring AD_ID forces a "yes" on the
+      advertising-ID question in the Data Safety form, which would contradict this app's listing
+      ("does not ask for ... and none is collected"). firebase-analytics pulled it in and has been
+      removed; this keeps the guarantee if a transitive dependency reintroduces it later.
+    -->
+    <uses-permission
+        android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
