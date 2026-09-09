@@ -18,13 +18,13 @@
                    align-items: baseline; flex-wrap: wrap; }
   .topbar .brand { font-weight: 600; font-size: 15px; color: #14315c; margin-right: 4px; }
   .topbar a { font-size: 14px; color: #4a5162; text-decoration: none; padding: 4px 0;
-              border-bottom: 2px solid transparent; }
+              border-bottom: 2px solid transparent; cursor: pointer; }
   .topbar a:hover { color: #14315c; border-bottom-color: #14315c; }
 
   /* Each section is its own card, so it is obvious where one job ends and the next begins. */
   .card { background: #fff; border: 1px solid #e0e4ee; border-radius: 14px;
           padding: 22px 24px; margin-bottom: 22px; }
-  /* Clears the sticky bar when an anchor is jumped to. */
+  /* Clears the sticky bar when a section is jumped to. */
   .card { scroll-margin-top: 76px; }
 
   h1 { font-size: 20px; margin: 0 0 4px; }
@@ -37,7 +37,7 @@
            background: #14315c; color: #fff; cursor: pointer; }
   button.ghost { background: #fff; color: #14315c; }
   button:disabled { opacity: .5; cursor: default; }
-  input, textarea { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
+  input, textarea, select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
                     background: #fff; color: #10131a; }
   input[type=number] { width: 72px; }
   input[type=text] { min-width: 280px; flex: 1; }
@@ -48,6 +48,9 @@
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e6e9f0;
            vertical-align: top; }
   th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #4a5162; }
+  th.sort { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sort:hover { color: #14315c; }
+  th .arrow { font-size: 9px; margin-left: 5px; color: #14315c; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
           font-size: 17px; letter-spacing: .06em; }
   .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
@@ -80,10 +83,10 @@
   <div class="topbar">
     <div class="inner">
       <span class="brand">Paramanu Seniors Notices &mdash; Admin</span>
-      <a href="#codes">Activation codes</a>
-      <a href="#messages">Saved messages</a>
-      <a href="#banner-section">Dispensary banner</a>
-      <a href="#status">Daily open and closed</a>
+      <a onclick="goTo('codes')">Activation codes</a>
+      <a onclick="goTo('messages')">Saved messages</a>
+      <a onclick="goTo('banner-section')">Dispensary banner</a>
+      <a onclick="goTo('status')">Daily open and closed</a>
     </div>
   </div>
 
@@ -96,6 +99,7 @@
       <div class="sub">
         Each code works once. Hand one slip to each person at the counter.
         Codes never contain the letters I, L, O or U.
+        <br>Printing slips covers every unused code, not only the page shown below.
       </div>
 
       <div class="bar">
@@ -108,12 +112,33 @@
 
       <table>
         <thead>
-          <tr><th>Code</th><th>Status</th><th>Note</th><th>Issued</th><th></th></tr>
+          <tr>
+            <th class="sort" onclick="sortCodes('code')">Code<span class="arrow" id="ac-code"></span></th>
+            <th class="sort" onclick="sortCodes('status')">Status<span class="arrow" id="ac-status"></span></th>
+            <th class="sort" onclick="sortCodes('note')">Note<span class="arrow" id="ac-note"></span></th>
+            <th class="sort" onclick="sortCodes('issued')">Issued<span class="arrow" id="ac-issued"></span></th>
+            <th></th>
+          </tr>
         </thead>
         <tbody id="rows">
           <tr><td colspan="5">Loading...</td></tr>
         </tbody>
       </table>
+
+      <div class="bar" id="pager" style="margin: 14px 0 0; display: none">
+        <button class="ghost" id="prev" onclick="goPage(PAGE - 1)">Previous</button>
+        <button class="ghost" id="next" onclick="goPage(PAGE + 1)">Next</button>
+        <span class="sub" id="pageInfo" style="margin: 0"></span>
+        <label class="sub" style="margin: 0 0 0 auto">Show
+          <select id="pageSize" onchange="setPageSize(this.value)">
+            <option value="25">25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="0">All</option>
+          </select>
+          per page
+        </label>
+      </div>
     </div>
 
     <div class="card" id="messages">
@@ -140,7 +165,14 @@
       <div class="divider"></div>
 
       <table>
-        <thead><tr><th>Name</th><th>Title</th><th>Message</th><th></th></tr></thead>
+        <thead>
+          <tr>
+            <th class="sort" onclick="sortTemplates('label')">Name<span class="arrow" id="at-label"></span></th>
+            <th class="sort" onclick="sortTemplates('title')">Title<span class="arrow" id="at-title"></span></th>
+            <th class="sort" onclick="sortTemplates('body')">Message<span class="arrow" id="at-body"></span></th>
+            <th></th>
+          </tr>
+        </thead>
         <tbody id="templates"><tr><td colspan="4">Loading...</td></tr></tbody>
       </table>
     </div>
@@ -199,6 +231,15 @@
 <script>
   var CODES = [];
 
+  // Apps Script serves this page inside a sandboxed iframe, and <base target="_top"> means a plain
+  // href="#codes" is resolved against the inner googleusercontent URL and loaded into the top
+  // window -- which is what threw the browser out to /userCodeAppPanel. Scrolling in script keeps
+  // the navigation inside the frame, where it belongs.
+  function goTo(id) {
+    var el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   function show(text, isError) {
     var el = document.getElementById('msg');
     el.textContent = text;
@@ -219,15 +260,116 @@
     return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
 
+  // ---- sortable column headers ----
+  //
+  // Both tables are sorted here rather than on the server: the rows are already held in full in
+  // the page, so a click costs no round trip and cannot fail halfway. Clicking the column you are
+  // already sorted by flips the direction.
+
+  // Blank cells sort to the bottom whichever way the column is pointing: most notes are empty, and
+  // a screen of blank rows is never what somebody clicking "Note" was looking for.
+  function compareValues(x, y, dir) {
+    var xBlank = x === '' || x === null || x === undefined;
+    var yBlank = y === '' || y === null || y === undefined;
+    if (xBlank || yBlank) return xBlank && yBlank ? 0 : (xBlank ? 1 : -1);
+    if (typeof x === 'number' && typeof y === 'number') return dir * (x - y);
+    return dir * String(x).localeCompare(String(y), undefined, { numeric: true, sensitivity: 'base' });
+  }
+
+  /** Applies a click to a sort state: same column flips, a new column starts at its own default. */
+  function turnSort(state, key, descFirst) {
+    if (state.key === key) state.dir = -state.dir;
+    else { state.key = key; state.dir = descFirst.indexOf(key) < 0 ? 1 : -1; }
+  }
+
+  function markSort(prefix, keys, state) {
+    keys.forEach(function (key) {
+      document.getElementById(prefix + key).textContent =
+        state.key === key ? (state.dir > 0 ? '▲' : '▼') : '';
+    });
+  }
+
+  // Several hundred codes on one page buries every other section of the console, so the table is
+  // paged. The list itself is small enough to hold in full, so paging is done here rather than
+  // asking the server for a slice: refreshing after an action keeps you on the page you were on.
+  var PAGE = 1;
+  var PAGE_SIZE = 25;
+  // Newest first, matching the order the server hands them over in.
+  var CODE_SORT = { key: 'issued', dir: -1 };
+
+  var CODE_KEYS = ['code', 'status', 'note', 'issued'];
+
+  function codeValue(row, key) {
+    // Ordered the way the counter thinks about them: usable ones first, dead ones last.
+    if (key === 'status') return row.revoked ? 2 : row.claimed ? 1 : 0;
+    if (key === 'issued') return row.issued || 0;
+    if (key === 'note') return row.note || '';
+    return row.code;
+  }
+
+  function sortCodes(key) {
+    turnSort(CODE_SORT, key, ['issued']);
+    PAGE = 1;  // page 3 of the old order says nothing about the new one
+    renderPage();
+  }
+
+  function goPage(page) {
+    PAGE = page;
+    renderPage();
+  }
+
+  function setPageSize(size) {
+    PAGE_SIZE = parseInt(size, 10) || 0;
+    PAGE = 1;
+    renderPage();
+  }
+
   function render(rows) {
     CODES = rows;
+    renderPage();
+
+    // Only unclaimed codes are worth printing; the rest already belong to somebody. Every one of
+    // them is printed, not just the page on screen -- a print job cut short by paging would be
+    // noticed only after the slips came out of the printer.
+    document.getElementById('slips').innerHTML = rows.filter(function (r) {
+      return !r.claimed && !r.revoked;
+    }).map(function (r) {
+      return '<div class="slip"><div>Paramanu Seniors Notices</div><div class="code">' + r.formatted +
+             '</div><div>Open the app and type this code.<br>It works once.</div></div>';
+    }).join('');
+  }
+
+  function renderPage() {
+    markSort('ac-', CODE_KEYS, CODE_SORT);
+
+    // A copy: CODES stays in the order the server sent, which is the order the slips print in.
+    var rows = CODES.slice().sort(function (a, b) {
+      return compareValues(codeValue(a, CODE_SORT.key), codeValue(b, CODE_SORT.key), CODE_SORT.dir);
+    });
     var body = document.getElementById('rows');
+    var pager = document.getElementById('pager');
+
     if (!rows.length) {
       body.innerHTML = '<tr><td colspan="5">No codes yet. Generate some.</td></tr>';
-      document.getElementById('slips').innerHTML = '';
+      pager.style.display = 'none';
       return;
     }
-    body.innerHTML = rows.map(function (r) {
+
+    var size = PAGE_SIZE > 0 ? PAGE_SIZE : rows.length;
+    var pages = Math.ceil(rows.length / size);
+    // Revoking or releasing can shorten the list under you, so the page is clamped every draw.
+    PAGE = Math.min(Math.max(PAGE, 1), pages);
+    var from = (PAGE - 1) * size;
+    var page = rows.slice(from, from + size);
+
+    pager.style.display = '';
+    document.getElementById('prev').disabled = PAGE <= 1;
+    document.getElementById('next').disabled = PAGE >= pages;
+    document.getElementById('pageInfo').textContent =
+      (from + 1) + '-' + (from + page.length) + ' of ' + rows.length + ' codes' +
+      (pages > 1 ? '  (page ' + PAGE + ' of ' + pages + ')' : '');
+
+    body.innerHTML = page.map(function (r) {
       var state = r.revoked ? '<span class="pill revoked">Revoked</span>'
                 : r.claimed ? '<span class="pill used">In use</span>'
                             : '<span class="pill free">Not used</span>';
@@ -248,14 +390,6 @@
              '</td><td>' + escapeHtml(r.note) + '</td><td>' + stamp(r.issued) +
              '</td><td>' + actions.join(' ') + '</td></tr>';
     }).join('');
-
-    // Only unclaimed codes are worth printing; the rest already belong to somebody.
-    document.getElementById('slips').innerHTML = rows.filter(function (r) {
-      return !r.claimed && !r.revoked;
-    }).map(function (r) {
-      return '<div class="slip"><div>Paramanu Seniors Notices</div><div class="code">' + r.formatted +
-             '</div><div>Open the app and type this code.<br>It works once.</div></div>';
-    }).join('');
   }
 
   function busy(on) { document.getElementById('make').disabled = on; }
@@ -274,6 +408,7 @@
       .withSuccessHandler(function (created) {
         busy(false);
         show('Created ' + created.length + ' code(s): ' + created.join(', '), false);
+        PAGE = 1;  // the new codes are the newest, so they are at the top of the first page
         refresh();
       })
       .withFailureHandler(function (e) { busy(false); show(e.message, true); })
@@ -322,14 +457,31 @@
   // ---- saved messages ----
 
   var TEMPLATES = [];
+  // By name, the order the server sends and the order the sender shows the buttons in.
+  var TEMPLATE_SORT = { key: 'label', dir: 1 };
+  var TEMPLATE_KEYS = ['label', 'title', 'body'];
+
+  function sortTemplates(key) {
+    turnSort(TEMPLATE_SORT, key, []);
+    renderTemplateRows();
+  }
 
   function renderTemplates(rows) {
     TEMPLATES = rows;
+    renderTemplateRows();
+  }
+
+  function renderTemplateRows() {
+    markSort('at-', TEMPLATE_KEYS, TEMPLATE_SORT);
+
     var body = document.getElementById('templates');
-    if (!rows.length) {
+    if (!TEMPLATES.length) {
       body.innerHTML = '<tr><td colspan="4">No saved messages yet.</td></tr>';
       return;
     }
+    var rows = TEMPLATES.slice().sort(function (a, b) {
+      return compareValues(a[TEMPLATE_SORT.key] || '', b[TEMPLATE_SORT.key] || '', TEMPLATE_SORT.dir);
+    });
     body.innerHTML = rows.map(function (r) {
       return '<tr><td>' + escapeHtml(r.label) + '</td><td>' + escapeHtml(r.title) +
              '</td><td>' + escapeHtml(r.body) +
