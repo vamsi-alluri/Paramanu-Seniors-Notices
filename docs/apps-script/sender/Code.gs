@@ -215,10 +215,12 @@ function nextLogId_() {
 /**
  * Checks the staff PIN, with lockout.
  *
- * The PIN is the only thing standing between this web app and four hundred phones. It has to be
- * deployed as "Anyone with the link" for a QR scan to work without a Google sign-in, which means
- * anyone who learns the URL can reach these functions -- so an unlimited guessing budget against a
- * short numeric PIN would not be a lock at all.
+ * A second factor, not the only one. This was written when the web app had to be deployed as
+ * "Anyone with the link" so a QR scan worked without a Google sign-in, which meant anyone who
+ * learned the URL could reach these functions. That is no longer true: every entry point calls
+ * requireEditor_() first and an address outside ALLOWED_EDITORS is refused before any payload is
+ * read. The PIN stays on the compose path, which sends arbitrary text to four hundred phones, and
+ * can be dropped entirely with REQUIRE_STAFF_PIN.
  *
  * The PIN never leaves the server. It lives in Script Properties, the pages never receive it, and
  * nothing is written to browser storage: staff type it for each send. That is deliberate friction.
