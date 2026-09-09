@@ -210,7 +210,7 @@ function firebase_(method, path, payload) {
  * event would produce a row nobody ever queries, and the log is the record the NGO is meant to
  * trust without asking a developer.
  */
-var AUDIT_EVENTS = ['issued', 'revoked', 'restored', 'released', 'note'];
+var AUDIT_EVENTS = ['issued', 'revoked', 'restored', 'released', 'note', 'deleted'];
 
 /**
  * Appends one entry to a code's history.
@@ -384,6 +384,55 @@ function revokeCode(code) {
   firebase_('put', '/revokeQueue/' + code + '.json', { at: Date.now(), by: by });
 
   audit_(code, 'revoked', by);
+  return listCodes();
+}
+
+/**
+ * Whether a code may be deleted, given its stored node. Pure, so the rule can be tested.
+ *
+ * Only a code nobody has ever claimed. Deleting a claimed one would cut that phone off at its next
+ * check with no explanation anywhere -- the device would find no node, read that as a withdrawn
+ * claim, and raise the revocation banner. Revoke does that deliberately and reversibly; this must
+ * not do it by accident.
+ *
+ * A revoked-but-never-claimed code is deletable: revoked or not, nobody ever used it.
+ */
+function codeIsDeletable_(node) {
+  if (!node) return false;
+  return !node.usedBy;
+}
+
+/**
+ * Removes a code that was generated but never used.
+ *
+ * For over-generation and misprints. Note what this cannot know: unclaimed is not the same as
+ * unprinted. A slip for this code may already be in somebody's pocket, and deleting it means they
+ * will be told "that code was not accepted" at the counter with nothing to explain why -- so the
+ * page asks before calling this.
+ *
+ * The /audit node is deliberately kept. It is the only remaining record that this code ever
+ * existed, and the only way to answer "why did this slip stop working"; the code itself is gone
+ * from /codes, so nothing lists it any more.
+ */
+function deleteCode(code) {
+  var by = requireEditor_();
+  if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
+
+  var node = firebase_('get', '/codes/' + code + '.json');
+  if (!node) throw new Error(code + ' does not exist.');
+
+  // Checked here and not only in the page: a hidden button is not a rule.
+  if (!codeIsDeletable_(node)) {
+    throw new Error(code + ' has been claimed by a phone and cannot be deleted. Use Revoke to cut ' +
+                    'that phone off, or Release if the phone is gone.');
+  }
+
+  firebase_('delete', '/codes/' + code + '.json');
+  // Defensive: an unclaimed code should never have one, but a leftover entry would otherwise sit
+  // in the queue forever, since the drain looks the code up and it no longer exists.
+  firebase_('delete', '/revokeQueue/' + code + '.json');
+
+  audit_(code, 'deleted', by);
   return listCodes();
 }
 

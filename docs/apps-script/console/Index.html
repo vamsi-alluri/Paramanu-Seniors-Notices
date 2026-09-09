@@ -36,6 +36,9 @@
   button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 1px solid #14315c;
            background: #14315c; color: #fff; cursor: pointer; }
   button.ghost { background: #fff; color: #14315c; }
+  /* Irreversible, and sits beside four buttons that are not. */
+  button.ghost.danger { color: #8c1d18; border-color: #e5c3c0; }
+  button.ghost.danger:hover { border-color: #8c1d18; }
   button:disabled { opacity: .5; cursor: default; }
   input, textarea, select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
                     background: #fff; color: #10131a; }
@@ -422,6 +425,11 @@
         actions.push('<button class="ghost" onclick="release(\'' + r.code + '\')">Release</button>');
       }
       actions.push('<button class="ghost" onclick="editNote(\'' + r.code + '\')">Note</button>');
+      // Never claimed, so deleting it takes nothing away from anybody who is using the app. The
+      // server checks this too; the button being hidden is not what makes it safe.
+      if (!r.claimed) {
+        actions.push('<button class="ghost danger" onclick="removeCode(\'' + r.code + '\')">Delete</button>');
+      }
 
       var open = !!OPEN_HISTORY[r.code];
       var last = r.lastChange
@@ -475,6 +483,27 @@
     google.script.run.withSuccessHandler(render)
       .withFailureHandler(function (e) { show(e.message, true); })
       .setNote(code, next);
+  }
+
+  /**
+   * Deletes a code nobody has ever claimed.
+   *
+   * The warning is about the one thing this cannot check: unclaimed is not unprinted. A slip may
+   * already have been handed over, and the holder would be told at the counter that their code was
+   * not accepted, with nothing anywhere to explain why.
+   */
+  function removeCode(code) {
+    if (!confirm(
+      'Delete ' + code + '?\n\n' +
+      'Nobody has used this code, so no phone loses anything.\n\n' +
+      'But if a printed slip for it has already been handed out, that slip stops working and the ' +
+      'person holding it will be told their code was not accepted. This cannot be undone.'
+    )) return;
+    google.script.run.withSuccessHandler(function (rows) {
+      show(code + ' deleted.', false);
+      render(rows);
+    }).withFailureHandler(function (e) { show(e.message, true); })
+      .deleteCode(code);
   }
 
   function release(code) {

@@ -65,12 +65,14 @@ function tc_auditTimeline_() {
 // ---------------------------------------------------------------- audit_ validation
 
 function tc_auditEvents_() {
-  tc_eq_('the event set is closed', AUDIT_EVENTS.length, 5);
+  tc_eq_('the event set is closed', AUDIT_EVENTS.length, 6);
   tc_ok_('claimed is not a stored event', AUDIT_EVENTS.indexOf('claimed') < 0, 'synthesised only');
 
   // The guard runs before any network call, so this throws without touching the database.
+  // Deliberately a name nothing will ever add: 'deleted' was used here once and quietly stopped
+  // testing anything the day deletion was implemented.
   tc_throws_('audit_ refuses an unknown event', function () {
-    audit_('A1B2C3D4', 'deleted', 'a@x.org');
+    audit_('A1B2C3D4', 'incinerated', 'a@x.org');
   }, 'Unknown audit event');
 }
 
@@ -123,11 +125,39 @@ function tc_generateCode_() {
   tc_ok_('the generator is still varied', distinct > 490, distinct + ' distinct of 500');
 }
 
+// ---------------------------------------------------------------- codeIsDeletable_
+
+function tc_codeIsDeletable_() {
+  tc_ok_('a fresh unclaimed code can be deleted',
+    codeIsDeletable_({ issued: 1 }));
+  tc_ok_('an unclaimed code with a note can be deleted',
+    codeIsDeletable_({ issued: 1, note: 'batch 3' }));
+
+  // Never claimed, so nobody is using it, whatever its revoked flag says.
+  tc_ok_('a revoked but never claimed code can be deleted',
+    codeIsDeletable_({ issued: 1, revoked: true }));
+
+  // The one that matters: deleting this would cut a working phone off with no explanation
+  // anywhere, because the device reads a missing node as a withdrawn claim.
+  tc_ok_('a claimed code cannot be deleted',
+    !codeIsDeletable_({ issued: 1, usedBy: 'uid-123', activatedAt: 2 }));
+  tc_ok_('a claimed and revoked code cannot be deleted',
+    !codeIsDeletable_({ issued: 1, usedBy: 'uid-123', revoked: true }));
+
+  tc_ok_('a code that does not exist cannot be deleted', !codeIsDeletable_(null));
+  tc_ok_('an undefined node cannot be deleted', !codeIsDeletable_(undefined));
+
+  // An empty string would be a claim by nobody, which nothing writes; treat it as unclaimed
+  // rather than pretending a phone holds it.
+  tc_ok_('an empty usedBy counts as unclaimed', codeIsDeletable_({ issued: 1, usedBy: '' }));
+}
+
 function runConsoleTests() {
   TC_RESULTS = [];
   tc_auditTimeline_();
   tc_auditEvents_();
   tc_generateCode_();
+  tc_codeIsDeletable_();
 
   var failed = 0;
   for (var i = 0; i < TC_RESULTS.length; i++) {
