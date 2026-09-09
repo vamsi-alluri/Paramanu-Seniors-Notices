@@ -57,6 +57,13 @@
   .free { background: #d6e2f5; color: #03152e; }
   .used { background: #e6e9f0; color: #2a2f3a; }
   .revoked { background: #f9dedc; color: #410e0b; }
+  .hist { background: #f6f8fc; }
+  .hist td { padding: 10px 14px 16px; }
+  .hist ol { margin: 0; padding-left: 20px; }
+  .hist li { padding: 2px 0; }
+  .who { color: #5a6478; }
+  .toggle { font: inherit; font-size: 13px; background: none; border: 0; padding: 0;
+            color: #14315c; cursor: pointer; text-decoration: underline; white-space: nowrap; }
 
   /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
   .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
@@ -117,11 +124,12 @@
             <th class="sort" onclick="sortCodes('status')">Status<span class="arrow" id="ac-status"></span></th>
             <th class="sort" onclick="sortCodes('note')">Note<span class="arrow" id="ac-note"></span></th>
             <th class="sort" onclick="sortCodes('issued')">Issued<span class="arrow" id="ac-issued"></span></th>
+            <th class="sort" onclick="sortCodes('lastChange')">Last change<span class="arrow" id="ac-lastChange"></span></th>
             <th></th>
           </tr>
         </thead>
         <tbody id="rows">
-          <tr><td colspan="5">Loading...</td></tr>
+          <tr><td colspan="6">Loading...</td></tr>
         </tbody>
       </table>
 
@@ -297,18 +305,47 @@
   // Newest first, matching the order the server hands them over in.
   var CODE_SORT = { key: 'issued', dir: -1 };
 
-  var CODE_KEYS = ['code', 'status', 'note', 'issued'];
+  var CODE_KEYS = ['code', 'status', 'note', 'issued', 'lastChange'];
+
+  // Which codes have their history open. Keyed by code rather than by row index so an expansion
+  // survives a re-sort and a page turn -- both of which redraw the whole table.
+  var OPEN_HISTORY = {};
+
+  var EVENT_LABEL = { issued: 'Issued', revoked: 'Revoked', restored: 'Restored',
+                      released: 'Released', note: 'Note set', claimed: 'Claimed' };
+
+  /**
+   * One line of a code's history.
+   *
+   * A claim has no email against it: it was written by a phone, not by a person, and is
+   * reconstructed from activatedAt rather than stored. Saying "(device)" is more honest than
+   * leaving the column blank, which reads as missing data.
+   */
+  function auditLine(entry) {
+    var who = entry.by ? escapeHtml(entry.by) : '(device)';
+    var label = EVENT_LABEL[entry.event] || escapeHtml(entry.event);
+    var extra = entry.to ? ' &mdash; &ldquo;' + escapeHtml(entry.to) + '&rdquo;' : '';
+    return label + ' ' + stamp(entry.at) + ' <span class="who">' + who + '</span>' + extra;
+  }
+
+  function toggleHistory(code) {
+    if (OPEN_HISTORY[code]) delete OPEN_HISTORY[code]; else OPEN_HISTORY[code] = true;
+    renderPage();
+  }
 
   function codeValue(row, key) {
     // Ordered the way the counter thinks about them: usable ones first, dead ones last.
     if (key === 'status') return row.revoked ? 2 : row.claimed ? 1 : 0;
     if (key === 'issued') return row.issued || 0;
     if (key === 'note') return row.note || '';
+    // Codes issued before the audit existed have no history and are not backfilled, so they carry
+    // a zero and settle at one end rather than being treated as blank.
+    if (key === 'lastChange') return row.lastChange ? row.lastChange.at : 0;
     return row.code;
   }
 
   function sortCodes(key) {
-    turnSort(CODE_SORT, key, ['issued']);
+    turnSort(CODE_SORT, key, ['issued', 'lastChange']);
     PAGE = 1;  // page 3 of the old order says nothing about the new one
     renderPage();
   }
@@ -350,7 +387,7 @@
     var pager = document.getElementById('pager');
 
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="5">No codes yet. Generate some.</td></tr>';
+      body.innerHTML = '<tr><td colspan="6">No codes yet. Generate some.</td></tr>';
       pager.style.display = 'none';
       return;
     }
@@ -386,9 +423,23 @@
       }
       actions.push('<button class="ghost" onclick="editNote(\'' + r.code + '\')">Note</button>');
 
-      return '<tr><td class="mono">' + r.formatted + '</td><td>' + state +
-             '</td><td>' + escapeHtml(r.note) + '</td><td>' + stamp(r.issued) +
-             '</td><td>' + actions.join(' ') + '</td></tr>';
+      var open = !!OPEN_HISTORY[r.code];
+      var last = r.lastChange
+        ? auditLine(r.lastChange) + ' <button class="toggle" onclick="toggleHistory(\'' + r.code +
+          '\')">' + (open ? 'hide' : 'history') + '</button>'
+        : '<span class="sub">&mdash;</span>';
+
+      var html = '<tr><td class="mono">' + r.formatted + '</td><td>' + state +
+                 '</td><td>' + escapeHtml(r.note) + '</td><td>' + stamp(r.issued) +
+                 '</td><td>' + last +
+                 '</td><td>' + actions.join(' ') + '</td></tr>';
+
+      if (open && r.audit && r.audit.length) {
+        html += '<tr class="hist"><td colspan="6"><ol>' + r.audit.map(function (entry) {
+          return '<li>' + auditLine(entry) + '</li>';
+        }).join('') + '</ol></td></tr>';
+      }
+      return html;
     }).join('');
   }
 
