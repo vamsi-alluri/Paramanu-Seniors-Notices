@@ -163,6 +163,66 @@ function firebase_(method, path, payload) {
   return text ? JSON.parse(text) : null;
 }
 
+// ---------------------------------------------------------------- Audit
+
+/**
+ * The only events the audit may contain. A closed set on purpose: a typo that invents a sixth
+ * event would produce a row nobody ever queries, and the log is the record the NGO is meant to
+ * trust without asking a developer.
+ */
+var AUDIT_EVENTS = ['issued', 'revoked', 'restored', 'released', 'note'];
+
+/**
+ * Appends one entry to a code's history.
+ *
+ * POST rather than PATCH so Realtime Database mints the key. A client-generated key from
+ * Date.now() is exactly what silently lost a notice in SYSTEM.md quirk 5.12: two actions inside
+ * one millisecond and the second overwrites the first with no error anywhere.
+ *
+ * This never writes to /codes. Adding a field there needs a matching .validate rule or the app's
+ * claim write starts failing for every unclaimed slip -- see the note on `note` in SYSTEM.md 6a.
+ */
+function audit_(code, event, by, extra) {
+  if (AUDIT_EVENTS.indexOf(event) < 0) throw new Error('Unknown audit event: ' + event);
+
+  var entry = { at: Date.now(), by: by, event: event };
+  if (extra) {
+    for (var key in extra) {
+      if (extra.hasOwnProperty(key) && extra[key] !== undefined && extra[key] !== null) {
+        entry[key] = extra[key];
+      }
+    }
+  }
+  firebase_('post', '/audit/' + code + '.json', entry);
+}
+
+/**
+ * A code's stored history plus the one event that is never stored: the device's own claim.
+ *
+ * The phone cannot write here. Letting it would mean opening /audit to 400 devices, and the audit
+ * is only trustworthy because nothing but the console can reach it. So the claim is reconstructed
+ * from /codes/{CODE}.activatedAt at render time.
+ *
+ * Known limit: activatedAt holds only the most recent claim, so a released-and-reclaimed code
+ * shows just the latest. The console actions either side still show the shape of what happened.
+ */
+function auditTimeline_(entries, node) {
+  var out = [];
+
+  for (var key in entries) {
+    if (!entries.hasOwnProperty(key)) continue;
+    var e = entries[key] || {};
+    out.push({ at: e.at || 0, by: e.by || '', event: e.event || '', to: e.to || '' });
+  }
+
+  if (node && node.activatedAt) {
+    out.push({ at: node.activatedAt, by: '', event: 'claimed', to: '' });
+  }
+
+  out.sort(function (a, b) { return a.at - b.at; });
+  return out;
+}
+
 // ---------------------------------------------------------------- Operations
 
 /**
@@ -172,7 +232,7 @@ function firebase_(method, path, payload) {
  * every code already issued, including the claims attached to them.
  */
 function createCodes(count, note) {
-  requireEditor_();
+  var by = requireEditor_();
   count = Math.max(1, Math.min(200, parseInt(count, 10) || 1));
   note = (note || '').toString().trim().slice(0, 120);
 
@@ -193,6 +253,18 @@ function createCodes(count, note) {
   }
 
   firebase_('patch', '/codes.json', updates);
+
+  // One multi-path PATCH rather than up to 200 POSTs. Safe to use a client-generated key here
+  // precisely because these codes did not exist a moment ago, so their logs are empty and cannot
+  // collide. Every other audit write uses POST and lets the server mint the key.
+  var auditUpdates = {};
+  for (var i = 0; i < created.length; i++) {
+    var entry = { at: issued, by: by, event: 'issued' };
+    if (note) entry.to = note;
+    auditUpdates[created[i] + '/' + issued] = entry;
+  }
+  firebase_('patch', '/audit.json', auditUpdates);
+
   return created;
 }
 
@@ -204,10 +276,11 @@ function createCodes(count, note) {
  * app from altering it.
  */
 function setNote(code, note) {
-  requireEditor_();
+  var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   note = (note || '').toString().trim().slice(0, 120);
   firebase_('patch', '/codes/' + code + '.json', { note: note || null });
+  audit_(code, 'note', by, { to: note });
   return listCodes();
 }
 
@@ -224,9 +297,10 @@ function setNote(code, note) {
  * revokeCode for a device you intend to cut off; use this only for one that is genuinely gone.
  */
 function releaseCode(code) {
-  requireEditor_();
+  var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { usedBy: null, activatedAt: null, revoked: null });
+  audit_(code, 'released', by);
   return listCodes();
 }
 
@@ -234,11 +308,13 @@ function releaseCode(code) {
 function listCodes() {
   requireEditor_();
   var all = firebase_('get', '/codes.json') || {};
+  var audit = firebase_('get', '/audit.json') || {};
   var rows = [];
   for (var code in all) {
     if (!all.hasOwnProperty(code)) continue;
     var node = all[code] || {};
-    rows.push({ code: code, formatted: code.substring(0, 4) + '-' + code.substring(4), issued: node.issued || 0, claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true, note: node.note || '' });
+    var timeline = auditTimeline_(audit[code], node);
+    rows.push({ code: code, formatted: code.substring(0, 4) + '-' + code.substring(4), issued: node.issued || 0, claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true, note: node.note || '', audit: timeline, lastChange: timeline.length ? timeline[timeline.length - 1] : null });
   }
   rows.sort(function (a, b) { return b.issued - a.issued; });
   return rows;
@@ -249,16 +325,18 @@ function listCodes() {
  * claim it afresh, because the rules only refuse a code that already carries usedBy.
  */
 function revokeCode(code) {
-  requireEditor_();
+  var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { revoked: true });
+  audit_(code, 'revoked', by);
   return listCodes();
 }
 
 function unrevokeCode(code) {
-  requireEditor_();
+  var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { revoked: null });
+  audit_(code, 'restored', by);
   return listCodes();
 }
 
