@@ -116,13 +116,21 @@ is not worth the rule change.
 
 ## Console changes — `docs/apps-script/console/Index.html`
 
-The code row keeps its existing status pill. Beneath it:
+As of `b85de4c` the codes table is a real `<table>` with sortable headers and client-side
+pagination (Code, Status, Note, Issued, actions — `colspan="5"`). The audit fits it as follows:
 
-- the newest audit event inline — `Restored 9 Sep 11:40 asha@…`
-- a `history` toggle revealing the full interleaved list
+- **A new sortable "Last change" column**, rendering the newest event as `Restored 9 Sep asha@…`.
+  Sorting is client-side over rows already held in full, so this costs no round trip — and sorting
+  by last change is the view that answers "what has happened across the 400 slips recently",
+  which is the whole point of the exercise. It needs a `sortCodes('lastChange')` case and an
+  `ac-lastChange` arrow span alongside the existing four.
+- **History expands as a full-width `<tr>`** beneath the row, `colspan="6"` once the column is
+  added, holding the interleaved list. Expansion state is keyed by code, not by row index, so it
+  survives a re-sort and a page change.
+- The `colspan="5"` placeholder on the loading row becomes `6`.
 
-Existing `.pill` / `.revoked` styles are reused. Note that `Index.html` has uncommitted local
-changes; the implementation works from the working tree, not from `HEAD`.
+Existing `.pill` / `.revoked` styles are reused. Sorting and pagination stay local: `listCodes`
+still returns every row, so the audit join is unaffected by both.
 
 ## Sender changes — `docs/apps-script/sender/`
 
