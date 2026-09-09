@@ -85,6 +85,24 @@
     .slip { border: 1px dashed #666; padding: 8mm; text-align: center; }
     .slip .code { font-family: ui-monospace, monospace; font-size: 30pt;
                   letter-spacing: .1em; margin: 6mm 0; }
+
+    /*
+      QR to the Play listing, embedded rather than fetched.
+      https://play.google.com/store/apps/details?id=org.paramanuseniorshealth.notices
+
+      A data URI on purpose: a slip printed from a chart API would come out with an empty box on
+      the day that service is slow or gone, and nobody would notice until the sheets were cut up.
+      The URL never changes, so the image is a constant and belongs in the file.
+
+      15mm across 41 modules is 0.37mm per module -- just above the ~0.33mm floor for reliable
+      scanning, and the smallest that survived decoding with blur and noise added. `pixelated`
+      keeps the module edges square when the printer rescales it; smoothing them costs contrast
+      at exactly the size where contrast is all there is.
+    */
+    .slip .qr { width: 15mm; height: 15mm; margin: 4mm auto 1mm; image-rendering: pixelated;
+                background-size: 100% 100%; background-repeat: no-repeat;
+                background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAewAAAHsAQAAAAA4UaPNAAAChElEQVR42u2dUWoDMQxETS+w97+lbuCSZCPN2IV+BEpl3lJKmvX7MbPakSy7Y35yxQAHBwcH///4yOt6fhOPj3rr/vKajx8b/DU+usDB/x5/Cvu6n4D68JT0/fu6nw778zUYzYO31XzqOSO8vgteOtcxt/jRPPgRms/vLbbHD4PRPPgJmr/K5KyPwJzEefDz/HxKulxN3DE/01j8PHh7zUsp5vcf6jbg/TWvl8X5WRWbfAt4esvMg3f283foLj9TNl7fAjkSzYM3j/Mj16GyShPvMTHEw49aC0Pz4H3jvGav4U9EjAzvJfvAz4O3z2HLur9FXvF/WhorrwNmHryntwmz63tgN7c/hrwRmHnwrt5G47m6d0ts/S5+Hrx3DhvD1qT8lvXbjPI/aB68sZ/3pViV+hr2NfKjefDWmvfU1YJ/Dl46itE8eOe6zRrVlwchV6l0uQrNg7fNYa2R8ppLL1n5eclz8TbgreO8rq5mzN86yta7aB68d90mrCyz9A9ruUaMEDMP3ljzQ/Z67zu+a+1VN56jefDW3ka2hKilqWR22EkIeBvwxnE+w/uU9gO3PdpXKd2VzDx44zi/uh2v2OyeB82Dt9a8yVvbKTWl3U/CQfPgTTW/LMJGmfl9z6CbfGYevKvmTfCXVeyHdxdXCkCcBz8izq+WRlpubGMsfh68dd1mO/eg6pZRB7dqUzFxHrx9DpsGPnw/lHdaLmfdoHnwxt5maZ7f6jbackCcBz8hh/Worq8AbU4oP0+cBz9L8/tOwCrjXLpzlpkHP0HzejSxntRaOW+k+Wfmwdv7+eV0SivvxHZeN5oH71+38SObbGVqKeOjefC+muffz4GDg4Ofi38DeSsbjh7jBEAAAAAASUVORK5CYII="); }
+    .slip .qrhint { font-size: 8pt; color: #333; }
   }
 </style>
 </head>
@@ -389,8 +407,11 @@
     document.getElementById('printCount').textContent = PRINTABLE.length;
     document.getElementById('print').disabled = PRINTABLE.length === 0;
     document.getElementById('slips').innerHTML = PRINTABLE.map(function (r) {
+      // The QR is secondary and sits below: the code is what the person needs, and someone who
+      // already has the app should never have to work out that the square is not for them.
       return '<div class="slip"><div>Paramanu Seniors Notices</div><div class="code">' + r.formatted +
-             '</div><div>Open the app and type this code.<br>It works once.</div></div>';
+             '</div><div>Open the app and type this code.<br>It works once.</div>' +
+             '<div class="qr"></div><div class="qrhint">No app yet? Scan to install it.</div></div>';
     }).join('');
   }
 

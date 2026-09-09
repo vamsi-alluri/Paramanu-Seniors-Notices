@@ -522,6 +522,13 @@ out; saying yes marks them `printed`, so the next run does not repeat them. Sayi
 unprinted and they come out again — the right way round, since an unmarked printed slip only wastes
 paper whereas a marked unprinted one goes quietly missing from every future run.
 
+Each slip carries the code at 30pt monospace, two lines of instruction, and a **15mm QR to the Play
+listing** with "No app yet? Scan to install it." The QR is a base64 PNG embedded in `Index.html`,
+not fetched from a chart service: the URL never changes, and a slip printed against a service that
+happened to be slow would come out with an empty box that nobody notices until the sheets are cut
+up. At 41 modules, 15mm gives 0.37mm per module — just above the ~0.33mm floor for reliable
+scanning, and the smallest size that still decoded with blur and noise added.
+
 **Printed** is a fourth state alongside Unused, In use and Revoked, and it is derived from the audit
 rather than stored on `/codes` — a new sibling field there would break the app's claim write (§6a).
 A **Release** clears it: the code returns to the pool for somebody new, who needs a fresh slip.
