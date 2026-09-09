@@ -3,20 +3,27 @@
 Everything needed to pick this project up cold: how the pieces fit, what is done, what is not, and
 the traps that cost real time to find.
 
-**Status (2026-09-03):** in Play **closed testing**, resubmission deliberately held.
-`versionCode 4`, `versionName 0.3.0` is built and ready but **not uploaded**.
+**Status (2026-09-09):** **approved and live in Play closed testing, with 14 testers.** The privacy
+policy rejections are resolved. Source is at `versionCode 6`, `versionName 0.3.2`.
 
-The app was flagged under **News and Magazines policy** — "app does not contain any news articles or
-app maybe incorrectly declared as News app". The category was simply wrong: this is not a news
-publication. **The category has been changed to Communication**, which also clears the News
-declaration and its journalism attestations.
+Two things this changed, both of which now matter:
 
-Resubmission waits on one thing: the app's policy at `paramanuseniorshealth.org/privacy-policy-app/`.
-The site's own `/privacy-policy` is a separate, website-only page that serves a
-**website-only** policy ("we do not use cookies and we do not collect any personal data", last
-updated 4 July 2026) that mentions no app, no Android, and no Firebase. Play checks that the policy
-covers the app, and that page contradicts the app's own Data Safety position. The replacement text
-is `docs/privacy-policy.md`; the NGO expects to publish it around 2026-09-05.
+- **Sends reach 14 real phones.** Closed testing subscribes to the same `notices-v1` topic as
+  production — deliberate, but it stopped being theoretical the moment there were real testers.
+  Anything sent from the sender, and anything the RSS poller picks up, goes to all of them. There is
+  no separate testing audience; `TOPIC_OVERRIDE` and `TEST_TOPIC` exist for the Apps Script suite,
+  not for staff sends.
+- **Production is still ahead.** Closed-testing approval is not production approval. An individual
+  developer account has to hold a group of testers for a continuous period before production access
+  is granted, which is the likely reason for the 14.
+
+Resolved, kept because it cost real time: the app was flagged under **News and Magazines policy** —
+"app does not contain any news articles or app maybe incorrectly declared as News app". The category
+was simply wrong; this is not a news publication. **The category is now Communication**, which also
+clears the News declaration and its journalism attestations. Separately, Play requires the policy to
+cover the *app*, and the site's own `/privacy-policy` is a website-only page that mentions no app,
+no Android and no Firebase; the app's policy lives at `paramanuseniorshealth.org/privacy-policy-app/`
+from `docs/privacy-policy.md`. Keep the two pages distinct.
 
 | | |
 |---|---|
@@ -444,7 +451,7 @@ the code screen.
 
 0. **Deploy and verify the audit / revocation work.** All of it is written and the Android half is
    covered by unit tests, but none of it has run against Google's infrastructure or on a phone:
-   - Paste `console/Tests.gs`, run `runConsoleTests` — expect `All 12 passed.`
+   - ~~Paste `console/Tests.gs`, run `runConsoleTests`~~ — **done, `All 34 passed.`**
    - Paste `sender/Revoker.gs`, run `revokerDryRun()` (sends nothing), then
      `revokerInstallTrigger()`. No new Script Properties, and no redeploy needed — a trigger is not
      served by `/exec`.
@@ -461,9 +468,9 @@ the code screen.
    - Confirm a *fresh* code can still be claimed. Nothing here touches `/codes` or the rules, but
      activation is what this project has broken before and it costs one slip to be sure.
 
-1. **Publish `docs/privacy-policy.md`** at paramanuseniorshealth.org/privacy-policy-app/, alongside the
-   website-only policy currently there. **Blocks resubmission.**
-2. **Upload `versionCode 4` and resubmit.** Only after (1).
+1. ~~**Publish `docs/privacy-policy.md`**~~ — **done.** Live at
+   paramanuseniorshealth.org/privacy-policy-app/, alongside the website-only policy. Keep both.
+2. ~~**Upload and resubmit.**~~ — **done.** Approved in closed testing.
 3. **Device-verify `versionCode 4`.** The welcome notice, the test button, the contact links and the
    absence of a "Testing" entry in system notification settings have **never run on hardware** — the
    phone was off the bridge when they were written.
