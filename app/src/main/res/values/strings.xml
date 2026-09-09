@@ -92,8 +92,14 @@
       which overstated what had happened; these say what is actually true.
     -->
     <string name="revoked_banner_title">You will not receive any more alerts.</string>
-    <string name="revoked_banner_body">The notices below are still yours to read. If you expected this, you can uninstall the app.</string>
+    <string name="revoked_banner_body">Your saved notices are still here to read. If you expected this, you can uninstall the app.</string>
     <string name="revoked_banner_helpdesk">If not, please call the helpdesk and give them your code %1$s.</string>
+    <string name="revoked_banner_action">What to do</string>
+    <!-- Settings, when the code has been revoked. -->
+    <string name="settings_code_revoked">This code has been stopped.</string>
+    <string name="settings_new_code">Enter a new code</string>
+    <string name="settings_new_code_explainer">If the counter has given you a new slip, type it here. Your saved notices are kept.</string>
+    <string name="settings_new_code_action">Enter a new code</string>
     <string name="revoked_notification_title">You have been removed from the notices list</string>
     <string name="revoked_notification_body">You will not receive any more alerts. Your saved notices are still in the app.</string>
     <string name="settings_about">Notices are published by Helpdesk, CHSS Beneficiaries Group, Vashi, Navi Mumbai, Maharashtra, India.</string>

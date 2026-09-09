@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -14,25 +15,30 @@ import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.activation.ActivationCode
 
 /**
- * Shown above everything on the notice list when this device's code has been revoked.
+ * Shown above every screen while this device's code is revoked.
  *
- * It is not dismissible, and it deliberately offers no way to type another code. Coming back is
- * the NGO's decision, made by restoring this code in the console -- at which point the device
- * resumes on its own within a day, or immediately if the app is opened. A "have a new code" button
- * here would just be the loophole that made the old code screen pointless: any valid slip lifted
- * that gate, and it never had to be the user's own.
+ * Not dismissible, and pinned outside whatever is scrolling: it is the reason the rest of the app
+ * has stopped updating, so it must not be something the user can scroll past and forget.
  *
- * The code is printed because it is what the helpdesk will ask for, and somebody who has just been
- * cut off should not have to go hunting through Settings for it.
+ * It sends the user to Settings rather than straight to the code screen. Settings is where the code
+ * itself is shown, struck through, next to the helpdesk number they will need -- so the one place
+ * that explains the situation is also the place that offers the way out of it.
+ *
+ * The code is printed here too, because it is the first thing the helpdesk will ask for and
+ * somebody who has just been cut off should not have to go hunting for it.
  */
 @Composable
-fun RevokedBanner(code: String?, modifier: Modifier = Modifier) {
+fun RevokedBanner(
+    code: String?,
+    onOpenSettings: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.errorContainer,
         contentColor = MaterialTheme.colorScheme.onErrorContainer,
     ) {
-        Column(Modifier.padding(horizontal = 16.dp, vertical = 14.dp)) {
+        Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 8.dp)) {
             Text(
                 text = stringResource(R.string.revoked_banner_title),
                 style = MaterialTheme.typography.titleMedium,
@@ -47,6 +53,15 @@ fun RevokedBanner(code: String?, modifier: Modifier = Modifier) {
                     text = stringResource(R.string.revoked_banner_helpdesk, ActivationCode.format(code)),
                     style = MaterialTheme.typography.bodyLarge,
                     modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            TextButton(
+                onClick = onOpenSettings,
+                modifier = Modifier.padding(top = 2.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.revoked_banner_action),
+                    style = MaterialTheme.typography.titleMedium,
                 )
             }
         }

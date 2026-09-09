@@ -7,7 +7,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,6 +33,7 @@ import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
 import org.paramanuseniorshealth.notices.ui.ActivationScreen
 import org.paramanuseniorshealth.notices.ui.AttachmentActions
 import org.paramanuseniorshealth.notices.ui.NoticeListScreen
+import org.paramanuseniorshealth.notices.ui.RevokedBanner
 import org.paramanuseniorshealth.notices.ui.NoticeViewModel
 import org.paramanuseniorshealth.notices.ui.NoticeViewerScreen
 import org.paramanuseniorshealth.notices.ui.Screen
@@ -140,6 +149,35 @@ private fun NoticesApp(
         if (screen is Screen.Notices && !access.isEnabled) access.request()
     }
 
+    // The banner sits above every screen rather than inside the notice list. Being cut off is a
+    // fact about the whole app, and a user who happened to be in Settings or reading an attachment
+    // when the revoke landed would otherwise see nothing at all. It is left off the code screen
+    // itself, where it would be telling somebody mid-typing that the code they are entering is
+    // already dead.
+    val showBanner = revoked && screen !is Screen.Activation
+
+    Column(Modifier.fillMaxSize()) {
+        if (showBanner) {
+            // The window is edge to edge, and this sits above the Scaffold that would otherwise
+            // have handled the status bar, so it takes that inset itself -- and the screen below
+            // consumes it, or every Scaffold would pad for a status bar that is already covered.
+            RevokedBanner(
+                code = viewModel.activationCode,
+                onOpenSettings = { viewModel.show(Screen.Settings) },
+                modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+            )
+        }
+
+        // weight(1f) rather than letting the screens fill: each is a Scaffold asking for the whole
+        // height, which in a plain Column would run off the bottom by exactly the banner's height.
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .then(
+                    if (showBanner) Modifier.consumeWindowInsets(WindowInsets.statusBars)
+                    else Modifier
+                )
+        ) {
     when (val current = screen) {
         Screen.Activation -> ActivationScreen(
             onSubmit = viewModel::redeem,
@@ -156,8 +194,6 @@ private fun NoticesApp(
                 expandedId = expandedId,
                 highlightId = highlightId,
                 officeInfo = officeInfo,
-                revoked = revoked,
-                activationCode = viewModel.activationCode,
                 notificationsBlocked = !access.isEnabled,
                 onOpenNotificationSettings = access::request,
                 onToggleExpanded = viewModel::toggleExpanded,
@@ -186,6 +222,7 @@ private fun NoticesApp(
             SettingsScreen(
                 subscriptions = subscriptions,
                 activationCode = viewModel.activationCode,
+                revoked = revoked,
                 testingUnlocked = testingUnlocked,
                 versionName = BuildConfig.VERSION_NAME,
                 onSubscriptionChange = viewModel::setSubscribed,
@@ -207,6 +244,7 @@ private fun NoticesApp(
                     }
                 },
                 onUnlockTesting = viewModel::unlockTesting,
+                onEnterNewCode = viewModel::enterNewCode,
                 onReset = viewModel::reset,
                 onBack = viewModel::backToNotices,
             )
@@ -221,6 +259,8 @@ private fun NoticesApp(
                 onBack = viewModel::backToNotices,
                 shareText = notice?.let { ShareText.build(listOf(it)) }.orEmpty(),
             )
+        }
+    }
         }
     }
 }

@@ -9,6 +9,9 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -46,6 +49,17 @@ class ActivationRepository(private val context: Context) {
      * console's Restore button work.
      */
     val isRevoked: Boolean get() = prefs.getBoolean(KEY_REVOKED, false)
+
+    /**
+     * The same fact as [isRevoked], as a stream, so a screen that is already on display updates the
+     * moment a revoke arrives.
+     *
+     * A revoke is applied by the messaging service, which runs in this process but with no UI
+     * attached. Without this the banner appeared only when something else happened to redraw the
+     * screen -- so the user could sit looking at a list that had silently stopped receiving.
+     */
+    private val _revoked = MutableStateFlow(prefs.getBoolean(KEY_REVOKED, false))
+    val revoked: StateFlow<Boolean> = _revoked.asStateFlow()
 
     /** When the last definitive answer was obtained. Zero if there has never been one. */
     val lastVerifiedAt: Long get() = prefs.getLong(KEY_LAST_VERIFIED_AT, 0L)
@@ -120,10 +134,17 @@ class ActivationRepository(private val context: Context) {
                     )
                 ).awaitResult()
 
+                // KEY_REVOKED is cleared here on purpose. A revoked device keeps its old code and
+                // UID so a console Restore can bring it back, but the user may instead be handed a
+                // fresh slip -- and without this the new claim would inherit the old one's
+                // revocation and the gate would refuse every notice for a code that is perfectly
+                // good.
                 prefs.edit()
                     .putString(KEY_CODE, code)
                     .putString(KEY_UID, uid)
+                    .putBoolean(KEY_REVOKED, false)
                     .apply()
+                _revoked.value = false
 
                 // A fresh claim is known-good, so record it rather than leaving the gate to answer
                 // Unknown for the first notice.
@@ -243,11 +264,13 @@ class ActivationRepository(private val context: Context) {
             .putString(KEY_LAST_STATE, ActivationState.Revoked.name)
             .putLong(KEY_LAST_VERIFIED_AT, System.currentTimeMillis())
             .apply()
+        _revoked.value = true
     }
 
     /** The server says the claim stands again: clear the banner and start receiving once more. */
     suspend fun resumeClaim() {
         prefs.edit().putBoolean(KEY_REVOKED, false).apply()
+        _revoked.value = false
         recordVerification(ActivationState.Active)
         syncSubscriptions()
     }
@@ -268,6 +291,7 @@ class ActivationRepository(private val context: Context) {
             .remove(KEY_LAST_VERIFIED_AT)
             .apply { Subscription.entries.forEach { remove(it.preferenceKey) } }
             .apply()
+        _revoked.value = false
     }
 
     /** Idempotent and locally persisted by the SDK, so calling it on every launch is cheap. */

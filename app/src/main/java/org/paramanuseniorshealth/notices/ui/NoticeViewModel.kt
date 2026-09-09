@@ -113,12 +113,15 @@ class NoticeViewModel(
     /**
      * Whether this device's access has been withdrawn.
      *
-     * Drives a banner on the notice list rather than a return to the code screen: hiding the
-     * history protected nothing, since any valid slip lifted that gate and it did not have to be
-     * theirs, while it cost the user everything they had already received.
+     * Drives a banner across the app rather than a return to the code screen: hiding the history
+     * protected nothing, since any valid slip lifted that gate and it did not have to be theirs,
+     * while it cost the user everything they had already received.
+     *
+     * Taken straight from the repository rather than mirrored here. The change usually originates
+     * in the messaging service with no UI attached, and a local copy only caught up when something
+     * else happened to redraw the screen.
      */
-    private val _revoked = MutableStateFlow(activation.isRevoked)
-    val revoked: StateFlow<Boolean> = _revoked.asStateFlow()
+    val revoked: StateFlow<Boolean> = activation.revoked
 
     /**
      * Notices whose circular is downloading right now.
@@ -205,18 +208,17 @@ class NoticeViewModel(
     /**
      * Asks the backend whether this install's claim still stands.
      *
-     * Only a definitive [ActivationState.Revoked] sends the user back to the code screen.
-     * [ActivationState.Unknown] -- offline, slow signal -- leaves them where they are, for the same
-     * reason the delivery gate permits it: locking someone out of notices they have already
-     * received because their phone had no signal at launch would be indefensible.
+     * A definitive [ActivationState.Revoked] raises the banner but leaves the user where they are.
+     * [ActivationState.Unknown] -- offline, slow signal -- changes nothing, for the same reason the
+     * delivery gate permits it: locking someone out of notices they have already received because
+     * their phone had no signal at launch would be indefensible.
      */
     fun refreshActivation() {
         viewModelScope.launch {
             when (activation.verify()) {
-                ActivationState.Revoked -> {
-                    activation.suspendClaim()
-                    _revoked.value = true
-                }
+                // suspendClaim and resumeClaim publish the change themselves, so there is nothing
+                // to mirror here.
+                ActivationState.Revoked -> activation.suspendClaim()
 
                 ActivationState.Active -> {
                     // The fastest route back for a restored code, for anyone who does open the app.
@@ -224,18 +226,25 @@ class NoticeViewModel(
                         activation.resumeClaim()
                         notices.clearRevokedNotice()
                     }
-                    _revoked.value = false
                 }
 
                 // Genuinely no claim on this device: a fresh install, or after a reset.
-                ActivationState.NotActivated -> {
-                    _revoked.value = false
-                    _screen.value = Screen.Activation
-                }
+                ActivationState.NotActivated -> _screen.value = Screen.Activation
 
                 ActivationState.Unknown -> Unit
             }
         }
+    }
+
+    /**
+     * Opens the code screen without surrendering anything.
+     *
+     * Distinct from [reset], which wipes the notices too. Somebody who has been revoked and given a
+     * fresh slip at the counter should keep everything they have already received -- the new code
+     * is the same person continuing, not a new one starting.
+     */
+    fun enterNewCode() {
+        _screen.value = Screen.Activation
     }
 
     fun redeem(rawCode: String) {
@@ -246,9 +255,10 @@ class NoticeViewModel(
             when (val result = activation.redeem(rawCode)) {
                 RedeemResult.Success -> {
                     _subscriptions.value = activation.subscriptions()
-                    // A code redeemed here is always a different one, since a revoked code cannot
-                    // be re-claimed. So the banner must not carry over from the previous holder.
-                    _revoked.value = false
+                    // redeem() clears the revocation itself, so the banner is already down by here.
+                    // The old revocation notice goes too: it says no more alerts will arrive, which
+                    // has just stopped being true.
+                    notices.clearRevokedNotice()
                     // Written before the screen changes so the list is never momentarily empty.
                     notices.saveWelcome(welcomeTitle, welcomeBody)
 
@@ -316,7 +326,6 @@ class NoticeViewModel(
         viewModelScope.launch {
             activation.resetByUser()
             notices.clearAll()
-            _revoked.value = false
             _selected.value = emptySet()
             _screen.value = Screen.Activation
         }

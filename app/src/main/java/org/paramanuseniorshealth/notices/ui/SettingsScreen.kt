@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -34,6 +35,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import org.paramanuseniorshealth.notices.R
@@ -47,11 +49,13 @@ private const val TESTING_UNLOCK_TAPS = 7
 fun SettingsScreen(
     subscriptions: Map<Subscription, Boolean>,
     activationCode: String?,
+    revoked: Boolean,
     testingUnlocked: Boolean,
     versionName: String,
     onSubscriptionChange: (Subscription, Boolean) -> Unit,
     onSendTest: () -> Unit,
     onUnlockTesting: () -> Unit,
+    onEnterNewCode: () -> Unit,
     onReset: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -161,10 +165,46 @@ fun SettingsScreen(
                     )
                     // Shown so the user can read it back over the phone if they ever call the
                     // dispensary for help. It is not a secret worth hiding: it is already spent.
+                    //
+                    // Struck through and in the error colour once it has been stopped. Colour alone
+                    // would not do it: this audience includes people who cannot distinguish it, and
+                    // the strikethrough carries the same meaning without relying on sight of red.
                     Text(
                         text = ActivationCode.format(activationCode),
                         style = MaterialTheme.typography.headlineSmall,
+                        color = if (revoked) MaterialTheme.colorScheme.error else Color.Unspecified,
+                        textDecoration = if (revoked) TextDecoration.LineThrough else null,
                     )
+                    if (revoked) {
+                        Text(
+                            text = stringResource(R.string.settings_code_revoked),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+                HorizontalDivider()
+            }
+
+            // Offered only while revoked. At any other time the code screen is not somewhere a user
+            // has any reason to go, and putting a permanent door to it in Settings invites somebody
+            // to wander in and strand themselves.
+            if (revoked) {
+                Column {
+                    Text(
+                        text = stringResource(R.string.settings_new_code),
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_new_code_explainer),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Button(
+                        onClick = onEnterNewCode,
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) {
+                        Text(stringResource(R.string.settings_new_code_action))
+                    }
                 }
                 HorizontalDivider()
             }
