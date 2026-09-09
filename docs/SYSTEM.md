@@ -541,12 +541,20 @@ rather than stored on `/codes` — a new sibling field there would break the app
 A **Release** clears it: the code returns to the pool for somebody new, who needs a fresh slip.
 Tick "include already printed" to reprint a lost one.
 
-Generated codes always contain a run of three identical characters (`J743-3327`, `6JZS-QQQ9`), so
-staff have something to anchor on when reading one across a counter or over the phone. Only the
-sampling changed; the check-character rule is untouched, so codes issued before this are still
-valid and the codes pinned in `GeneratedCodeCompatibilityTest` must not be regenerated. It narrows
-the payload space from ~34 billion to ~168 million, which against 400 live codes and an
-unlistable `/codes` is not a guessing risk.
+Generated payloads always contain **at least two different characters that each appear more than
+once** — `SCCM-7VV7`, `0V0J-RYRJ`, `AEE5-D1D6` — so staff have something to hold on to when reading
+one across a counter or back over the phone. Adjacency is not required and is not the point.
+
+An earlier version forced a contiguous run of three instead. It produced `GGGW-YBHZ` and
+`EWNN-NMGA`: one repeated character, six unrelated ones, and a run that invites "was that two Gs or
+three?". Staff rejected them on sight. Do not go back to it.
+
+The generator rejection-samples rather than constructing a pattern, so every allowed payload stays
+equally likely; about one draw in twelve qualifies. Only the sampling changed — the check-character
+rule is untouched, so codes issued before this are still valid and the codes pinned in
+`GeneratedCodeCompatibilityTest` must not be regenerated. It narrows the payload space from ~34
+billion to ~2.9 billion, which against 400 live codes and an unlistable `/codes` is not a guessing
+risk.
 
 **Send a notice** — sender → pick a saved message or write one → check the preview → PIN → Send.
 

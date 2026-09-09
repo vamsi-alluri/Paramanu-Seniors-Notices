@@ -48,46 +48,57 @@ function checkCharacter(payload) {
   return ALPHABET.charAt(sum % ALPHABET.length);
 }
 
-/**
- * How many of the payload's characters are forced to be the same one.
- *
- * This changes only how payloads are *sampled*, never the check-character rule above, so the codes
- * pinned in GeneratedCodeCompatibilityTest.kt stay valid and must not be regenerated. Codes issued
- * before this existed are equally valid; they are simply harder to read out.
- */
-var REPEAT_RUN = 3;
+/** How many different characters must each appear more than once in a payload. */
+var PAYLOAD_MIN_REPEATS = 2;
+
+/** How many of [s]'s characters appear more than once. Pure, so the rule can be tested. */
+function countRepeatingCharacters_(s) {
+  var counts = {};
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i);
+    counts[ch] = (counts[ch] || 0) + 1;
+  }
+  var repeating = 0;
+  for (var key in counts) {
+    if (counts.hasOwnProperty(key) && counts[key] >= 2) repeating++;
+  }
+  return repeating;
+}
 
 /**
- * A code with a run of three identical characters somewhere in it.
+ * A code in which at least two different characters each occur more than once.
  *
- * Codes are read aloud across a counter to someone in their eighties, and often over the phone to
- * the helpdesk afterwards. A run gives both sides an anchor -- "three sevens in the middle" -- that
- * seven unrelated characters do not, and a miscounted run is caught locally by the check character
- * rather than by a rejection from the server.
+ * Codes are read aloud across a counter to someone in their eighties, and again over the phone to
+ * the helpdesk afterwards, so they need something to hold on to. Two separate repeats do that:
+ * AXGX-BBBE and 003C-93VV are easy to say back. Adjacency is not required and is not the point.
  *
- * The run is contiguous on purpose. Three of the same character scattered through the code is no
- * easier to say than none at all; it is the run that people can hold in their head.
+ * An earlier version forced a contiguous run of three instead, and it produced exactly the codes
+ * that turned out to be hard: GGGW-YBHZ and EWNN-NMGA have one repeated character and six unrelated
+ * ones, and a run of three invites the question "was that two Gs or three?" -- which the check
+ * character catches, but only after somebody has typed it wrong at a counter.
  *
- * COST IN GUESSABILITY, since this narrows the space deliberately: the payload space falls from
- * 32^7 (about 34 billion) to 5 * 32 * 32^4 (about 168 million). Against roughly four hundred live
- * codes that is a one-in-four-hundred-thousand chance per guess, each guess costing an
- * authenticated write that the rules refuse, and /codes cannot be listed. Still far outside what
- * anyone could work through, and the slips are handed out in person anyway.
+ * Rejection sampling rather than construction: placing chosen characters in chosen slots would
+ * bias the distribution towards whatever pattern the construction happened to favour. Drawing
+ * uniformly and discarding what does not qualify keeps every allowed payload equally likely. About
+ * one draw in twelve qualifies, so a run of two hundred costs a few thousand cheap iterations.
+ *
+ * COST IN GUESSABILITY: the payload space falls from 32^7 (about 34 billion) to roughly 8% of that,
+ * about 2.9 billion. Against four hundred live codes that is under one in seven million per guess,
+ * each guess costing an authenticated write the rules refuse, and /codes cannot be listed.
  */
 function generateCode_() {
-  var chars = [];
-  for (var i = 0; i < PAYLOAD_LENGTH; i++) {
-    chars.push(ALPHABET.charAt(Math.floor(Math.random() * ALPHABET.length)));
+  // A ceiling, not a expectation: at an 8% acceptance rate the odds of reaching it are vanishing,
+  // and a bounded loop cannot hang the console if the alphabet or the rule is ever changed badly.
+  for (var attempt = 0; attempt < 1000; attempt++) {
+    var payload = '';
+    for (var i = 0; i < PAYLOAD_LENGTH; i++) {
+      payload += ALPHABET.charAt(Math.floor(Math.random() * ALPHABET.length));
+    }
+    if (countRepeatingCharacters_(payload) >= PAYLOAD_MIN_REPEATS) {
+      return payload + checkCharacter(payload);
+    }
   }
-
-  var repeated = ALPHABET.charAt(Math.floor(Math.random() * ALPHABET.length));
-  var start = Math.floor(Math.random() * (PAYLOAD_LENGTH - REPEAT_RUN + 1));
-  for (var j = 0; j < REPEAT_RUN; j++) {
-    chars[start + j] = repeated;
-  }
-
-  var payload = chars.join('');
-  return payload + checkCharacter(payload);
+  throw new Error('Could not generate a code with enough repeated characters; check the rule.');
 }
 
 function isValidCode(code) {

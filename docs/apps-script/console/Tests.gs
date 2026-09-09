@@ -78,22 +78,27 @@ function tc_auditEvents_() {
 
 // ---------------------------------------------------------------- generateCode_
 
-/** The longest run of one repeated character in [s]. */
-function tc_longestRun_(s) {
-  var best = 1;
-  var run = 1;
-  for (var i = 1; i < s.length; i++) {
-    run = (s.charAt(i) === s.charAt(i - 1)) ? run + 1 : 1;
-    if (run > best) best = run;
-  }
-  return best;
+function tc_countRepeatingCharacters_() {
+  tc_eq_('nothing repeats in seven distinct characters', countRepeatingCharacters_('ABCDEFG'), 0);
+  tc_eq_('one pair is one repeating character', countRepeatingCharacters_('ABCDEFA'), 1);
+  tc_eq_('a triple is still one repeating character', countRepeatingCharacters_('AAABCDE'), 1);
+  tc_eq_('two pairs are two', countRepeatingCharacters_('ABABCDE'), 2);
+  tc_eq_('a pair and a triple are two', countRepeatingCharacters_('AXGXBBB'), 2);
+  tc_eq_('an empty payload has none', countRepeatingCharacters_(''), 0);
+
+  // The four codes the rule was drawn from. Pinned so a later "improvement" to the generator
+  // cannot quietly go back to producing the two that were rejected at the counter.
+  tc_ok_('AXGX-BBBE qualifies', countRepeatingCharacters_('AXGXBBB') >= PAYLOAD_MIN_REPEATS);
+  tc_ok_('003C-93VV qualifies', countRepeatingCharacters_('003C93V') >= PAYLOAD_MIN_REPEATS);
+  tc_ok_('GGGW-YBHZ does not', countRepeatingCharacters_('GGGWYBH') < PAYLOAD_MIN_REPEATS);
+  tc_ok_('EWNN-NMGA does not', countRepeatingCharacters_('EWNNNMG') < PAYLOAD_MIN_REPEATS);
 }
 
 function tc_generateCode_() {
-  // Generated codes must stay valid, stay inside the alphabet, and always carry the run that makes
-  // them sayable. Run over many samples because every one of these is a property of the whole
-  // output, not of one lucky draw.
-  var shortestRun = 99;
+  // Generated codes must stay valid, stay inside the alphabet, and always carry the repeats that
+  // make them sayable. Run over many samples: each of these is a property of the whole output, not
+  // of one lucky draw, and the generator rejection-samples so a bad rule shows up as a shortfall.
+  var fewestRepeats = 99;
   var allValid = true;
   var allInAlphabet = true;
   var allRightLength = true;
@@ -109,16 +114,17 @@ function tc_generateCode_() {
       if (ALPHABET.indexOf(code.charAt(j)) < 0) allInAlphabet = false;
     }
 
-    // The run is a property of the payload; the check character is computed from it and may
-    // happen to extend or break the run, which does not matter.
-    var run = tc_longestRun_(code.substring(0, PAYLOAD_LENGTH));
-    if (run < shortestRun) shortestRun = run;
+    // Measured on the payload. The check character is derived from it and may add a repeat of its
+    // own, which is welcome but must not be what satisfies the rule.
+    var repeats = countRepeatingCharacters_(code.substring(0, PAYLOAD_LENGTH));
+    if (repeats < fewestRepeats) fewestRepeats = repeats;
   }
 
   tc_ok_('every generated code is the right length', allRightLength);
   tc_ok_('every generated code passes isValidCode', allValid);
   tc_ok_('every generated code stays inside the alphabet', allInAlphabet);
-  tc_ok_('every payload carries a run of at least ' + REPEAT_RUN, shortestRun >= REPEAT_RUN, 'shortest run ' + shortestRun);
+  tc_ok_('every payload has ' + PAYLOAD_MIN_REPEATS + ' repeating characters',
+    fewestRepeats >= PAYLOAD_MIN_REPEATS, 'fewest seen ' + fewestRepeats);
 
   // A generator that had collapsed to a handful of outputs would still pass everything above.
   var distinct = Object.keys(seen).length;
@@ -186,6 +192,7 @@ function runConsoleTests() {
   TC_RESULTS = [];
   tc_auditTimeline_();
   tc_auditEvents_();
+  tc_countRepeatingCharacters_();
   tc_generateCode_();
   tc_codeIsPrinted_();
   tc_codeIsDeletable_();
