@@ -316,6 +316,49 @@ function releaseCode(code) {
   return listCodes();
 }
 
+/**
+ * Run from the editor when a Revoke reports that the sender replied with a web page.
+ *
+ * There are only two causes and they need different fixes, so this prints the evidence that tells
+ * them apart rather than leaving you to guess:
+ *
+ *   HTTP 200 + HTML, or a redirect to accounts.google.com
+ *       The request never reached the script. The token was not accepted -- usually because
+ *       userinfo.email is missing from this project's oauthScopes, or this account is not in the
+ *       sender's ALLOWED_EDITORS.
+ *
+ *   HTTP 404/500 + an Apps Script error page mentioning a function
+ *       The request reached Apps Script but the deployed version has no doPost. The sender needs
+ *       Manage deployments -> edit -> New version. /exec always serves the deployed version, never
+ *       HEAD, so editing the sender and running its tests proves nothing about what /exec answers.
+ *
+ * Sends nothing: the code below is deliberately malformed, so a working sender refuses it at the
+ * shape check and no phone hears anything.
+ */
+function testSenderLink() {
+  var url = PropertiesService.getScriptProperties().getProperty('SENDER_URL');
+  if (!url) throw new Error('No SENDER_URL is set.');
+
+  var endpoint = url.replace(/\/+$/, '') + '/revoke';
+  var response = UrlFetchApp.fetch(endpoint, {
+    method: 'post',
+    contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    payload: JSON.stringify({ action: 'revoke', code: 'not-a-code' }),
+    muteHttpExceptions: true,
+    followRedirects: true
+  });
+
+  var text = response.getContentText();
+  Logger.log('POST %s', endpoint);
+  Logger.log('as: %s', Session.getActiveUser().getEmail() || '(cannot identify this account)');
+  Logger.log('HTTP %s', response.getResponseCode());
+  Logger.log('reply starts: %s', text.slice(0, 300));
+  Logger.log(text.charAt(0) === '<'
+    ? 'HTML, not JSON -- read the two cases in the comment above this function.'
+    : 'JSON -- the link works. A refusal naming the code is the expected answer here.');
+}
+
 /** Everything currently stored, newest first, with its state. */
 function listCodes() {
   requireEditor_();

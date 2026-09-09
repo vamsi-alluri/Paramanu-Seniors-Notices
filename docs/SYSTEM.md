@@ -120,9 +120,16 @@ Deployed **Execute as: User accessing** / **Anyone with a Google account** — *
 link", which this document claimed until the QR path was retired. `requireEditor_()` refuses an
 address outside `ALLOWED_EDITORS`, and returns the caller's email so every send records `sentBy`.
 
-`doPost` accepts `{"action":"revoke","code":…}` from the console and broadcasts the revoke. It is
-the only bridge between the two projects, and it sends a fixed envelope — there is no way to make it
-broadcast arbitrary text.
+`doPost` serves `<sender>/exec/revoke` — routed on `e.pathInfo` — and broadcasts the revoke for the
+console. It is the only bridge between the two projects, and it sends a fixed envelope; there is no
+way to make it broadcast arbitrary text. Anything other than `revoke` is refused rather than
+defaulted.
+
+**If a Revoke says the sender replied with a web page,** run `testSenderLink()` in the *console*
+editor. It prints the status code and the first of the reply, which separates the only two causes:
+the sender was never redeployed as a New version (so `doPost` does not exist at `/exec`), or the
+console's token was not accepted (missing `userinfo.email` scope, or the account is not in the
+sender's `ALLOWED_EDITORS`).
 
 Separate project from the console so issuing codes and sending messages are separate jobs.
 
