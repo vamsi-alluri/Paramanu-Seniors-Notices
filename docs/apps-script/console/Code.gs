@@ -51,6 +51,30 @@ function checkCharacter(payload) {
 /** How many different characters must each appear more than once in a payload. */
 var PAYLOAD_MIN_REPEATS = 2;
 
+/**
+ * Codes that exist for Play review and must never reach a member of the public.
+ *
+ * `P1AYREVQ` is the app access code given to Play reviewers. It has to exist and stay unclaimed, or
+ * a reviewer cannot get past the code screen.
+ *
+ * This exists **only** to keep it off the print sheet. Printing is the one bulk action here: one
+ * button covers every eligible code across every page, and the note that explains what a code is
+ * for is in the table, not on the slip -- so nobody is looking at this row at the moment it would
+ * come out of the printer and be handed over at a counter.
+ *
+ * Deleting is not guarded, deliberately. Every code carries a `note` saying what it is, deletion is
+ * one row at a time behind a confirmation, and refusing it would be second-guessing a staff member
+ * who is looking straight at the row.
+ *
+ * Note that it cannot be regenerated either way: `P1AYREVQ` has no repeated characters, so
+ * generateCode_ will never produce it. Hand-written or gone.
+ */
+var RESERVED_CODES = ['P1AYREVQ'];
+
+function isReservedCode_(code) {
+  return RESERVED_CODES.indexOf(String(code).toUpperCase()) >= 0;
+}
+
 /** How many of [s]'s characters appear more than once. Pure, so the rule can be tested. */
 function countRepeatingCharacters_(s) {
   var counts = {};
@@ -391,7 +415,7 @@ function listCodes() {
     if (!all.hasOwnProperty(code)) continue;
     var node = all[code] || {};
     var timeline = auditTimeline_(audit[code], node);
-    rows.push({ code: code, formatted: code.substring(0, 4) + '-' + code.substring(4), issued: node.issued || 0, claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true, printed: codeIsPrinted_(timeline), note: node.note || '', audit: timeline, lastChange: timeline.length ? timeline[timeline.length - 1] : null });
+    rows.push({ code: code, formatted: code.substring(0, 4) + '-' + code.substring(4), issued: node.issued || 0, claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true, printed: codeIsPrinted_(timeline), reserved: isReservedCode_(code), note: node.note || '', audit: timeline, lastChange: timeline.length ? timeline[timeline.length - 1] : null });
   }
   rows.sort(function (a, b) { return b.issued - a.issued; });
   return rows;
@@ -447,6 +471,8 @@ function markPrinted(codes) {
     if (!isValidCode(code)) continue;
     var node = all[code];
     if (!node || node.usedBy || node.revoked === true) continue;
+    // Belt and braces: the page leaves it off the sheet, so it should never reach here.
+    if (isReservedCode_(code)) continue;
     updates[code + '/p' + at] = { at: at, by: by, event: 'printed' };
     marked++;
   }

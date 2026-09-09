@@ -401,8 +401,11 @@
     //
     // Every matching code is printed, not just the page on screen: a print job cut short by paging
     // would be noticed only after the slips came out of the printer.
+    // The reserved review code is excluded unconditionally, even with "include already printed"
+    // ticked. It is unused and unprinted, so it would otherwise come out on a slip and be handed
+    // to somebody at the counter -- and once they claim it, a Play reviewer cannot get in.
     PRINTABLE = rows.filter(function (r) {
-      return !r.claimed && !r.revoked && (INCLUDE_PRINTED || !r.printed);
+      return !r.claimed && !r.revoked && !r.reserved && (INCLUDE_PRINTED || !r.printed);
     });
     document.getElementById('printCount').textContent = PRINTABLE.length;
     document.getElementById('print').disabled = PRINTABLE.length === 0;

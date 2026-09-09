@@ -474,12 +474,13 @@ the code screen.
 3. **Device-verify `versionCode 4`.** The welcome notice, the test button, the contact links and the
    absence of a "Testing" entry in system notification settings have **never run on hardware** — the
    phone was off the bridge when they were written.
-4. **Recreate `/codes/P1AYREVQ` after the launch-day wipe**, and confirm it is unclaimed. It was
-   destroyed by a root import once already, and the wipe will remove it again — see the wipe
-   runbook in §10. If the reviewer cannot get past the code screen, nothing else matters.
-5. **App access code for review:** `P1AYREVQ` is reserved and must never be handed out, printed on
-   a slip, or deleted from the console. It has no repeated characters, so the generator cannot
-   recreate it; it is hand-written or it is gone.
+4. **Confirm `/codes/P1AYREVQ` exists and is unclaimed** after the launch-day clear-out. It was
+   destroyed by a root import once already. If the reviewer cannot get past the code screen,
+   nothing else matters.
+5. **App access code for review:** `P1AYREVQ` is reserved and must never be handed out. It is left
+   off the print sheet so a batch print cannot put it on a slip; keeping it out of a Delete is what
+   its `note` is for. It has no repeated characters, so the generator cannot recreate it — it is
+   hand-written or it is gone.
 6. **Written authorisation from the NGO** before `BARC` appears in listing text.
 7. **Real office hours** in `/info` — currently placeholders.
 8. **Restrict console access** to named people; Script Properties are readable by any editor, so
@@ -585,39 +586,41 @@ uninstalled, replaced, data cleared — use Release instead, which returns the c
 **Read a code's history** — console → the Last change column, then `history` on the row. Every
 issue, revoke, restore, release and note change, with who did it and when.
 
-**Wipe the slate for the production launch** — there is no test environment by choice; production
+**Clear the slate for the production launch** — there is no test environment by choice; production
 *is* the environment, and the only isolation is `TEST_TOPIC` for the Apps Script suite. So launch
 day means clearing the testing data out of the live database.
 
-**Never import at the root.** That is quirk 5.6, and it has already destroyed `/codes` here once,
-including the reserved review code. Delete these four child nodes individually in the data viewer:
+Done from the console and the data viewer, **not** by importing anything. Nothing here goes near the
+root, so quirk 5.6 never comes into it:
 
-| Clear | Keep |
-|---|---|
-| `/codes` — all test codes and claims | `/info` — office hours (§9 still wants the real ones) |
-| `/audit` — their history | `/templates` — saved messages staff have built up |
-| `/revokeQueue` — any pending pushes | `/status` — the daily open/closed wording |
-| `/sent` — the test broadcast log | |
+1. **Codes** — staff delete each unused or released code from the console. Every code is named in
+   its `note`, so this is read-and-decide, not a sweep. A tester's *claimed* code has to be
+   **Released first** — `deleteCode` refuses a claimed code, because deleting one would cut that
+   phone off with no explanation — and once released it is unclaimed and deletable.
+2. **`/sent`** — deleted by hand in the data viewer. The phones' own notice history is local and
+   unaffected.
+3. **`/revokeQueue`** — deleted by hand. Anything missed is harmless anyway: the drain re-reads
+   `/codes` and drops an entry that is no longer revoked rather than broadcasting it.
+4. **`/audit` stays.** It is the record of what was done and to which code, and it survives the
+   codes themselves — `deleteCode` deliberately keeps it. Orphaned entries do not show in the table,
+   which joins on `/codes`.
+5. **`/info`, `/templates` and `/status` are untouched.** They are configuration — office hours,
+   the saved messages staff have built up, the daily wording — not test data.
 
-Then, **before generating anything**, recreate the Play review code by hand. Select `/codes` — not
-the root — and Import JSON:
+**`P1AYREVQ` survives because nobody deletes it.** Its note says what it is. It cannot be
+regenerated — no repeated characters, so `generateCode_` will never produce it — so if it does go, it
+has to be hand-written back by selecting `/codes` (never the root) and importing
+`{ "P1AYREVQ": { "issued": <epoch millis> } }`. It is also left off the print sheet, so a batch print
+cannot put it on a slip.
 
-```json
-{ "P1AYREVQ": { "issued": 1757000000000 } }
-```
+**What the 14 testers will see.** Releasing their codes withdraws each claim, so the next check
+reads it as revoked and raises the banner telling them to ring the helpdesk. They are not stuck —
+Settings → **Enter a new code** takes a fresh slip and keeps their notice history — but tell them
+first, or they will do what the banner says.
 
-It must exist and be unclaimed or the reviewer cannot get past the code screen and nothing else in
-the submission matters. It has to be hand-written: `P1AYREVQ` has no repeated characters, so the
-generator will never produce it, and `Delete` in the console would remove it as easily as any other
-unused code.
-
-**What the 14 testers will see.** Clearing `/codes` withdraws every claim, so each tester's next
-check finds no node, reads it as revoked, and raises the banner telling them to ring the helpdesk.
-They are not stuck — Settings → **Enter a new code** takes a fresh slip and keeps their notice
-history — but tell them first, or they will do what the banner says.
-
-A `/revokeQueue` entry missed in the wipe is harmless: the drain re-reads `/codes` and drops
-anything that is no longer revoked rather than broadcasting it.
+**Watch as this repeats.** `/audit` is never cleared, and `listCodes` reads the whole node on every
+console load. A few hundred codes' history is well under 200KB, but after several launch-day cycles
+it is worth checking; the fix is fetching a code's history when its row is expanded.
 
 **Change the office hours** — select `/info` in the Firebase data viewer, then Import JSON with the
 **inner object only** (`docs/info-node.json`). Never import at the root.
