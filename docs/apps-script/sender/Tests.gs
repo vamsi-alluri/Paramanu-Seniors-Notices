@@ -332,6 +332,44 @@ function t_doGet_() {
   t_ok_('doGet survives no event object', !!bare);
 }
 
+function t_isValidRevokeCode_() {
+  t_ok_('accepts a well-formed code', isValidRevokeCode_('A1B2C3D4'));
+  t_ok_('refuses a dashed code', !isValidRevokeCode_('A1B2-C3D4'));
+  t_ok_('refuses lowercase', !isValidRevokeCode_('a1b2c3d4'));
+  t_ok_('refuses the wrong length', !isValidRevokeCode_('A1B2C3D'));
+  t_ok_('refuses nothing at all', !isValidRevokeCode_(''));
+  t_ok_('refuses undefined', !isValidRevokeCode_(undefined));
+}
+
+function t_pushRevoke_() {
+  // TOPIC_OVERRIDE is already TEST_TOPIC for the whole suite, so this reaches no real phone.
+  var name = pushRevoke_('ZZZZZZZZ');
+  t_ok_('pushRevoke_ returns an FCM name', String(name).indexOf('projects/') === 0, String(name));
+}
+
+function t_doPost_() {
+  function post(body) {
+    return JSON.parse(doPost({ postData: { contents: JSON.stringify(body) } }).getContent());
+  }
+
+  var unknown = post({ action: 'nonsense' });
+  t_ok_('doPost refuses an unknown action', !unknown.ok, unknown.error || '');
+  t_ok_('the refusal names the action', String(unknown.error).indexOf('nonsense') >= 0, unknown.error);
+
+  var malformed = post({ action: 'revoke', code: 'nope' });
+  t_ok_('doPost refuses a malformed code', !malformed.ok, malformed.error || '');
+
+  // doPost answers with JSON rather than throwing, so a console that cannot parse a thrown Apps
+  // Script error page still learns what happened.
+  var empty = JSON.parse(doPost({}).getContent());
+  t_ok_('doPost survives an empty body', !empty.ok, empty.error || '');
+
+  var good = post({ action: 'revoke', code: 'ZZZZZZZZ', by: 'someone-else@example.org' });
+  t_ok_('doPost pushes a valid revoke', good.ok, good.error || '');
+  t_eq_('doPost attributes to the token, not the payload', good.by, requireEditor_());
+  t_eq_('a mismatched claim is recorded', good.claimedBy, 'someone-else@example.org');
+}
+
 function t_testConnection_() {
   var threw = false;
   try { testConnection(); } catch (e) { threw = true; }
@@ -364,6 +402,9 @@ function runAllTests() {
     t_statusWording_();
     t_sendNotice_(created);
     t_sendStatus_(created);
+    t_isValidRevokeCode_();
+    t_pushRevoke_();
+    t_doPost_();
     t_doGet_();
     t_testConnection_();
   } catch (e) {

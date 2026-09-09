@@ -88,11 +88,41 @@ editor executes HEAD and therefore cannot detect a stale deployment — it will 
 you which code is live.
 
 
+## The revoke envelope
+
+A second kind of message, sent by `pushRevoke_` when the console revokes a code:
+
+```json
+{ "message": { "topic": "notices-v1", "android": { "priority": "high" },
+  "data": { "type": "revoke", "code": "A1B2C3D4" } } }
+```
+
+No `title`, no `body`, and — as ever — no `notification` block. It shows the user nothing; it only
+invalidates. The app checks for `type` before it looks for a title, because a payload with no title
+is otherwise dropped as malformed.
+
+This is a **broadcast**, not per-device addressing: the app is addressed only by topic, so every
+subscribed phone receives every revoke and compares the code with its own. That publishes the
+revoked code to all of them, which is harmless — a code carrying `revoked: true` is useless to
+whoever reads it — but it is worth knowing that it is what goes out.
+
+It is **not authoritative**. FCM is best-effort and a phone switched off past the message TTL never
+sees it, so the device's own periodic verification remains the safety net. See `docs/decisions.md`.
+
+The console cannot send this itself. It POSTs `{"action":"revoke","code":"…"}` to the sender's
+`/exec` with the staff member's own OAuth token in the `Authorization` header, and the sender checks
+that token against `ALLOWED_EDITORS` exactly as it does for every other entry point.
+
 ## Who can send
 
-Every function that reaches FCM calls `checkPin_()` first — the compose page and the QR status page
-alike. That is not belt-and-braces: the web app has to be deployed as **Anyone with the link** for a
-QR scan to work without a Google sign-in, so the URL alone must never be enough to broadcast.
+Every function that reaches FCM calls `requireEditor_()` first, and the send paths call
+`checkPin_()` after it. The web app is deployed **Execute as: User accessing** / **Who has access:
+Anyone with a Google account**, so the URL alone reaches nothing: an unrecognised address is refused
+before any payload is read.
+
+The PIN is now a second factor rather than the only one, and can be switched off with the
+`REQUIRE_STAFF_PIN` script property. It is kept on for the compose path, which sends arbitrary text
+to four hundred phones.
 
 **The PIN never reaches the browser.** It lives in Script Properties, the pages receive only a text
 field, and nothing is written to `localStorage` or `sessionStorage`. Staff type it for each send.

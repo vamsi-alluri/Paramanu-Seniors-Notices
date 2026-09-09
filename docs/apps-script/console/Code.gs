@@ -13,10 +13,22 @@
  *        SERVICE_ACCOUNT_JSON  = <the entire JSON file contents>
  *        DATABASE_URL          = https://paramanu-seniors-default-rtdb.asia-southeast1.firebasedatabase.app
  *        ALLOWED_EDITORS       = <comma-separated Google account emails permitted to use this>
+ *        SENDER_URL            = <the sender web app's /exec URL>   (optional; see below)
  *     Take DATABASE_URL from the Realtime Database page; it is region qualified.
  *  5. Deploy -> Web app.
  *       Execute as:     User accessing the web app   <- REQUIRED, see requireEditor_
  *       Who has access: Anyone with a Google account
+ *  6. For SENDER_URL to work, this project's manifest needs an identity scope so the sender can
+ *     tell who is calling. Project Settings -> "Show appsscript.json", then:
+ *        "oauthScopes": [
+ *          "https://www.googleapis.com/auth/script.external_request",
+ *          "https://www.googleapis.com/auth/userinfo.email"
+ *        ]
+ *     Run any function once afterwards to re-consent. Without SENDER_URL a Revoke still works --
+ *     it is recorded in the database and the phone finds it within a day -- it just is not pushed.
+ *
+ * This console never gets FCM credentials. It asks the sender to broadcast a revoke and cannot
+ * broadcast anything itself; issuing codes and reaching four hundred phones stay separate jobs.
  *
  * The service account key is a real credential. It lives in Script Properties, never in this file,
  * and never in the Android app.
@@ -328,8 +340,50 @@ function revokeCode(code) {
   var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { revoked: true });
-  audit_(code, 'revoked', by);
+
+  // The database is the truth; the push is only how the phone hears about it sooner. So the audit
+  // entry is written either way, and records which of the two happened.
+  var push = pushRevokeToSender_(code, by);
+  audit_(code, 'revoked', by, { pushed: !!push.ok, pushError: push.ok ? null : push.error });
+
   return listCodes();
+}
+
+/**
+ * Asks the sender to broadcast a revocation.
+ *
+ * This console has no FCM credentials and is not given any: issuing codes and broadcasting to four
+ * hundred phones are separate jobs held in separate projects (SYSTEM.md 2.3). The sender exposes
+ * one narrow endpoint that sends a fixed envelope, and this calls it.
+ *
+ * Never throws. By the time this runs the revocation is already recorded in /codes and /audit, and
+ * the phone's periodic verification finds it within a day regardless -- so a failure here is a
+ * delay, not a lost revocation, and must not present to the staff member as a failed Revoke.
+ *
+ * ScriptApp.getOAuthToken() forwards the signed-in staff member's own identity, so the sender's
+ * requireEditor_ sees the person who clicked rather than this script. That needs userinfo.email in
+ * this project's oauthScopes; without it the sender answers "cannot identify you".
+ */
+function pushRevokeToSender_(code, by) {
+  var url = PropertiesService.getScriptProperties().getProperty('SENDER_URL');
+  if (!url) return { ok: false, error: 'No SENDER_URL is set, so the revoke was not pushed.' };
+
+  try {
+    var response = UrlFetchApp.fetch(url, {
+      method: 'post',
+      contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+      payload: JSON.stringify({ action: 'revoke', code: code, by: by }),
+      muteHttpExceptions: true,
+      followRedirects: true
+    });
+    var parsed = JSON.parse(response.getContentText());
+    // A refusal arrives as an HTML sign-in page, not JSON, when the deployment is misconfigured;
+    // JSON.parse throws on that and the catch below turns it into a readable error.
+    return parsed && typeof parsed.ok !== 'undefined' ? parsed : { ok: false, error: 'Unexpected reply from the sender.' };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message ? err.message : err) };
+  }
 }
 
 function unrevokeCode(code) {

@@ -388,7 +388,91 @@ function sendStatus(which, pin) {
   return sendNotice(message.title, message.body, 'STATUS', pin);
 }
 
+// ---------------------------------------------------------------- Revocation
+
+/**
+ * Broadcasts a revocation so the holder stops delivery within seconds rather than waiting for its
+ * next scheduled verification.
+ *
+ * This is a broadcast, not per-device addressing. onNewToken is deliberately not overridden in the
+ * app and everything here is topic-addressed, so every subscribed phone receives this and tests
+ * the code against its own. That publishes the revoked code to all of them, which is harmless -- a
+ * code carrying revoked = true is useless to whoever reads it -- but it is what is being sent.
+ *
+ * It cannot be authoritative. FCM is best-effort, and a phone that is switched off past the
+ * message TTL never sees it, which is why the periodic verification on the device stays as the
+ * safety net. See docs/decisions.md.
+ */
+function pushRevoke_(code) {
+  var message = { message: {
+    topic: TOPIC_OVERRIDE || TOPIC,
+    android: { priority: 'high' },
+    // Data-only and deliberately empty of title and body: this shows the user nothing, it only
+    // invalidates. A notification block here would be drawn by the SDK and onMessageReceived
+    // would never run, so the revoke would be displayed and never applied.
+    data: { type: 'revoke', code: String(code) }
+  } };
+
+  var response = UrlFetchApp.fetch(
+    'https://fcm.googleapis.com/v1/projects/' + property_('PROJECT_ID') + '/messages:send',
+    { method: 'post', contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + accessToken_() },
+      payload: JSON.stringify(message), muteHttpExceptions: true });
+
+  if (response.getResponseCode() >= 300) {
+    throw new Error('FCM refused the revoke: ' + response.getContentText());
+  }
+  return JSON.parse(response.getContentText()).name || '';
+}
+
 // ---------------------------------------------------------------- Web app
+
+/**
+ * The console calls this to have a revocation pushed.
+ *
+ * The console cannot reach FCM itself, and deliberately so: issuing codes and broadcasting to four
+ * hundred phones are separate jobs held in separate projects, which is the whole point of the
+ * split described in SYSTEM.md 2.3. This endpoint is the one narrow bridge between them, and it
+ * sends a fixed envelope -- there is no way to make it broadcast arbitrary text.
+ *
+ * Authentication is the caller's own Google identity, forwarded as a Bearer token by the console
+ * and checked here against the same ALLOWED_EDITORS allowlist as every other entry point. No new
+ * shared secret is introduced: a secret sitting in two Script Properties would be one more thing
+ * that can leak, and it would say nothing about who acted.
+ *
+ * No PIN. The PIN guards the paths where arbitrary text reaches every phone; this one cannot.
+ */
+function doPost(e) {
+  var out = { ok: false };
+  try {
+    var caller = requireEditor_();
+    var payload = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+
+    if (payload.action !== 'revoke') throw new Error('Unknown action: ' + payload.action);
+    if (!isValidRevokeCode_(payload.code)) throw new Error('Not a valid code.');
+
+    out.fcmName = pushRevoke_(payload.code);
+    out.by = caller;
+    // The console may state who authorised it, but the token is what is believed. A mismatch is
+    // recorded rather than refused: it means the console is misconfigured, not that the request is
+    // forged, and refusing would leave a revocation applied in the database but never pushed.
+    if (payload.by && payload.by !== caller) out.claimedBy = payload.by;
+    out.ok = true;
+  } catch (err) {
+    out.error = String(err && err.message ? err.message : err);
+  }
+  return ContentService.createTextOutput(JSON.stringify(out))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * Shape check only. The sender has no view of which codes exist -- that is the console's half --
+ * so this rejects malformed input rather than unknown codes. Pushing a revoke for a code nobody
+ * holds is harmless: every device compares it with its own and does nothing.
+ */
+function isValidRevokeCode_(code) {
+  return /^[0-9A-Z]{8}$/.test(String(code || ''));
+}
 
 function doGet(e) {
   try {
