@@ -179,12 +179,24 @@ private fun NoticesApp(
                 )
         ) {
     when (val current = screen) {
-        Screen.Activation -> ActivationScreen(
-            onSubmit = viewModel::redeem,
-            busy = redeeming,
-            error = redeemError,
-            onErrorDismissed = viewModel::dismissRedeemError,
-        )
+        Screen.Activation -> {
+            // Back is a way out of this screen only when there is somewhere to go back to. A
+            // device that still holds a code arrived here from Settings, having chosen "Enter a
+            // new code", and must be able to change its mind -- previously back fell through to
+            // the system and closed the app.
+            //
+            // On a fresh install or straight after a reset there is nothing behind this screen, so
+            // no handler is installed and back does what it always did: leaves the app.
+            if (viewModel.activationCode != null) {
+                BackHandler { viewModel.show(Screen.Settings) }
+            }
+            ActivationScreen(
+                onSubmit = viewModel::redeem,
+                busy = redeeming,
+                error = redeemError,
+                onErrorDismissed = viewModel::dismissRedeemError,
+            )
+        }
 
         Screen.Notices -> {
             BackHandler(enabled = selected.isNotEmpty()) { viewModel.clearSelection() }

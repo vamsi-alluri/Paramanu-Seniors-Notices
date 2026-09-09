@@ -74,10 +74,60 @@ function tc_auditEvents_() {
   }, 'Unknown audit event');
 }
 
+// ---------------------------------------------------------------- generateCode_
+
+/** The longest run of one repeated character in [s]. */
+function tc_longestRun_(s) {
+  var best = 1;
+  var run = 1;
+  for (var i = 1; i < s.length; i++) {
+    run = (s.charAt(i) === s.charAt(i - 1)) ? run + 1 : 1;
+    if (run > best) best = run;
+  }
+  return best;
+}
+
+function tc_generateCode_() {
+  // Generated codes must stay valid, stay inside the alphabet, and always carry the run that makes
+  // them sayable. Run over many samples because every one of these is a property of the whole
+  // output, not of one lucky draw.
+  var shortestRun = 99;
+  var allValid = true;
+  var allInAlphabet = true;
+  var allRightLength = true;
+  var seen = {};
+
+  for (var i = 0; i < 500; i++) {
+    var code = generateCode_();
+    seen[code] = true;
+
+    if (code.length !== PAYLOAD_LENGTH + 1) allRightLength = false;
+    if (!isValidCode(code)) allValid = false;
+    for (var j = 0; j < code.length; j++) {
+      if (ALPHABET.indexOf(code.charAt(j)) < 0) allInAlphabet = false;
+    }
+
+    // The run is a property of the payload; the check character is computed from it and may
+    // happen to extend or break the run, which does not matter.
+    var run = tc_longestRun_(code.substring(0, PAYLOAD_LENGTH));
+    if (run < shortestRun) shortestRun = run;
+  }
+
+  tc_ok_('every generated code is the right length', allRightLength);
+  tc_ok_('every generated code passes isValidCode', allValid);
+  tc_ok_('every generated code stays inside the alphabet', allInAlphabet);
+  tc_ok_('every payload carries a run of at least ' + REPEAT_RUN, shortestRun >= REPEAT_RUN, 'shortest run ' + shortestRun);
+
+  // A generator that had collapsed to a handful of outputs would still pass everything above.
+  var distinct = Object.keys(seen).length;
+  tc_ok_('the generator is still varied', distinct > 490, distinct + ' distinct of 500');
+}
+
 function runConsoleTests() {
   TC_RESULTS = [];
   tc_auditTimeline_();
   tc_auditEvents_();
+  tc_generateCode_();
 
   var failed = 0;
   for (var i = 0; i < TC_RESULTS.length; i++) {

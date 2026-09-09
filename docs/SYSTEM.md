@@ -508,6 +508,13 @@ Firestore rather than RTDB if they are built.
 
 **Issue codes** — console → count + optional note → Generate → Print slips (unclaimed only).
 
+Generated codes always contain a run of three identical characters (`J743-3327`, `6JZS-QQQ9`), so
+staff have something to anchor on when reading one across a counter or over the phone. Only the
+sampling changed; the check-character rule is untouched, so codes issued before this are still
+valid and the codes pinned in `GeneratedCodeCompatibilityTest` must not be regenerated. It narrows
+the payload space from ~34 billion to ~168 million, which against 400 live codes and an
+unlistable `/codes` is not a guessing risk.
+
 **Send a notice** — sender → pick a saved message or write one → check the preview → PIN → Send.
 
 **Daily status** — scan the counter QR → confirm → PIN. A repeat within 10 minutes is refused.

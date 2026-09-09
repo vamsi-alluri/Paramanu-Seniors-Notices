@@ -48,11 +48,45 @@ function checkCharacter(payload) {
   return ALPHABET.charAt(sum % ALPHABET.length);
 }
 
+/**
+ * How many of the payload's characters are forced to be the same one.
+ *
+ * This changes only how payloads are *sampled*, never the check-character rule above, so the codes
+ * pinned in GeneratedCodeCompatibilityTest.kt stay valid and must not be regenerated. Codes issued
+ * before this existed are equally valid; they are simply harder to read out.
+ */
+var REPEAT_RUN = 3;
+
+/**
+ * A code with a run of three identical characters somewhere in it.
+ *
+ * Codes are read aloud across a counter to someone in their eighties, and often over the phone to
+ * the helpdesk afterwards. A run gives both sides an anchor -- "three sevens in the middle" -- that
+ * seven unrelated characters do not, and a miscounted run is caught locally by the check character
+ * rather than by a rejection from the server.
+ *
+ * The run is contiguous on purpose. Three of the same character scattered through the code is no
+ * easier to say than none at all; it is the run that people can hold in their head.
+ *
+ * COST IN GUESSABILITY, since this narrows the space deliberately: the payload space falls from
+ * 32^7 (about 34 billion) to 5 * 32 * 32^4 (about 168 million). Against roughly four hundred live
+ * codes that is a one-in-four-hundred-thousand chance per guess, each guess costing an
+ * authenticated write that the rules refuse, and /codes cannot be listed. Still far outside what
+ * anyone could work through, and the slips are handed out in person anyway.
+ */
 function generateCode_() {
-  var payload = '';
+  var chars = [];
   for (var i = 0; i < PAYLOAD_LENGTH; i++) {
-    payload += ALPHABET.charAt(Math.floor(Math.random() * ALPHABET.length));
+    chars.push(ALPHABET.charAt(Math.floor(Math.random() * ALPHABET.length)));
   }
+
+  var repeated = ALPHABET.charAt(Math.floor(Math.random() * ALPHABET.length));
+  var start = Math.floor(Math.random() * (PAYLOAD_LENGTH - REPEAT_RUN + 1));
+  for (var j = 0; j < REPEAT_RUN; j++) {
+    chars[start + j] = repeated;
+  }
+
+  var payload = chars.join('');
   return payload + checkCharacter(payload);
 }
 
