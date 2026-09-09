@@ -119,9 +119,14 @@ class ActivationRepository(private val context: Context) {
 
                 val claimedBy = snapshot.child(FIELD_USED_BY).getValue(String::class.java)
                 val revoked = snapshot.child(FIELD_REVOKED).getValue(Boolean::class.java) == true
+                val issued = snapshot.child(FIELD_ISSUED).exists()
 
                 when {
                     revoked -> ActivationState.Revoked
+                    // Every code the console prints carries `issued`. A node without it was never
+                    // issued by the NGO, so the claim on it is not one we honour -- this catches
+                    // any self-minted code created before the rules refused to create them.
+                    !issued -> ActivationState.Revoked
                     claimedBy == null -> ActivationState.Revoked   // claim erased by the NGO
                     claimedBy != uid -> ActivationState.Revoked    // reissued to somebody else
                     else -> ActivationState.Active
@@ -234,6 +239,7 @@ class ActivationRepository(private val context: Context) {
         private const val FIELD_USED_BY = "usedBy"
         private const val FIELD_ACTIVATED_AT = "activatedAt"
         private const val FIELD_REVOKED = "revoked"
+        private const val FIELD_ISSUED = "issued"
 
 
         private const val NETWORK_TIMEOUT_MS = 20_000L
