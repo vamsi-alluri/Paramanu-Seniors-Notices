@@ -210,7 +210,7 @@ function firebase_(method, path, payload) {
  * event would produce a row nobody ever queries, and the log is the record the NGO is meant to
  * trust without asking a developer.
  */
-var AUDIT_EVENTS = ['issued', 'revoked', 'restored', 'released', 'note', 'deleted'];
+var AUDIT_EVENTS = ['issued', 'printed', 'revoked', 'restored', 'released', 'note', 'deleted'];
 
 /**
  * Appends one entry to a code's history.
@@ -246,6 +246,26 @@ function audit_(code, event, by, extra) {
  * Known limit: activatedAt holds only the most recent claim, so a released-and-reclaimed code
  * shows just the latest. The console actions either side still show the shape of what happened.
  */
+/**
+ * Whether a slip has been printed for this code, derived from its history.
+ *
+ * Not a field on /codes. A new sibling there needs its own .validate rule or the $other catch-all
+ * refuses the app's claim write for every unclaimed slip -- the trap that adding `note` sprang once
+ * already. The audit is the record of what has been done to a code, and printing is one of those
+ * things, so the state lives there and costs no rules change.
+ *
+ * A Release clears it: the code goes back into the pool for somebody new, and whatever slip was
+ * printed before belongs to the person who has just stopped using it.
+ */
+function codeIsPrinted_(timeline) {
+  var printed = false;
+  for (var i = 0; i < (timeline || []).length; i++) {
+    if (timeline[i].event === 'printed') printed = true;
+    else if (timeline[i].event === 'released') printed = false;
+  }
+  return printed;
+}
+
 function auditTimeline_(entries, node) {
   var out = [];
 
@@ -360,7 +380,7 @@ function listCodes() {
     if (!all.hasOwnProperty(code)) continue;
     var node = all[code] || {};
     var timeline = auditTimeline_(audit[code], node);
-    rows.push({ code: code, formatted: code.substring(0, 4) + '-' + code.substring(4), issued: node.issued || 0, claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true, note: node.note || '', audit: timeline, lastChange: timeline.length ? timeline[timeline.length - 1] : null });
+    rows.push({ code: code, formatted: code.substring(0, 4) + '-' + code.substring(4), issued: node.issued || 0, claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true, printed: codeIsPrinted_(timeline), note: node.note || '', audit: timeline, lastChange: timeline.length ? timeline[timeline.length - 1] : null });
   }
   rows.sort(function (a, b) { return b.issued - a.issued; });
   return rows;
@@ -384,6 +404,43 @@ function revokeCode(code) {
   firebase_('put', '/revokeQueue/' + code + '.json', { at: Date.now(), by: by });
 
   audit_(code, 'revoked', by);
+  return listCodes();
+}
+
+/**
+ * Records that slips have been printed for [codes].
+ *
+ * Called after the print dialog has been dismissed, not before: marking first and printing second
+ * would mark a run the user cancelled, and there is no way to ask a browser whether paper actually
+ * came out. The page confirms instead.
+ *
+ * One multi-path PATCH rather than a POST per code, because a run can be two hundred slips. The
+ * key is unique within a code by construction -- one entry per code per call, keyed on the shared
+ * timestamp -- and the timeline sorts on `at` rather than on the key, so it need not be a push id.
+ *
+ * A code that has since been claimed is skipped rather than refused: the run may have been sitting
+ * on screen for a while, and failing the whole batch because one person activated meanwhile would
+ * be worse than quietly not marking that one.
+ */
+function markPrinted(codes) {
+  var by = requireEditor_();
+  if (!codes || !codes.length) return listCodes();
+
+  var all = firebase_('get', '/codes.json') || {};
+  var at = Date.now();
+  var updates = {};
+  var marked = 0;
+
+  for (var i = 0; i < codes.length; i++) {
+    var code = String(codes[i]);
+    if (!isValidCode(code)) continue;
+    var node = all[code];
+    if (!node || node.usedBy || node.revoked === true) continue;
+    updates[code + '/p' + at] = { at: at, by: by, event: 'printed' };
+    marked++;
+  }
+
+  if (marked) firebase_('patch', '/audit.json', updates);
   return listCodes();
 }
 

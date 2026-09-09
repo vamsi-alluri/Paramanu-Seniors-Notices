@@ -179,9 +179,14 @@ needs its own `.validate` rule or the `$other: false` catch-all refuses the app'
 every unclaimed slip — which is what adding `note` did once (§6a). Keeping the history in a separate
 node means it needs no rules change at all.
 
-`event` is one of `issued`, `revoked`, `restored`, `released`, `note`, `deleted`. A seventh,
-`claimed`, is **synthesised** by the console from `activatedAt` rather than stored: the phone cannot
-write to `/audit` and must not be able to. Codes issued before this existed are not backfilled.
+`event` is one of `issued`, `printed`, `revoked`, `restored`, `released`, `note`, `deleted`. An
+eighth, `claimed`, is **synthesised** by the console from `activatedAt` rather than stored: the
+phone cannot write to `/audit` and must not be able to. Codes issued before this existed are not
+backfilled, so they read as never printed.
+
+The audit is also where the **printed** state lives, as `codeIsPrinted_` replaying the timeline —
+`printed` sets it, `released` clears it. Deriving it costs nothing (the timeline is already built
+for the table) and avoids a new field on `/codes`.
 
 A `deleted` code keeps its `/audit` node after `/codes` is gone, so nothing lists it any more but
 the history remains for anyone who looks the code up directly.
@@ -509,7 +514,18 @@ Firestore rather than RTDB if they are built.
 
 ## 10. Runbooks
 
-**Issue codes** — console → count + optional note → Generate → Print slips (unclaimed only).
+**Issue codes** — console → count + optional note → Generate → Print slips.
+
+Printing covers every code that is unclaimed, unrevoked **and not yet printed**, across all pages,
+not only the page on screen. After the print dialog closes the console asks whether the slips came
+out; saying yes marks them `printed`, so the next run does not repeat them. Saying no leaves them
+unprinted and they come out again — the right way round, since an unmarked printed slip only wastes
+paper whereas a marked unprinted one goes quietly missing from every future run.
+
+**Printed** is a fourth state alongside Unused, In use and Revoked, and it is derived from the audit
+rather than stored on `/codes` — a new sibling field there would break the app's claim write (§6a).
+A **Release** clears it: the code returns to the pool for somebody new, who needs a fresh slip.
+Tick "include already printed" to reprint a lost one.
 
 Generated codes always contain a run of three identical characters (`J743-3327`, `6JZS-QQQ9`), so
 staff have something to anchor on when reading one across a counter or over the phone. Only the

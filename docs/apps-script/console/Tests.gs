@@ -65,7 +65,7 @@ function tc_auditTimeline_() {
 // ---------------------------------------------------------------- audit_ validation
 
 function tc_auditEvents_() {
-  tc_eq_('the event set is closed', AUDIT_EVENTS.length, 6);
+  tc_eq_('the event set is closed', AUDIT_EVENTS.length, 7);
   tc_ok_('claimed is not a stored event', AUDIT_EVENTS.indexOf('claimed') < 0, 'synthesised only');
 
   // The guard runs before any network call, so this throws without touching the database.
@@ -125,6 +125,36 @@ function tc_generateCode_() {
   tc_ok_('the generator is still varied', distinct > 490, distinct + ' distinct of 500');
 }
 
+// ---------------------------------------------------------------- codeIsPrinted_
+
+function tc_codeIsPrinted_() {
+  function timeline() {
+    var out = [];
+    for (var i = 0; i < arguments.length; i++) out.push({ at: i + 1, event: arguments[i], by: 'a@x.org' });
+    return out;
+  }
+
+  tc_ok_('a code with no history is unprinted', !codeIsPrinted_([]));
+  tc_ok_('an undefined timeline is unprinted', !codeIsPrinted_(undefined));
+  tc_ok_('issued alone is unprinted', !codeIsPrinted_(timeline('issued')));
+  tc_ok_('a printed code is printed', codeIsPrinted_(timeline('issued', 'printed')));
+
+  // Other events must not disturb it: a note change is not a reprint.
+  tc_ok_('a note after printing leaves it printed',
+    codeIsPrinted_(timeline('issued', 'printed', 'note')));
+  tc_ok_('revoking does not unprint',
+    codeIsPrinted_(timeline('issued', 'printed', 'revoked')));
+
+  // Release puts the code back in the pool for somebody new, so it needs a fresh slip.
+  tc_ok_('releasing clears it', !codeIsPrinted_(timeline('issued', 'printed', 'released')));
+  tc_ok_('and printing again sets it once more',
+    codeIsPrinted_(timeline('issued', 'printed', 'released', 'printed')));
+
+  // Order matters, not merely which events are present.
+  tc_ok_('a print before a release does not survive it',
+    !codeIsPrinted_(timeline('printed', 'released')));
+}
+
 // ---------------------------------------------------------------- codeIsDeletable_
 
 function tc_codeIsDeletable_() {
@@ -157,6 +187,7 @@ function runConsoleTests() {
   tc_auditTimeline_();
   tc_auditEvents_();
   tc_generateCode_();
+  tc_codeIsPrinted_();
   tc_codeIsDeletable_();
 
   var failed = 0;

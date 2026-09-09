@@ -58,6 +58,8 @@
           font-size: 17px; letter-spacing: .06em; }
   .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
   .free { background: #d6e2f5; color: #03152e; }
+  /* Between free and used: a slip exists, but nobody has activated it yet. */
+  .printed { background: #dff0e2; color: #0d2f16; }
   .used { background: #e6e9f0; color: #2a2f3a; }
   .revoked { background: #f9dedc; color: #410e0b; }
   .hist { background: #f6f8fc; }
@@ -109,7 +111,8 @@
       <div class="sub">
         Each code works once. Hand one slip to each person at the counter.
         Codes never contain the letters I, L, O or U.
-        <br>Printing slips covers every unused code, not only the page shown below.
+        <br>Printing covers every code that has not been used or printed yet, not only the page
+        shown below. Printed codes are marked as such, so the next run does not repeat them.
       </div>
 
       <div class="bar">
@@ -117,7 +120,11 @@
         <input type="text" id="note" maxlength="120" placeholder="Note (optional) e.g. printed for 12 Sep counter">
         <button id="make" onclick="makeCodes()">Generate</button>
         <button class="ghost" onclick="refresh()">Refresh</button>
-        <button class="ghost" onclick="window.print()">Print slips</button>
+        <button class="ghost" id="print" onclick="printSlips()">Print <span id="printCount">0</span> slips</button>
+        <label class="sub" style="margin: 0">
+          <input type="checkbox" id="includePrinted" onchange="setIncludePrinted(this.checked)">
+          include already printed
+        </label>
       </div>
 
       <table>
@@ -337,8 +344,10 @@
   }
 
   function codeValue(row, key) {
-    // Ordered the way the counter thinks about them: usable ones first, dead ones last.
-    if (key === 'status') return row.revoked ? 2 : row.claimed ? 1 : 0;
+    // Ordered the way the counter thinks about them: ready to hand out first, dead ones last.
+    // Unprinted before printed, because "what do I still need to print" is the question this
+    // column gets asked most.
+    if (key === 'status') return row.revoked ? 3 : row.claimed ? 2 : row.printed ? 1 : 0;
     if (key === 'issued') return row.issued || 0;
     if (key === 'note') return row.note || '';
     // Codes issued before the audit existed have no history and are not backfilled, so they carry
@@ -368,12 +377,18 @@
     CODES = rows;
     renderPage();
 
-    // Only unclaimed codes are worth printing; the rest already belong to somebody. Every one of
-    // them is printed, not just the page on screen -- a print job cut short by paging would be
-    // noticed only after the slips came out of the printer.
-    document.getElementById('slips').innerHTML = rows.filter(function (r) {
-      return !r.claimed && !r.revoked;
-    }).map(function (r) {
+    // Only codes nobody holds are worth printing; the rest already belong to somebody. Already
+    // printed ones are left out too, or generating fifty more and printing again would reprint the
+    // whole back catalogue -- tick "include already printed" to reprint a lost slip.
+    //
+    // Every matching code is printed, not just the page on screen: a print job cut short by paging
+    // would be noticed only after the slips came out of the printer.
+    PRINTABLE = rows.filter(function (r) {
+      return !r.claimed && !r.revoked && (INCLUDE_PRINTED || !r.printed);
+    });
+    document.getElementById('printCount').textContent = PRINTABLE.length;
+    document.getElementById('print').disabled = PRINTABLE.length === 0;
+    document.getElementById('slips').innerHTML = PRINTABLE.map(function (r) {
       return '<div class="slip"><div>Paramanu Seniors Notices</div><div class="code">' + r.formatted +
              '</div><div>Open the app and type this code.<br>It works once.</div></div>';
     }).join('');
@@ -410,8 +425,11 @@
       (pages > 1 ? '  (page ' + PAGE + ' of ' + pages + ')' : '');
 
     body.innerHTML = page.map(function (r) {
+      // Printed is a state of an unused code, not a rival to "in use": it says a slip exists on
+      // paper somewhere. Once somebody activates it, that is the more useful thing to show.
       var state = r.revoked ? '<span class="pill revoked">Revoked</span>'
                 : r.claimed ? '<span class="pill used">In use</span>'
+                : r.printed ? '<span class="pill printed">Printed</span>'
                             : '<span class="pill free">Unused</span>';
 
       var actions = [];
@@ -483,6 +501,43 @@
     google.script.run.withSuccessHandler(render)
       .withFailureHandler(function (e) { show(e.message, true); })
       .setNote(code, next);
+  }
+
+  // The codes currently on the print sheet, and whether already-printed ones are included.
+  var PRINTABLE = [];
+  var INCLUDE_PRINTED = false;
+
+  function setIncludePrinted(on) {
+    INCLUDE_PRINTED = on;
+    render(CODES);
+  }
+
+  /**
+   * Prints the slips, then records which codes went out.
+   *
+   * Marking happens after the dialog closes, not before: a browser cannot say whether paper
+   * actually came out, and marking first would mark a run the user cancelled. So it asks. Saying
+   * no leaves everything unprinted and the same slips come out next time -- which is the right way
+   * round, because an unmarked printed slip only wastes paper whereas a marked unprinted one goes
+   * quietly missing from every future run.
+   */
+  function printSlips() {
+    if (!PRINTABLE.length) return;
+    var codes = PRINTABLE.map(function (r) { return r.code; });
+
+    window.print();
+
+    if (!confirm(
+      'Did the ' + codes.length + ' slips print correctly?\n\n' +
+      'Yes marks them as printed, so the next run does not repeat them.\n' +
+      'No leaves them unprinted and they will come out again next time.'
+    )) return;
+
+    google.script.run.withSuccessHandler(function (rows) {
+      show(codes.length + ' marked as printed.', false);
+      render(rows);
+    }).withFailureHandler(function (e) { show(e.message, true); })
+      .markPrinted(codes);
   }
 
   /**
