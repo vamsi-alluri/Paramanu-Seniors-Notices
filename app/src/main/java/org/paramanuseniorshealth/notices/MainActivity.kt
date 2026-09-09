@@ -105,6 +105,7 @@ private fun NoticesApp(
     val highlightId by viewModel.highlightId.collectAsStateWithLifecycle()
     val officeInfo by viewModel.officeInfo.collectAsStateWithLifecycle()
     val testingUnlocked by viewModel.testingUnlocked.collectAsStateWithLifecycle()
+    val revoked by viewModel.revoked.collectAsStateWithLifecycle()
 
     val access = rememberNotificationAccessState()
     val context = LocalContext.current
@@ -152,6 +153,8 @@ private fun NoticesApp(
                 expandedId = expandedId,
                 highlightId = highlightId,
                 officeInfo = officeInfo,
+                revoked = revoked,
+                activationCode = viewModel.activationCode,
                 notificationsBlocked = !access.isEnabled,
                 onOpenNotificationSettings = access::request,
                 onToggleExpanded = viewModel::toggleExpanded,

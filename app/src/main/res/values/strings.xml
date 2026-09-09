@@ -73,7 +73,16 @@
     <string name="settings_reset_action">Reset</string>
     <string name="settings_reset_confirm_title">Reset this app?</string>
     <string name="settings_reset_confirm_body">Your code and every saved notice will be removed from this phone. This cannot be undone, and you will need a new code from the dispensary counter.</string>
-    <string name="toast_access_removed">Your access has been removed. Please ask at the dispensary counter for a new code.</string>
+    <!--
+      Shown on the notice list, not as a toast, and it stays until access is restored. The old
+      wording said access "has been removed" while the notices sat untouched behind the code screen,
+      which overstated what had happened; these say what is actually true.
+    -->
+    <string name="revoked_banner_title">You will not receive any more alerts.</string>
+    <string name="revoked_banner_body">The notices below are still yours to read. If you expected this, you can uninstall the app.</string>
+    <string name="revoked_banner_helpdesk">If not, please call the helpdesk and give them your code %1$s.</string>
+    <string name="revoked_notification_title">You have been removed from the notices list</string>
+    <string name="revoked_notification_body">You will not receive any more alerts. Your saved notices are still in the app.</string>
     <string name="settings_about">Notices are published by Helpdesk, CHSS Beneficiaries Group, Vashi, Navi Mumbai, Maharashtra, India.</string>
     <string name="settings_version">Version %1$s</string>
 

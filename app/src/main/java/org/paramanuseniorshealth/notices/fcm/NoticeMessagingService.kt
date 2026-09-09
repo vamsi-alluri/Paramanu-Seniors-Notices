@@ -5,6 +5,7 @@ import com.google.firebase.messaging.FirebaseMessagingService
 import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.runBlocking
 import org.paramanuseniorshealth.notices.NoticesApplication
+import org.paramanuseniorshealth.notices.activation.ActivationRefreshWorker
 import org.paramanuseniorshealth.notices.activation.ActivationState
 import org.paramanuseniorshealth.notices.activation.Subscription
 
@@ -19,6 +20,22 @@ class NoticeMessagingService : FirebaseMessagingService() {
      */
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
+
+        // Checked before anything else, because a revoke carries no title and the notice path
+        // below would drop it as malformed. It is a topic broadcast, so this arrives on every
+        // subscribed phone and only the holder of that code acts on it.
+        RevokeMessage.codeIn(data)?.let { revokedCode ->
+            runBlocking {
+                val app = applicationContext as NoticesApplication
+                if (app.activationRepository.storedCode == revokedCode) {
+                    Log.i(TAG, "Revoke received for this device")
+                    app.activationRepository.suspendClaim()
+                    app.announceRevocation()
+                }
+            }
+            return
+        }
+
         val title = data["title"] ?: message.notification?.title ?: return
         val body = data["body"] ?: message.notification?.body.orEmpty()
         val logId = data["logId"]
@@ -89,34 +106,40 @@ class NoticeMessagingService : FirebaseMessagingService() {
      * adequate here because every notice is also published publicly on the website, and it must not
      * later be mistaken for access control.
      *
-     * The asymmetry in the failure handling is deliberate:
+     * It performs **no network I/O**. The answer comes from the last persisted verification, and a
+     * refresh is scheduled instead -- see [ActivationRefreshWorker]. Calling verify() here meant a
+     * broadcast to four hundred phones opened ~400 database sockets at once against a cap of 100,
+     * so the check failed during precisely the event it exists for.
      *
-     * - [ActivationState.Revoked] is a definitive answer, so delivery stops and the local claim is
-     *   cleared, which returns the app to the code-entry screen.
-     * - [ActivationState.Unknown] means the check could not be completed -- offline, slow signal,
-     *   backend unreachable. The notice is shown. Suppressing it would mean a user in their
-     *   eighties misses a closure notice because of a weak signal, which is a far worse outcome
-     *   than an already-revoked device seeing one more public announcement.
+     * The consequence, accepted deliberately: a refresh lands in time for the *next* notice rather
+     * than this one, so a revoked device can see one more. That costs nothing. This is not access
+     * control -- every notice is published publicly on the website -- and a pushed revoke closes
+     * the gap in the normal case anyway.
+     *
+     * [ActivationState.Unknown] still permits delivery: suppressing would mean a user in their
+     * eighties misses a closure notice because of a weak signal, which is far worse than an
+     * already-revoked device seeing one more public announcement.
      */
-    private suspend fun isEntitled(app: NoticesApplication): Boolean =
-        when (app.activationRepository.verify()) {
+    private fun isEntitled(app: NoticesApplication): Boolean {
+        ActivationRefreshWorker.enqueueIfStale(applicationContext)
+
+        return when (app.activationRepository.gate()) {
             ActivationState.Active -> true
             ActivationState.Unknown -> {
-                Log.i(TAG, "Entitlement inconclusive; showing the notice anyway")
+                Log.i(TAG, "Entitlement not yet known; showing the notice anyway")
                 true
             }
             ActivationState.NotActivated -> {
-                // Subscribed but never activated: possible after a data wipe. Stop the delivery.
+                // Subscribed but never activated: possible after a data wipe.
                 Log.i(TAG, "Notice dropped: not activated")
-                app.activationRepository.unsubscribeAll()
                 false
             }
             ActivationState.Revoked -> {
                 Log.i(TAG, "Notice dropped: activation revoked")
-                app.activationRepository.clearRevoked()
                 false
             }
         }
+    }
 
     // onNewToken is intentionally not overridden: this app is addressed only by topic, and the SDK
     // re-establishes topic subscriptions itself after a token rotation.

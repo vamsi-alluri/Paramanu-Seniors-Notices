@@ -110,13 +110,17 @@ class NoticeViewModel(
     private val _messages = MutableSharedFlow<Int>(extraBufferCapacity = 1)
     val messages: SharedFlow<Int> = _messages.asSharedFlow()
 
+    /**
+     * Whether this device's access has been withdrawn.
+     *
+     * Drives a banner on the notice list rather than a return to the code screen: hiding the
+     * history protected nothing, since any valid slip lifted that gate and it did not have to be
+     * theirs, while it cost the user everything they had already received.
+     */
+    private val _revoked = MutableStateFlow(activation.isRevoked)
+    val revoked: StateFlow<Boolean> = _revoked.asStateFlow()
+
     init {
-        // Revocation is usually discovered by the messaging service while no UI is running. The
-        // flag is consumed here so the explanation appears the next time the app is opened, rather
-        // than the user finding the code screen and their history gone with no reason given.
-        if (activation.consumeRevokedNotice()) {
-            _messages.tryEmit(R.string.toast_access_removed)
-        }
         refreshActivation()
         refreshOfficeInfo()
     }
@@ -166,17 +170,27 @@ class NoticeViewModel(
     fun refreshActivation() {
         viewModelScope.launch {
             when (activation.verify()) {
-                ActivationState.Revoked, ActivationState.NotActivated -> {
-                    if (activation.isActivated) {
-                        activation.clearRevoked()
-                        // Emitted before the screen changes, so the explanation is on screen as the
-                        // code gate appears rather than arriving after it.
-                        activation.consumeRevokedNotice()
-                        _messages.tryEmit(R.string.toast_access_removed)
+                ActivationState.Revoked -> {
+                    activation.suspendClaim()
+                    _revoked.value = true
+                }
+
+                ActivationState.Active -> {
+                    // The fastest route back for a restored code, for anyone who does open the app.
+                    if (activation.isRevoked) {
+                        activation.resumeClaim()
+                        notices.clearRevokedNotice()
                     }
+                    _revoked.value = false
+                }
+
+                // Genuinely no claim on this device: a fresh install, or after a reset.
+                ActivationState.NotActivated -> {
+                    _revoked.value = false
                     _screen.value = Screen.Activation
                 }
-                ActivationState.Active, ActivationState.Unknown -> Unit
+
+                ActivationState.Unknown -> Unit
             }
         }
     }
@@ -189,6 +203,9 @@ class NoticeViewModel(
             when (val result = activation.redeem(rawCode)) {
                 RedeemResult.Success -> {
                     _subscriptions.value = activation.subscriptions()
+                    // A code redeemed here is always a different one, since a revoked code cannot
+                    // be re-claimed. So the banner must not carry over from the previous holder.
+                    _revoked.value = false
                     // Written before the screen changes so the list is never momentarily empty.
                     notices.saveWelcome(welcomeTitle, welcomeBody)
 
@@ -256,6 +273,7 @@ class NoticeViewModel(
         viewModelScope.launch {
             activation.resetByUser()
             notices.clearAll()
+            _revoked.value = false
             _selected.value = emptySet()
             _screen.value = Screen.Activation
         }

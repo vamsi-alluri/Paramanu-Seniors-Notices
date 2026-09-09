@@ -82,6 +82,8 @@ fun NoticeListScreen(
     expandedId: Long?,
     highlightId: Long?,
     officeInfo: OfficeInfo?,
+    revoked: Boolean,
+    activationCode: String?,
     notificationsBlocked: Boolean,
     onOpenNotificationSettings: () -> Unit,
     onToggleExpanded: (Long) -> Unit,
@@ -149,6 +151,12 @@ fun NoticeListScreen(
         },
     ) { padding ->
         Column(modifier = Modifier.padding(padding)) {
+            // Above the notification banner and outside the scrolling list: it is the reason the
+            // rest of this screen has stopped updating, so it must not be scrollable away.
+            if (revoked) {
+                RevokedBanner(activationCode)
+            }
+
             if (notificationsBlocked) {
                 NotificationBanner(onOpenNotificationSettings)
             }

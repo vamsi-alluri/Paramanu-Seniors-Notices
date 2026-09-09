@@ -55,6 +55,29 @@ class NoticeRepository(
         logId = "local-welcome",
     )
 
+    /**
+     * Writes the entry that says access has ended, mirroring [saveWelcome] at the other end.
+     *
+     * Returns false when one is already stored, which is how a repeated revoke broadcast is stopped
+     * from posting a second notification: the insert is IGNORE on a duplicate `logId`.
+     */
+    suspend fun saveRevoked(title: String, body: String): Boolean = save(
+        title = title,
+        body = body,
+        logId = REVOKED_LOG_ID,
+    )
+
+    /**
+     * Removes the revocation entry when access is restored.
+     *
+     * Without this, the row would sit permanently in a working phone's history saying delivery had
+     * stopped, and -- because the insert ignores a duplicate id -- a later revocation would never
+     * announce itself.
+     */
+    suspend fun clearRevokedNotice() {
+        dao.byLogId(REVOKED_LOG_ID)?.let { clear(listOf(it)) }
+    }
+
     /** Clears history and the cached renders with it, so "clear" leaves nothing on disk. */
     suspend fun clearAll() {
         dao.deleteAll()
@@ -73,6 +96,11 @@ class NoticeRepository(
      * for a device that was switched off overnight. Anything unparseable (a UUID, an ISO string)
      * falls back to arrival time.
      */
+    companion object {
+        /** `local-` keeps it out of the sender's numeric namespace, as with `local-welcome`. */
+        const val REVOKED_LOG_ID = "local-revoked"
+    }
+
     private fun parseTimestamp(logId: String?): Long {
         val now = System.currentTimeMillis()
         val numeric = logId?.trim()?.toLongOrNull() ?: return now
