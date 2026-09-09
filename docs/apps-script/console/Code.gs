@@ -319,6 +319,9 @@ function releaseCode(code) {
 /**
  * Run from the editor when a Revoke reports that the sender replied with a web page.
  *
+ * ALREADY RUN, ANSWER RECORDED: all three probes return 401, so the token is rejected outright.
+ * Kept only so the finding can be reproduced; it goes when the queue replaces the HTTP bridge.
+ *
  * There are only two causes and they need different fixes, so this prints the evidence that tells
  * them apart rather than leaving you to guess:
  *
@@ -436,6 +439,17 @@ function revokeCode(code) {
 
 /**
  * Asks the sender to broadcast a revocation.
+ *
+ * KNOWN BROKEN, AND BEING REPLACED. Every request returns HTTP 401 from Google's auth frontend
+ * before the sender's script runs: ScriptApp.getOAuthToken() mints a token carrying THIS project's
+ * scopes, and invoking a web app needs one authorized for the SENDER's project, which does not
+ * exist across two separate projects. No manifest scope fixes it. Do not spend time on this again
+ * -- the evidence and the replacement are in
+ * docs/superpowers/specs/2026-09-09-revoke-queue-design.md.
+ *
+ * Left in place until that lands because it fails safely: the revocation is already written to
+ * /codes and /audit before this runs, so the only thing lost is the push, and phones still act on
+ * the revocation at their next daily check.
  *
  * This console has no FCM credentials and is not given any: issuing codes and broadcasting to four
  * hundred phones are separate jobs held in separate projects (SYSTEM.md 2.3). The sender exposes

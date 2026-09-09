@@ -125,11 +125,12 @@ console. It is the only bridge between the two projects, and it sends a fixed en
 way to make it broadcast arbitrary text. Anything other than `revoke` is refused rather than
 defaulted.
 
-**If a Revoke says the sender replied with a web page,** run `testSenderLink()` in the *console*
-editor. It prints the status code and the first of the reply, which separates the only two causes:
-the sender was never redeployed as a New version (so `doPost` does not exist at `/exec`), or the
-console's token was not accepted (missing `userinfo.email` scope, or the account is not in the
-sender's `ALLOWED_EDITORS`).
+**The HTTP bridge does not work and is being replaced.** Every call returns HTTP 401 from Google's
+auth frontend: `ScriptApp.getOAuthToken()` cannot authorize a call into another project's web app.
+It fails safely — the revocation is written to `/codes` and `/audit` first, so only the push is lost
+and phones still act at their daily check. The replacement is a `/revokeQueue` node drained by a
+one-minute trigger in the sender: see
+`docs/superpowers/specs/2026-09-09-revoke-queue-design.md`. Do not re-investigate the 401.
 
 Separate project from the console so issuing codes and sending messages are separate jobs.
 
