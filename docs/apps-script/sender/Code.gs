@@ -429,62 +429,6 @@ function pushRevoke_(code) {
 
 // ---------------------------------------------------------------- Web app
 
-/**
- * The console calls this to have a revocation pushed.
- *
- * The console cannot reach FCM itself, and deliberately so: issuing codes and broadcasting to four
- * hundred phones are separate jobs held in separate projects, which is the whole point of the
- * split described in SYSTEM.md 2.3. This endpoint is the one narrow bridge between them, and it
- * sends a fixed envelope -- there is no way to make it broadcast arbitrary text.
- *
- * Authentication is the caller's own Google identity, forwarded as a Bearer token by the console
- * and checked here against the same ALLOWED_EDITORS allowlist as every other entry point. No new
- * shared secret is introduced: a secret sitting in two Script Properties would be one more thing
- * that can leak, and it would say nothing about who acted.
- *
- * No PIN. The PIN guards the paths where arbitrary text reaches every phone; this one cannot.
- *
- * ROUTED BY PATH. Apps Script fills `e.pathInfo` with whatever follows /exec, so the console posts
- * to `<sender>/exec/revoke` and this reads "revoke". The body's `action` is accepted as well, because
- * a request that arrives through a redirect can lose its path, and a revoke that is silently
- * ignored is worse than one that arrives by either route.
- *
- * Anything else is refused rather than defaulted: a future second endpoint must be added here
- * deliberately, not inherited by whatever happens to POST to the bare /exec.
- */
-function doPost(e) {
-  var out = { ok: false };
-  try {
-    var caller = requireEditor_();
-    var payload = JSON.parse((e && e.postData && e.postData.contents) || '{}');
-    var route = String((e && e.pathInfo) || payload.action || '').replace(/^\/+|\/+$/g, '');
-
-    if (route !== 'revoke') throw new Error('Unknown endpoint: "' + route + '". Expected /exec/revoke.');
-    if (!isValidRevokeCode_(payload.code)) throw new Error('Not a valid code.');
-
-    out.fcmName = pushRevoke_(payload.code);
-    out.by = caller;
-    // The console may state who authorised it, but the token is what is believed. A mismatch is
-    // recorded rather than refused: it means the console is misconfigured, not that the request is
-    // forged, and refusing would leave a revocation applied in the database but never pushed.
-    if (payload.by && payload.by !== caller) out.claimedBy = payload.by;
-    out.ok = true;
-  } catch (err) {
-    out.error = String(err && err.message ? err.message : err);
-  }
-  return ContentService.createTextOutput(JSON.stringify(out))
-    .setMimeType(ContentService.MimeType.JSON);
-}
-
-/**
- * Shape check only. The sender has no view of which codes exist -- that is the console's half --
- * so this rejects malformed input rather than unknown codes. Pushing a revoke for a code nobody
- * holds is harmless: every device compares it with its own and does nothing.
- */
-function isValidRevokeCode_(code) {
-  return /^[0-9A-Z]{8}$/.test(String(code || ''));
-}
-
 function doGet(e) {
   try {
     requireEditor_();

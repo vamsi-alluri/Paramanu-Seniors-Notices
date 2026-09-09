@@ -13,22 +13,16 @@
  *        SERVICE_ACCOUNT_JSON  = <the entire JSON file contents>
  *        DATABASE_URL          = https://paramanu-seniors-default-rtdb.asia-southeast1.firebasedatabase.app
  *        ALLOWED_EDITORS       = <comma-separated Google account emails permitted to use this>
- *        SENDER_URL            = <the sender web app's /exec URL, no trailing path>  (optional)
  *     Take DATABASE_URL from the Realtime Database page; it is region qualified.
  *  5. Deploy -> Web app.
  *       Execute as:     User accessing the web app   <- REQUIRED, see requireEditor_
  *       Who has access: Anyone with a Google account
- *  6. For SENDER_URL to work, this project's manifest needs an identity scope so the sender can
- *     tell who is calling. Project Settings -> "Show appsscript.json", then:
- *        "oauthScopes": [
- *          "https://www.googleapis.com/auth/script.external_request",
- *          "https://www.googleapis.com/auth/userinfo.email"
- *        ]
- *     Run any function once afterwards to re-consent. Without SENDER_URL a Revoke still works --
- *     it is recorded in the database and the phone finds it within a day -- it just is not pushed.
  *
- * This console never gets FCM credentials. It asks the sender to broadcast a revoke and cannot
- * broadcast anything itself; issuing codes and reaching four hundred phones stay separate jobs.
+ * This console never gets FCM credentials and cannot broadcast anything itself; issuing codes and
+ * reaching four hundred phones stay separate jobs. Revoke writes /revokeQueue and a minute-ly
+ * trigger in the SENDER project broadcasts it -- see Revoker.gs there. If that trigger is not
+ * installed, Revoke still works: it is recorded in /codes and /audit, and phones act on it at their
+ * next daily check. Only the speed depends on the trigger.
  *
  * The service account key is a real credential. It lives in Script Properties, never in this file,
  * and never in the Android app.
@@ -312,96 +306,14 @@ function releaseCode(code) {
   var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { usedBy: null, activatedAt: null, revoked: null });
+
+  // Drop any revoke still waiting to be broadcast. A released code goes back into the pool, so a
+  // stale revoke firing afterwards would cut off whoever claims it next -- they would type a fresh
+  // slip and be told immediately that they had been removed.
+  firebase_('delete', '/revokeQueue/' + code + '.json');
+
   audit_(code, 'released', by);
   return listCodes();
-}
-
-/**
- * Run from the editor when a Revoke reports that the sender replied with a web page.
- *
- * ALREADY RUN, ANSWER RECORDED: all three probes return 401, so the token is rejected outright.
- * Kept only so the finding can be reproduced; it goes when the queue replaces the HTTP bridge.
- *
- * There are only two causes and they need different fixes, so this prints the evidence that tells
- * them apart rather than leaving you to guess:
- *
- *   HTTP 200 + HTML, or a redirect to accounts.google.com
- *       The request never reached the script. The token was not accepted -- usually because
- *       userinfo.email is missing from this project's oauthScopes, or this account is not in the
- *       sender's ALLOWED_EDITORS.
- *
- *   HTTP 404/500 + an Apps Script error page mentioning a function
- *       The request reached Apps Script but the deployed version has no doPost. The sender needs
- *       Manage deployments -> edit -> New version. /exec always serves the deployed version, never
- *       HEAD, so editing the sender and running its tests proves nothing about what /exec answers.
- *
- * Sends nothing: the code below is deliberately malformed, so a working sender refuses it at the
- * shape check and no phone hears anything.
- */
-function testSenderLink() {
-  var url = PropertiesService.getScriptProperties().getProperty('SENDER_URL');
-  if (!url) throw new Error('No SENDER_URL is set.');
-
-  var base = url.replace(/\/+$/, '');
-  var token = ScriptApp.getOAuthToken();
-
-  // Three probes, one variable at a time, so a 401 can be attributed rather than guessed at.
-  //
-  //   GET  /exec         does this token authenticate against this web app at all?
-  //   POST /exec         does POST work without a path? (expects a JSON "Unknown endpoint")
-  //   POST /exec/revoke  the real call.
-  //
-  // Nothing is sent to any phone: the code below is deliberately malformed, so even a fully
-  // working sender refuses it at the shape check before it reaches FCM.
-  var probes = [
-    { name: 'GET  /exec       ', url: base, method: 'get' },
-    { name: 'POST /exec       ', url: base, method: 'post' },
-    { name: 'POST /exec/revoke', url: base + '/revoke', method: 'post' }
-  ];
-
-  Logger.log('as: %s', Session.getActiveUser().getEmail() || '(cannot identify this account)');
-
-  var codes = [];
-  for (var i = 0; i < probes.length; i++) {
-    var probe = probes[i];
-    var options = {
-      method: probe.method,
-      headers: { Authorization: 'Bearer ' + token },
-      muteHttpExceptions: true,
-      followRedirects: true
-    };
-    if (probe.method === 'post') {
-      options.contentType = 'application/json';
-      options.payload = JSON.stringify({ action: 'revoke', code: 'not-a-code' });
-    }
-
-    var status;
-    var body;
-    try {
-      var response = UrlFetchApp.fetch(probe.url, options);
-      status = response.getResponseCode();
-      body = response.getContentText();
-    } catch (err) {
-      status = 'threw';
-      body = String(err && err.message ? err.message : err);
-    }
-    codes.push(status);
-    Logger.log('%s -> HTTP %s  %s  %s',
-      probe.name, status, body.charAt(0) === '<' ? 'HTML' : 'JSON', body.slice(0, 120));
-  }
-
-  // The verdict, so the numbers do not have to be interpreted by hand.
-  if (codes[0] === 401) {
-    Logger.log('VERDICT: the token is not accepted by this web app at all -- the path is not the ' +
-               'problem. Bearer-token invocation is the thing to change, not /exec/revoke.');
-  } else if (codes[1] !== 401 && codes[2] === 401) {
-    Logger.log('VERDICT: the token works, but the extra /revoke path is rejected. Route on a query ' +
-               'parameter instead and keep posting to the bare /exec.');
-  } else if (codes[2] === 200) {
-    Logger.log('VERDICT: the link works. A JSON refusal naming the code is the expected answer.');
-  } else {
-    Logger.log('VERDICT: not one of the known shapes. Paste the three lines above.');
-  }
 }
 
 /** Everything currently stored, newest first, with its state. */
@@ -429,86 +341,29 @@ function revokeCode(code) {
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { revoked: true });
 
-  // The database is the truth; the push is only how the phone hears about it sooner. So the audit
-  // entry is written either way, and records which of the two happened.
-  var push = pushRevokeToSender_(code, by);
-  audit_(code, 'revoked', by, { pushed: !!push.ok, pushError: push.ok ? null : push.error });
+  // The database is the truth; the queue is only how the phone hears about it sooner. A minute-ly
+  // trigger in the sender drains this and broadcasts, because this console has no FCM credentials
+  // and is deliberately not given any (SYSTEM.md 2.3).
+  //
+  // Keyed by code, so revoking the same one twice leaves one pending entry rather than two. PUT
+  // rather than PATCH for the same reason: a second revoke replaces the first outright.
+  firebase_('put', '/revokeQueue/' + code + '.json', { at: Date.now(), by: by });
 
+  audit_(code, 'revoked', by);
   return listCodes();
-}
-
-/**
- * Asks the sender to broadcast a revocation.
- *
- * KNOWN BROKEN, AND BEING REPLACED. Every request returns HTTP 401 from Google's auth frontend
- * before the sender's script runs: ScriptApp.getOAuthToken() mints a token carrying THIS project's
- * scopes, and invoking a web app needs one authorized for the SENDER's project, which does not
- * exist across two separate projects. No manifest scope fixes it. Do not spend time on this again
- * -- the evidence and the replacement are in
- * docs/superpowers/specs/2026-09-09-revoke-queue-design.md.
- *
- * Left in place until that lands because it fails safely: the revocation is already written to
- * /codes and /audit before this runs, so the only thing lost is the push, and phones still act on
- * the revocation at their next daily check.
- *
- * This console has no FCM credentials and is not given any: issuing codes and broadcasting to four
- * hundred phones are separate jobs held in separate projects (SYSTEM.md 2.3). The sender exposes
- * one narrow endpoint that sends a fixed envelope, and this calls it.
- *
- * Never throws. By the time this runs the revocation is already recorded in /codes and /audit, and
- * the phone's periodic verification finds it within a day regardless -- so a failure here is a
- * delay, not a lost revocation, and must not present to the staff member as a failed Revoke.
- *
- * ScriptApp.getOAuthToken() forwards the signed-in staff member's own identity, so the sender's
- * requireEditor_ sees the person who clicked rather than this script. That needs userinfo.email in
- * this project's oauthScopes; without it the sender answers "cannot identify you".
- */
-function pushRevokeToSender_(code, by) {
-  var url = PropertiesService.getScriptProperties().getProperty('SENDER_URL');
-  if (!url) return { ok: false, error: 'No SENDER_URL is set, so the revoke was not pushed.' };
-
-  // Routed by path: the sender reads e.pathInfo. `action` rides along in the body too, because a
-  // redirected request can arrive with its path stripped.
-  var endpoint = url.replace(/\/+$/, '') + '/revoke';
-
-  try {
-    var response = UrlFetchApp.fetch(endpoint, {
-      method: 'post',
-      contentType: 'application/json',
-      headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
-      payload: JSON.stringify({ action: 'revoke', code: code, by: by }),
-      muteHttpExceptions: true,
-      followRedirects: true
-    });
-
-    var text = response.getContentText();
-
-    // The failure that actually happens is an HTML page where JSON was expected: Google's sign-in
-    // page when the token is not accepted, or Apps Script's error page when the deployment has not
-    // been given a New version and doPost does not yet exist in the version /exec serves.
-    // "Unexpected token '<'" tells a staff member nothing, so name the two causes instead.
-    if (text.charAt(0) === '<') {
-      return {
-        ok: false,
-        error: 'The sender replied with a web page instead of JSON (HTTP ' + response.getResponseCode() +
-               '). Either the sender has not been redeployed as a New version, so /exec/revoke does ' +
-               'not exist yet, or this console is not permitted to call it.'
-      };
-    }
-
-    var parsed = JSON.parse(text);
-    return parsed && typeof parsed.ok !== 'undefined'
-      ? parsed
-      : { ok: false, error: 'Unexpected reply from the sender: ' + text.slice(0, 200) };
-  } catch (err) {
-    return { ok: false, error: String(err && err.message ? err.message : err) };
-  }
 }
 
 function unrevokeCode(code) {
   var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { revoked: null });
+
+  // Drop any revoke the sender has not broadcast yet. Revoking and restoring inside a minute would
+  // otherwise push a revoke for a code that is live again -- recoverable, because the device
+  // re-verifies and resumes, but it would blank someone's notices and raise the banner for no
+  // reason at all.
+  firebase_('delete', '/revokeQueue/' + code + '.json');
+
   audit_(code, 'restored', by);
   return listCodes();
 }

@@ -332,56 +332,63 @@ function t_doGet_() {
   t_ok_('doGet survives no event object', !!bare);
 }
 
-function t_isValidRevokeCode_() {
-  t_ok_('accepts a well-formed code', isValidRevokeCode_('A1B2C3D4'));
-  t_ok_('refuses a dashed code', !isValidRevokeCode_('A1B2-C3D4'));
-  t_ok_('refuses lowercase', !isValidRevokeCode_('a1b2c3d4'));
-  t_ok_('refuses the wrong length', !isValidRevokeCode_('A1B2C3D'));
-  t_ok_('refuses nothing at all', !isValidRevokeCode_(''));
-  t_ok_('refuses undefined', !isValidRevokeCode_(undefined));
-}
-
 function t_pushRevoke_() {
   // TOPIC_OVERRIDE is already TEST_TOPIC for the whole suite, so this reaches no real phone.
   var name = pushRevoke_('ZZZZZZZZ');
   t_ok_('pushRevoke_ returns an FCM name', String(name).indexOf('projects/') === 0, String(name));
 }
 
-function t_doPost_() {
-  function post(pathInfo, body) {
-    return JSON.parse(doPost({
-      pathInfo: pathInfo,
-      postData: { contents: JSON.stringify(body) }
-    }).getContent());
+function t_revokerIsValidCode_() {
+  t_ok_('accepts a well-formed code', revokerIsValidCode_('A1B2C3D4'));
+  t_ok_('refuses a dashed code', !revokerIsValidCode_('A1B2-C3D4'));
+  t_ok_('refuses lowercase', !revokerIsValidCode_('a1b2c3d4'));
+  t_ok_('refuses the wrong length', !revokerIsValidCode_('A1B2C3D'));
+  t_ok_('refuses nothing at all', !revokerIsValidCode_(''));
+  t_ok_('refuses undefined', !revokerIsValidCode_(undefined));
+}
+
+/**
+ * Drains a seeded queue against TEST_TOPIC.
+ *
+ * Uses a code under /codes that this test creates and removes, because the drain re-reads the code
+ * before broadcasting -- that re-read is the guard that stops a stale revoke cutting off whoever
+ * claims a released code next, so a test that bypassed it would be testing nothing.
+ */
+function t_revokerDrain_() {
+  var live = 'ZZZZZZZZ';     // revoked: should be broadcast and cleared
+  var stale = 'YYYYYYYY';    // not revoked: should be dropped without sending
+  var junk = 'not-a-code';   // malformed key: should be discarded
+
+  try {
+    firebase_('put', '/codes/' + live + '.json', { issued: Date.now(), revoked: true });
+    firebase_('put', '/codes/' + stale + '.json', { issued: Date.now() });
+    firebase_('put', '/revokeQueue/' + live + '.json', { at: Date.now(), by: 'test@example.org' });
+    firebase_('put', '/revokeQueue/' + stale + '.json', { at: Date.now(), by: 'test@example.org' });
+    firebase_('put', '/revokeQueue/' + junk + '.json', { at: Date.now(), by: 'test@example.org' });
+
+    var result = revokerDrain_();
+
+    t_eq_('drain broadcasts the revoked one', result.pushed, 1);
+    t_eq_('drain skips the stale and the malformed', result.skipped, 2);
+    t_eq_('drain reports no failures', result.failed, 0);
+
+    t_ok_('the broadcast entry is cleared',
+      firebase_('get', '/revokeQueue/' + live + '.json') === null);
+    t_ok_('a code no longer revoked is dropped without sending',
+      firebase_('get', '/revokeQueue/' + stale + '.json') === null);
+    t_ok_('a malformed key is discarded',
+      firebase_('get', '/revokeQueue/' + junk + '.json') === null);
+
+    // An empty queue must cost nothing and report nothing.
+    var empty = revokerDrain_();
+    t_eq_('an empty queue pushes nothing', empty.pushed, 0);
+  } finally {
+    firebase_('delete', '/codes/' + live + '.json');
+    firebase_('delete', '/codes/' + stale + '.json');
+    firebase_('delete', '/revokeQueue/' + live + '.json');
+    firebase_('delete', '/revokeQueue/' + stale + '.json');
+    firebase_('delete', '/revokeQueue/' + junk + '.json');
   }
-
-  var unknown = post('nonsense', {});
-  t_ok_('doPost refuses an unknown endpoint', !unknown.ok, unknown.error || '');
-  t_ok_('the refusal names the path', String(unknown.error).indexOf('nonsense') >= 0, unknown.error);
-
-  var bare = post('', {});
-  t_ok_('doPost refuses the bare /exec', !bare.ok, bare.error || '');
-
-  var malformed = post('revoke', { code: 'nope' });
-  t_ok_('doPost refuses a malformed code', !malformed.ok, malformed.error || '');
-
-  // doPost answers with JSON rather than throwing, so a caller that cannot parse a thrown Apps
-  // Script error page still learns what happened.
-  var empty = JSON.parse(doPost({}).getContent());
-  t_ok_('doPost survives an empty request', !empty.ok, empty.error || '');
-
-  var good = post('revoke', { code: 'ZZZZZZZZ', by: 'someone-else@example.org' });
-  t_ok_('doPost pushes a valid revoke', good.ok, good.error || '');
-  t_eq_('doPost attributes to the token, not the payload', good.by, requireEditor_());
-  t_eq_('a mismatched claim is recorded', good.claimedBy, 'someone-else@example.org');
-
-  // A redirect can strip the path, so the body's action still routes.
-  var viaBody = post(undefined, { action: 'revoke', code: 'ZZZZZZZZ' });
-  t_ok_('the body action still routes when the path is lost', viaBody.ok, viaBody.error || '');
-
-  // A leading slash is what an assembled URL actually produces.
-  var slashed = post('/revoke', { code: 'ZZZZZZZZ' });
-  t_ok_('a leading slash in pathInfo still routes', slashed.ok, slashed.error || '');
 }
 
 function t_testConnection_() {
@@ -416,9 +423,9 @@ function runAllTests() {
     t_statusWording_();
     t_sendNotice_(created);
     t_sendStatus_(created);
-    t_isValidRevokeCode_();
     t_pushRevoke_();
-    t_doPost_();
+    t_revokerIsValidCode_();
+    t_revokerDrain_();
     t_doGet_();
     t_testConnection_();
   } catch (e) {

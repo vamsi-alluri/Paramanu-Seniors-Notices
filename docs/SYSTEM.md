@@ -104,11 +104,13 @@ Generates codes, prints cut-out slips, revokes, restores, releases, per-code not
 banner, and the saved messages the sender offers. The codes table sorts on every column, pages
 locally, and shows each code's last change with its full history.
 
-Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `ALLOWED_EDITORS`, and `SENDER_URL` —
-the last so a Revoke can be pushed. Without it a Revoke still works; it just is not pushed, and the
-phone finds out at its next daily check. `Tests.gs` covers the pure helpers only.
+Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `ALLOWED_EDITORS`. `Tests.gs` covers the
+pure helpers only.
 
-The manifest needs `userinfo.email` in `oauthScopes` so the sender can identify the caller.
+Revoke writes `/revokeQueue/{CODE}`; the sender's trigger broadcasts it. Restore and Release both
+delete any pending entry, so a revoke cannot fire for a code that is live again or back in the pool.
+If that trigger is not installed, Revoke still works — it is recorded in `/codes` and `/audit`, and
+phones act on it at their next daily check. Only the speed depends on it.
 
 ### 2.3 Sender (Apps Script) — `docs/apps-script/sender/`
 
@@ -120,17 +122,17 @@ Deployed **Execute as: User accessing** / **Anyone with a Google account** — *
 link", which this document claimed until the QR path was retired. `requireEditor_()` refuses an
 address outside `ALLOWED_EDITORS`, and returns the caller's email so every send records `sentBy`.
 
-`doPost` serves `<sender>/exec/revoke` — routed on `e.pathInfo` — and broadcasts the revoke for the
-console. It is the only bridge between the two projects, and it sends a fixed envelope; there is no
-way to make it broadcast arbitrary text. Anything other than `revoke` is refused rather than
-defaulted.
+**There is no `doPost`.** The sender exposes no POST surface at all; `/exec` answers `doGet` only.
 
-**The HTTP bridge does not work and is being replaced.** Every call returns HTTP 401 from Google's
-auth frontend: `ScriptApp.getOAuthToken()` cannot authorize a call into another project's web app.
-It fails safely — the revocation is written to `/codes` and `/audit` first, so only the push is lost
-and phones still act at their daily check. The replacement is a `/revokeQueue` node drained by a
-one-minute trigger in the sender: see
-`docs/superpowers/specs/2026-09-09-revoke-queue-design.md`. Do not re-investigate the 401.
+`Revoker.gs` broadcasts revocations for the console on a **one-minute trigger**: it reads
+`/revokeQueue`, re-reads each code to confirm it is still revoked, calls `pushRevoke_`, and deletes
+the entry only after FCM accepts it. Install with `revokerInstallTrigger()`; inspect with
+`revokerDryRun()`, which sends nothing.
+
+An earlier design had the console POST here with the staff member's OAuth token. It returns HTTP 401
+on every request — `ScriptApp.getOAuthToken()` cannot authorize a call into another project's web
+app — and no manifest scope fixes it. **Do not re-investigate the 401**; the evidence is in
+`docs/decisions.md`.
 
 Separate project from the console so issuing codes and sending messages are separate jobs.
 
@@ -166,6 +168,7 @@ it is.
 ```
 /codes/{CODE}       issued, usedBy, activatedAt, revoked, note
 /audit/{CODE}/{id}  at, by, event, to                  (console only; phones cannot read it)
+/revokeQueue/{CODE} at, by                             (console writes, sender's trigger drains)
 /templates/{id}     label, title, body, updated       (console-managed, app cannot read)
 /sent/{logId}       title, body, category, sentAt, sentBy, fcmName, error
 /info               heading, lines                     (app reads; "lines" is ONE newline string)
@@ -434,10 +437,13 @@ the code screen.
 0. **Deploy and verify the audit / revocation work.** All of it is written and the Android half is
    covered by unit tests, but none of it has run against Google's infrastructure or on a phone:
    - Paste `console/Tests.gs`, run `runConsoleTests` — expect `All 12 passed.`
-   - Console Script Properties: add `SENDER_URL`. Manifest: add `userinfo.email` to `oauthScopes`
-     and run any function once to re-consent.
-   - Sender: run `runAllTests`. Then *Manage deployments → edit → New version* — `/exec` serves the
-     deployed version, and `doPost` does not exist until it is redeployed (§5.2).
+   - Paste `sender/Revoker.gs`, run `revokerDryRun()` (sends nothing), then
+     `revokerInstallTrigger()`. No new Script Properties, and no redeploy needed — a trigger is not
+     served by `/exec`.
+   - Sender: run `runAllTests`. Redeploy only if `Code.gs` changed; `doPost` has been removed, so
+     the web app now answers `doGet` alone.
+   - Revoke a test code and watch `/revokeQueue`: the entry should appear and be gone within a
+     minute. Then revoke another and Restore it immediately — no revoke should be broadcast at all.
    - Issue two codes, then revoke / restore / release / re-note them and check the history renders
      in order with the right email on each.
    - On a phone: activate, revoke from the console, confirm the tray notification arrives within

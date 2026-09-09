@@ -1,7 +1,7 @@
 # Revoke queue: replacing the console → sender HTTP call
 
 **Date:** 2026-09-09
-**Status:** agreed, not yet implemented. To be built on `audit-trail-and-revocation`.
+**Status:** implemented on `audit-trail-and-revocation`. Not yet deployed or run against Google.
 **Supersedes:** the "console asks the sender to push" decision in `docs/decisions.md`.
 
 ## Why the current bridge cannot work

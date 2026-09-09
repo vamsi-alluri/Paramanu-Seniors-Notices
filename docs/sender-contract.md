@@ -109,9 +109,15 @@ whoever reads it — but it is worth knowing that it is what goes out.
 It is **not authoritative**. FCM is best-effort and a phone switched off past the message TTL never
 sees it, so the device's own periodic verification remains the safety net. See `docs/decisions.md`.
 
-The console cannot send this itself. It POSTs `{"action":"revoke","code":"…"}` to the sender's
-`/exec` with the staff member's own OAuth token in the `Authorization` header, and the sender checks
-that token against `ALLOWED_EDITORS` exactly as it does for every other entry point.
+The console cannot send this itself, and has no HTTP route into the sender either — an OAuth-token
+call returns 401, because `ScriptApp.getOAuthToken()` cannot authorize a call into another project's
+web app. Instead the console writes `/revokeQueue/{CODE}` and `Revoker.gs` drains it on a one-minute
+trigger, re-reading the code first so a revocation that has since been undone is dropped rather than
+broadcast.
+
+Delivery is at-least-once: the queue entry is deleted only once FCM has accepted the message. A
+device receiving the same revoke twice is harmless — applying it is idempotent, and the announcement
+is guarded by the `local-revoked` row id.
 
 ## Who can send
 

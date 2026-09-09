@@ -2,7 +2,51 @@
 
 Standing decisions and the questions that prompted them. Newest first.
 
+## The console queues a revoke; a trigger in the sender drains it
+
+**Question.** The decision below — the console POSTs to the sender's web app, forwarding the staff
+member's identity with `ScriptApp.getOAuthToken()` — does not work. What replaces it?
+
+**Finding.** Every request returns **HTTP 401** from Google's auth frontend, before any script runs:
+
+```
+as: vamsi1306@gmail.com
+GET  /exec        -> HTTP 401  HTML
+POST /exec        -> HTTP 401  HTML
+POST /exec/revoke -> HTTP 401  HTML
+```
+
+All three fail identically, so neither the path nor the method is at fault. `getOAuthToken()` mints a
+token carrying the *console's* authorized scopes, but invoking a web app needs one authorized for the
+*sender's* script project. That grant does not exist across two separate projects and no manifest
+scope creates it. The documented workaround — one shared standard GCP project with matching scopes —
+couples the projects that §2.3 deliberately separated.
+
+A shared secret was considered and rejected. It needs a second sender deployment set to "Anyone",
+because the existing one requires a Google account and that is precisely what is failing, and it
+cannot be switched because the compose UI needs the sign-in to identify staff. It also degrades
+attribution to "the console says it was X".
+
+**Decision.** No HTTP between the projects. The console writes `/revokeQueue/{CODE}` to the database
+it already owns, and `Revoker.gs` in the sender drains it on a one-minute trigger: read, broadcast,
+delete. No token, no shared secret, no second deployment, and the console still never touches FCM.
+
+Delivery is at-least-once: an entry is deleted only after FCM accepts it, so a failure is retried
+next minute rather than lost. A phone receiving the same revoke twice is harmless — `suspendClaim()`
+is idempotent and `announceRevocation()` is guarded by the `local-revoked` row id.
+
+The drain **re-reads `/codes/{CODE}` before broadcasting** and drops the entry if it is no longer
+revoked. The console already clears the queue on Restore and Release, but a released code returns to
+the pool, and a stale revoke firing afterwards would cut off whoever claimed it next — they would
+type a fresh slip and be told at once that they had been removed.
+
+**Consequence.** Latency is about a minute rather than seconds. Immaterial: revocation is explicitly
+not access control, every notice is public, and the previous fallback was a whole day. Attribution is
+unaffected — who revoked and when is written to `/audit` by the console either way. `doPost` is gone,
+so the sender has no POST surface at all.
+
 ## The console asks the sender to push; it never gets FCM itself
+**SUPERSEDED — see above. Kept for the reasoning; the mechanism does not work.**
 
 **Question.** "Revocation is pushed" leaves out who pushes it. Revoke is a *console* action, but
 the console has no `PROJECT_ID` and no FCM credentials — and §2.3 of SYSTEM.md says that split is
