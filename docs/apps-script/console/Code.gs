@@ -339,24 +339,66 @@ function testSenderLink() {
   var url = PropertiesService.getScriptProperties().getProperty('SENDER_URL');
   if (!url) throw new Error('No SENDER_URL is set.');
 
-  var endpoint = url.replace(/\/+$/, '') + '/revoke';
-  var response = UrlFetchApp.fetch(endpoint, {
-    method: 'post',
-    contentType: 'application/json',
-    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
-    payload: JSON.stringify({ action: 'revoke', code: 'not-a-code' }),
-    muteHttpExceptions: true,
-    followRedirects: true
-  });
+  var base = url.replace(/\/+$/, '');
+  var token = ScriptApp.getOAuthToken();
 
-  var text = response.getContentText();
-  Logger.log('POST %s', endpoint);
+  // Three probes, one variable at a time, so a 401 can be attributed rather than guessed at.
+  //
+  //   GET  /exec         does this token authenticate against this web app at all?
+  //   POST /exec         does POST work without a path? (expects a JSON "Unknown endpoint")
+  //   POST /exec/revoke  the real call.
+  //
+  // Nothing is sent to any phone: the code below is deliberately malformed, so even a fully
+  // working sender refuses it at the shape check before it reaches FCM.
+  var probes = [
+    { name: 'GET  /exec       ', url: base, method: 'get' },
+    { name: 'POST /exec       ', url: base, method: 'post' },
+    { name: 'POST /exec/revoke', url: base + '/revoke', method: 'post' }
+  ];
+
   Logger.log('as: %s', Session.getActiveUser().getEmail() || '(cannot identify this account)');
-  Logger.log('HTTP %s', response.getResponseCode());
-  Logger.log('reply starts: %s', text.slice(0, 300));
-  Logger.log(text.charAt(0) === '<'
-    ? 'HTML, not JSON -- read the two cases in the comment above this function.'
-    : 'JSON -- the link works. A refusal naming the code is the expected answer here.');
+
+  var codes = [];
+  for (var i = 0; i < probes.length; i++) {
+    var probe = probes[i];
+    var options = {
+      method: probe.method,
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true,
+      followRedirects: true
+    };
+    if (probe.method === 'post') {
+      options.contentType = 'application/json';
+      options.payload = JSON.stringify({ action: 'revoke', code: 'not-a-code' });
+    }
+
+    var status;
+    var body;
+    try {
+      var response = UrlFetchApp.fetch(probe.url, options);
+      status = response.getResponseCode();
+      body = response.getContentText();
+    } catch (err) {
+      status = 'threw';
+      body = String(err && err.message ? err.message : err);
+    }
+    codes.push(status);
+    Logger.log('%s -> HTTP %s  %s  %s',
+      probe.name, status, body.charAt(0) === '<' ? 'HTML' : 'JSON', body.slice(0, 120));
+  }
+
+  // The verdict, so the numbers do not have to be interpreted by hand.
+  if (codes[0] === 401) {
+    Logger.log('VERDICT: the token is not accepted by this web app at all -- the path is not the ' +
+               'problem. Bearer-token invocation is the thing to change, not /exec/revoke.');
+  } else if (codes[1] !== 401 && codes[2] === 401) {
+    Logger.log('VERDICT: the token works, but the extra /revoke path is rejected. Route on a query ' +
+               'parameter instead and keep posting to the bare /exec.');
+  } else if (codes[2] === 200) {
+    Logger.log('VERDICT: the link works. A JSON refusal naming the code is the expected answer.');
+  } else {
+    Logger.log('VERDICT: not one of the known shapes. Paste the three lines above.');
+  }
 }
 
 /** Everything currently stored, newest first, with its state. */
