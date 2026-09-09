@@ -23,10 +23,12 @@ import kotlinx.coroutines.launch
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
 import org.paramanuseniorshealth.notices.ui.ActivationScreen
+import org.paramanuseniorshealth.notices.ui.AttachmentActions
 import org.paramanuseniorshealth.notices.ui.NoticeListScreen
 import org.paramanuseniorshealth.notices.ui.NoticeViewModel
 import org.paramanuseniorshealth.notices.ui.NoticeViewerScreen
 import org.paramanuseniorshealth.notices.ui.Screen
+import org.paramanuseniorshealth.notices.ui.ShareText
 import org.paramanuseniorshealth.notices.ui.SettingsScreen
 import org.paramanuseniorshealth.notices.ui.rememberNotificationAccessState
 import org.paramanuseniorshealth.notices.ui.theme.ParamanuNoticesTheme
@@ -106,6 +108,7 @@ private fun NoticesApp(
     val officeInfo by viewModel.officeInfo.collectAsStateWithLifecycle()
     val testingUnlocked by viewModel.testingUnlocked.collectAsStateWithLifecycle()
     val revoked by viewModel.revoked.collectAsStateWithLifecycle()
+    val downloadingPdf by viewModel.downloadingPdf.collectAsStateWithLifecycle()
 
     val access = rememberNotificationAccessState()
     val context = LocalContext.current
@@ -159,6 +162,18 @@ private fun NoticesApp(
                 onOpenNotificationSettings = access::request,
                 onToggleExpanded = viewModel::toggleExpanded,
                 onOpenImage = { viewModel.show(Screen.Viewer(it.id)) },
+                downloadingPdf = downloadingPdf,
+                onOpenPdf = { notice ->
+                    // Opening needs a Context, so the attempt is passed in as a lambda and the view
+                    // model keeps none -- the same arrangement as onSendTest above.
+                    viewModel.openPdf(
+                        notice = notice,
+                        open = { file -> AttachmentActions.open(context, file) },
+                        onUnavailable = {
+                            notice.pdfUrl?.let { AttachmentActions.openUrl(context, it) }
+                        },
+                    )
+                },
                 onToggleSelection = viewModel::toggleSelection,
                 onClearSelection = viewModel::clearSelection,
                 onDeleteSelected = viewModel::deleteSelected,
@@ -201,7 +216,11 @@ private fun NoticesApp(
             BackHandler { viewModel.backToNotices() }
             var notice by remember(current.noticeId) { mutableStateOf<NoticeEntity?>(null) }
             LaunchedEffect(current.noticeId) { notice = viewModel.notice(current.noticeId) }
-            NoticeViewerScreen(notice = notice, onBack = viewModel::backToNotices)
+            NoticeViewerScreen(
+                notice = notice,
+                onBack = viewModel::backToNotices,
+                shareText = notice?.let { ShareText.build(listOf(it)) }.orEmpty(),
+            )
         }
     }
 }

@@ -41,4 +41,27 @@ data class NoticeEntity(
      * it was chosen for a small frame, and the expanded row shows both.
      */
     val pdfUrl: String? = null,
+    /**
+     * A link found in the notice text, shown as a preview card.
+     *
+     * Resolved entirely by the sender: [linkTitle], [linkImage] and [linkSite] arrive already
+     * filled in, and this app never fetches or parses a web page. Four hundred phones each
+     * scraping the same URL inside onMessageReceived would be four hundred chances to lose a
+     * notice over a slow site, to save one lookup.
+     *
+     * The three display fields degrade independently, and this is the case that matters: a
+     * [linkUrl] with all three empty means the sender could not resolve a card and the row shows a
+     * plain tappable link. Losing the decoration is cosmetic; losing the link would leave a notice
+     * that no longer says where to go.
+     */
+    val linkUrl: String? = null,
+    /** The target page's title, or the video title for a YouTube link. May be absent. */
+    val linkTitle: String? = null,
+    /**
+     * The site's logo, or a YouTube still. May be absent -- notably when the site has no icon the
+     * favicon service knows, which the sender checks for rather than sending a URL that 404s.
+     */
+    val linkImage: String? = null,
+    /** The host, or `YouTube`. The small grey line on the card. */
+    val linkSite: String? = null,
 )

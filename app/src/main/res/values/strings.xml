@@ -35,6 +35,19 @@
     <string name="action_open_pdf">Open the full notice</string>
     <string name="dialog_cancel">Cancel</string>
 
+    <!-- Attachments. "a copy" in Save, because the notice itself stays in the app either way. -->
+    <string name="action_open_with">Open</string>
+    <string name="action_share">Share</string>
+    <string name="action_save">Save a copy</string>
+    <string name="action_share_chooser">Share this notice</string>
+    <string name="attachment_downloading">Getting the notice…</string>
+    <string name="toast_saved">Saved.</string>
+    <string name="toast_save_failed">Could not save that. Try another folder.</string>
+    <string name="toast_pdf_opening_online">Opening it on the website instead.</string>
+
+    <!-- Link preview card -->
+    <string name="link_open">Open link</string>
+
     <!-- Viewer -->
     <string name="viewer_no_image">The notice image is not saved on this phone.</string>
 

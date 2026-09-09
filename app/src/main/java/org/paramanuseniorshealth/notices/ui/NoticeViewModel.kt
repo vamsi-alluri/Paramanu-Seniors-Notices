@@ -120,9 +120,52 @@ class NoticeViewModel(
     private val _revoked = MutableStateFlow(activation.isRevoked)
     val revoked: StateFlow<Boolean> = _revoked.asStateFlow()
 
+    /**
+     * Notices whose circular is downloading right now.
+     *
+     * A set rather than a single id because the list is scrollable and nothing stops a user from
+     * tapping two rows. Held here rather than in the composable so it survives the row scrolling
+     * out of view and back -- a download that silently restarted every time the row recomposed
+     * would look like a button that does nothing.
+     */
+    private val _downloadingPdf = MutableStateFlow<Set<Long>>(emptySet())
+    val downloadingPdf: StateFlow<Set<Long>> = _downloadingPdf.asStateFlow()
+
     init {
         refreshActivation()
         refreshOfficeInfo()
+    }
+
+    /**
+     * Fetches the circular if needed, then hands it to [open].
+     *
+     * [open] returns false when no app on the phone can display a PDF, and [onUnavailable] is the
+     * caller's escape to the website -- so the tap always leads somewhere, whether the file is
+     * cached, downloadable, or neither.
+     *
+     * Re-entry is guarded on the notice id: a second tap while the first download is in flight is
+     * ignored rather than starting a duplicate.
+     */
+    fun openPdf(
+        notice: NoticeEntity,
+        open: (java.io.File) -> Boolean,
+        onUnavailable: () -> Unit,
+    ) {
+        if (notice.id in _downloadingPdf.value) return
+        _downloadingPdf.value = _downloadingPdf.value + notice.id
+        viewModelScope.launch {
+            try {
+                val file = notices.pdfFile(notice)
+                if (file == null || !open(file)) {
+                    // Either the download failed or nothing can open a PDF. Both end at the
+                    // website, which needs a connection -- but so did getting this far.
+                    _messages.tryEmit(R.string.toast_pdf_opening_online)
+                    onUnavailable()
+                }
+            } finally {
+                _downloadingPdf.value = _downloadingPdf.value - notice.id
+            }
+        }
     }
 
     /** Keeps whatever is cached when the fetch fails, rather than emptying the header. */

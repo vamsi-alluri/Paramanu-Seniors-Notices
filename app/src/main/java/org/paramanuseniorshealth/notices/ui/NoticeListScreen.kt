@@ -1,9 +1,6 @@
 package org.paramanuseniorshealth.notices.ui
 
-import android.content.ActivityNotFoundException
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
@@ -88,6 +85,9 @@ fun NoticeListScreen(
     onOpenNotificationSettings: () -> Unit,
     onToggleExpanded: (Long) -> Unit,
     onOpenImage: (NoticeEntity) -> Unit,
+    /** Notices whose circular is downloading. Held by the view model so it survives scrolling. */
+    downloadingPdf: Set<Long>,
+    onOpenPdf: (NoticeEntity) -> Unit,
     onToggleSelection: (Long) -> Unit,
     onClearSelection: () -> Unit,
     onDeleteSelected: () -> Unit,
@@ -197,6 +197,8 @@ fun NoticeListScreen(
                             },
                             onLongClick = { onToggleSelection(notice.id) },
                             onOpenImage = { onOpenImage(notice) },
+                            downloading = notice.id in downloadingPdf,
+                            onOpenPdf = { onOpenPdf(notice) },
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
@@ -312,6 +314,8 @@ private fun NoticeRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onOpenImage: () -> Unit,
+    downloading: Boolean,
+    onOpenPdf: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -321,7 +325,13 @@ private fun NoticeRow(
     // sharing a URL share one download and one decoded bitmap.
     val photo: File? = NoticeImageStore.cachedImage(context, notice.logId)
     val pdfRender: File? = NoticeImageStore.cachedPdfRender(context, notice.logId)
-    val thumbModel: Any? = photo ?: pdfRender ?: notice.imageUrl?.takeIf { it.isNotBlank() }
+    val linkImage: File? = NoticeImageStore.cachedLinkImage(context, notice.logId)
+    // Local copy first, so a notice still shows its picture with no connection; the URL is the
+    // fallback for a render that has since been pruned. A link-only notice falls back to the card's
+    // logo, so a row is never left with nothing where every other row has something.
+    val thumbModel: Any? = photo ?: pdfRender ?: linkImage
+        ?: notice.imageUrl?.takeIf { it.isNotBlank() }
+        ?: notice.linkImage?.takeIf { it.isNotBlank() }
 
     val target = MaterialTheme.colorScheme.let {
         when {
@@ -377,29 +387,18 @@ private fun NoticeRow(
                     )
                 }
 
-                // Both attachments are shown when both exist: the photo is what the sender chose,
-                // the render is the official circular, and neither substitutes for the other.
-                listOfNotNull(photo, pdfRender).forEach { file ->
-                    AsyncImage(
-                        model = file,
-                        contentDescription = notice.title,
-                        contentScale = ContentScale.FillWidth,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 12.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .combinedClickable(onClick = onOpenImage, onLongClick = onLongClick),
-                    )
-                }
-
-                notice.pdfUrl?.takeIf { it.isNotBlank() }?.let { url ->
-                    TextButton(
-                        onClick = { context.openUrl(url) },
-                        modifier = Modifier.padding(top = 4.dp),
-                    ) {
-                        Text(stringResource(R.string.action_open_pdf))
-                    }
-                }
+                NoticeAttachments(
+                    notice = notice,
+                    photo = photo,
+                    pdfRender = pdfRender,
+                    // The same text a multi-select share produces, so a notice passed on from here
+                    // and one passed on from there read identically to whoever receives it.
+                    shareText = ShareText.build(listOf(notice)),
+                    downloading = downloading,
+                    onOpenImage = onOpenImage,
+                    onOpenPdf = onOpenPdf,
+                    onLongClick = onLongClick,
+                )
             } else if (notice.body.isNotBlank()) {
                 Text(
                     text = notice.body,
@@ -411,13 +410,5 @@ private fun NoticeRow(
     }
 }
 
-private fun Context.openUrl(url: String) {
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(BodyText.normalise(url)))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    try {
-        startActivity(intent)
-    } catch (_: ActivityNotFoundException) {
-        // No browser installed. Nothing useful to offer, and crashing over a tapped link would be
-        // a poor trade for a notice the user can still read in full.
-    }
-}
+/** Delegates so there is one implementation of "open a link", shared with the attachment path. */
+private fun Context.openUrl(url: String) = AttachmentActions.openUrl(this, url)

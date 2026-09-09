@@ -41,6 +41,12 @@ class NoticeMessagingService : FirebaseMessagingService() {
         val logId = data["logId"]
         val imageUrl = data["imageUrl"]?.takeIf { it.isNotBlank() }
         val pdfUrl = data["pdfUrl"]?.takeIf { it.isNotBlank() }
+        // Resolved by the sender, never here: see NoticeEntity.linkUrl. All four may be absent, and
+        // linkUrl may arrive alone when the sender could not resolve a card.
+        val linkUrl = data["linkUrl"]?.takeIf { it.isNotBlank() }
+        val linkTitle = data["linkTitle"]?.takeIf { it.isNotBlank() }
+        val linkImage = data["linkImageUrl"]?.takeIf { it.isNotBlank() }
+        val linkSite = data["linkSite"]?.takeIf { it.isNotBlank() }
         val subscription = Subscription.fromCategory(data["category"])
 
         // onMessageReceived already runs off the main thread and the service is held alive for the
@@ -59,25 +65,37 @@ class NoticeMessagingService : FirebaseMessagingService() {
                 return@runBlocking
             }
 
-            // Saved before the PDF is fetched: a slow or dead URL must never cost a history entry.
+            // Saved before anything is fetched: a slow or dead URL must never cost a history entry.
             val isNew = app.repository.save(
                 title = title,
                 body = body,
                 logId = logId,
                 imageUrl = imageUrl,
                 pdfUrl = pdfUrl,
+                linkUrl = linkUrl,
+                linkTitle = linkTitle,
+                linkImage = linkImage,
+                linkSite = linkSite,
             )
 
-            // Both attachments are fetched when both are present -- they are not alternatives, and
-            // the expanded row shows each. Fetching serves double duty: one of these bitmaps goes
-            // into the tray notification and the same files back the in-app row, so the UI never
-            // performs network I/O and the notice stays readable offline.
+            // Every attachment present is fetched -- they are not alternatives, and the expanded row
+            // shows each. Fetching serves double duty: one of these bitmaps goes into the tray
+            // notification and the same files back the in-app row, so the UI never performs network
+            // I/O and the notice stays readable offline.
+            //
+            // The PDF here is only page one, rendered. The circular itself is downloaded when the
+            // user taps to open it: holding a 2MB download inside this service's budget, for a file
+            // most people never open, would pay the cost for everyone to benefit nobody.
             val picture = if (logId != null) {
                 val photo = imageUrl?.let { NoticeImageStore.fetchImage(applicationContext, it, logId) }
                 val rendered = pdfUrl?.let { NoticeImageStore.fetchPdfRender(applicationContext, it, logId) }
+                val card = linkImage?.let { NoticeImageStore.fetchLinkImage(applicationContext, it, logId) }
+
                 // The sender's own picture wins the tray: it was chosen for a small frame, whereas
-                // an A4 page shrunk to notification size is barely legible.
-                photo ?: rendered
+                // an A4 page shrunk to notification size is barely legible. The card image comes
+                // last and only when it is a picture rather than a logo -- a YouTube still fills a
+                // notification well, a 128px favicon stretched across one looks broken.
+                photo ?: rendered ?: card?.takeIf { TrayArtwork.isPictureWorthy(it) }
             } else {
                 null
             }

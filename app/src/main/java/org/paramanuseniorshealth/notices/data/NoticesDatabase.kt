@@ -20,7 +20,7 @@ import androidx.sqlite.execSQL
  */
 @Database(
     entities = [NoticeEntity::class],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class NoticesDatabase : RoomDatabase() {
@@ -43,6 +43,23 @@ abstract class NoticesDatabase : RoomDatabase() {
         }
 
         /**
+         * Adds the four link-preview columns.
+         *
+         * Four separate columns rather than one JSON blob because Room can query and migrate
+         * columns, and because each field genuinely arrives on its own: a site with no favicon the
+         * service recognises yields a title and no image, and a JS-rendered page yields an image
+         * and no title. A blob would make "which of these is missing" a parsing question.
+         */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(connection: SQLiteConnection) {
+                connection.execSQL("ALTER TABLE notices ADD COLUMN linkUrl TEXT")
+                connection.execSQL("ALTER TABLE notices ADD COLUMN linkTitle TEXT")
+                connection.execSQL("ALTER TABLE notices ADD COLUMN linkImage TEXT")
+                connection.execSQL("ALTER TABLE notices ADD COLUMN linkSite TEXT")
+            }
+        }
+
+        /**
          * Opened from two entry points that can race -- the Activity and the FCM service, the
          * latter able to start with no Activity ever having run -- so creation is double-checked
          * rather than lazy-per-caller.
@@ -53,7 +70,7 @@ abstract class NoticesDatabase : RoomDatabase() {
                     context.applicationContext,
                     NoticesDatabase::class.java,
                     "notices.db",
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
     }
 }

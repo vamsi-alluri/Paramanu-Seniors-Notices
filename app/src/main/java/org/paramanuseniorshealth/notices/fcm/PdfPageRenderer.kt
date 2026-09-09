@@ -1,30 +1,28 @@
 package org.paramanuseniorshealth.notices.fcm
 
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Rect
 import android.graphics.pdf.PdfRenderer
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import java.io.File
+import kotlin.math.max
 
 /**
- * Turns page one of a notice PDF into a bitmap suitable for a tray notification.
+ * Turns page one of a notice PDF into a bitmap.
  *
- * Two constraints shape everything here.
+ * **What changed, and why it matters.** This used to render straight onto an 800x400 canvas and
+ * write *that* to disk, on the reasoning that the tray was the only consumer. It was not: the same
+ * file backed the in-app viewer, so an A4 page reached the reader at roughly 283x400 pixels with
+ * white bars either side, and pinch-to-zoom had nothing to zoom into. The comments even claimed the
+ * full render was what got stored, which made the bug invisible to anyone reading the code.
  *
- * **BigPictureStyle wants roughly 2:1 landscape and centre-crops anything else.** Notices are A4
- * portrait, so letting the system crop would silently remove the letterhead at the top and the date
- * and signature at the bottom -- precisely the parts that make a notice look official rather than
- * like a rumour. The page is therefore letterboxed onto a 2:1 canvas here, where we choose what is
- * lost (nothing) instead of the framework choosing.
+ * So the render is now page-sized -- large enough to read a circular's body text at arm's length --
+ * and [TrayArtwork] narrows it for the notification. Two consumers, two sizes, neither pretending
+ * to be the other.
  *
- * **A notification crosses a Binder transaction capped near 1MB.** `ARGB_8888` costs four bytes a
- * pixel, so the 800x400 target is 1.28MB on its own -- over the limit and enough to throw
- * TransactionTooLargeException, which loses the entire notification rather than just the picture.
- * [toNotificationBitmap] copies to `RGB_565` at two bytes a pixel (640KB) for the tray. The full
- * ARGB render is what gets written to disk for the in-app viewer, where no such cap applies.
+ * [TARGET_WIDTH] and [TARGET_HEIGHT] remain because [fitLetterbox] is shared geometry, used here
+ * and by the tray, and it carries the integer-overflow-safe arithmetic and the tests.
  */
 object PdfPageRenderer {
 
@@ -33,6 +31,16 @@ object PdfPageRenderer {
     /** 2:1, matching what BigPictureStyle expects. */
     const val TARGET_WIDTH = 800
     const val TARGET_HEIGHT = 400
+
+    /**
+     * The long edge of a stored render.
+     *
+     * An A4 page at 1600px is about 190dpi -- enough that the body text of a circular is legible
+     * once zoomed, which is the whole point of keeping a render at all. Larger buys little: the
+     * reader who needs more than this is better served by the PDF itself, which is now one tap
+     * away.
+     */
+    private const val RENDER_LONG_EDGE = 1600
 
     /** Bars match the paper rather than the framework's black, so a notice still reads as a notice. */
     private const val PAPER = Color.WHITE
@@ -47,8 +55,8 @@ object PdfPageRenderer {
      * Largest centred box of [srcWidth]:[srcHeight] aspect that fits inside [dstWidth]x[dstHeight].
      *
      * For an A4 portrait page in an 800x400 frame this yields roughly 283x400 centred horizontally:
-     * the whole page, small, with generous white margins either side. Small is acceptable -- the
-     * tray image is a recognition cue, and the text headline carries the actual message.
+     * the whole page, small, with generous margins either side. Small is acceptable in the tray --
+     * the image is a recognition cue and the headline carries the message.
      */
     fun fitLetterbox(srcWidth: Int, srcHeight: Int, dstWidth: Int, dstHeight: Int): Box {
         if (srcWidth <= 0 || srcHeight <= 0 || dstWidth <= 0 || dstHeight <= 0) {
@@ -71,7 +79,31 @@ object PdfPageRenderer {
     }
 
     /**
-     * Renders page one of [file], letterboxed onto a [TARGET_WIDTH]x[TARGET_HEIGHT] canvas.
+     * Whether [file] is a PDF this device can open.
+     *
+     * Used before a downloaded circular is kept and handed to a viewer: a captive-portal login page
+     * or an HTML error page saved as `.pdf` downloads perfectly and then fails in whichever app the
+     * user chose, where the failure looks like their PDF reader being broken.
+     */
+    fun isReadablePdf(file: File): Boolean {
+        if (!file.exists() || file.length() == 0L) return false
+        var descriptor: ParcelFileDescriptor? = null
+        var renderer: PdfRenderer? = null
+        return try {
+            descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            renderer = PdfRenderer(descriptor)
+            renderer.pageCount >= 1
+        } catch (e: Exception) {
+            Log.w(TAG, "Not a readable PDF: ${file.name}", e)
+            false
+        } finally {
+            runCatching { renderer?.close() }
+            runCatching { descriptor?.close() }
+        }
+    }
+
+    /**
+     * Renders page one of [file] at up to [RENDER_LONG_EDGE] on its long edge.
      *
      * Returns null for anything that is not a readable PDF -- password-protected files included,
      * which PdfRenderer refuses outright. Callers fall back to a text-only notification, never to
@@ -87,22 +119,19 @@ object PdfPageRenderer {
             if (renderer.pageCount < 1) return null
 
             renderer.openPage(0).use { page ->
-                val box = fitLetterbox(page.width, page.height, TARGET_WIDTH, TARGET_HEIGHT)
+                val longEdge = max(page.width, page.height).coerceAtLeast(1)
+                val scale = RENDER_LONG_EDGE.toDouble() / longEdge
+                val width = (page.width * scale).toInt().coerceAtLeast(1)
+                val height = (page.height * scale).toInt().coerceAtLeast(1)
 
-                // PdfRenderer will only draw into ARGB_8888, so the page is rendered at its final
-                // on-canvas size and then composited, rather than rendered large and downscaled.
-                val pageBitmap = Bitmap.createBitmap(box.width, box.height, Bitmap.Config.ARGB_8888)
+                // PdfRenderer will only draw into ARGB_8888, and only onto what it is given, so the
+                // page is rendered at its final size rather than rendered large and downscaled.
+                val pageBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                // Erased first: a PDF page is transparent where nothing is drawn, and transparent
+                // black behind body text is unreadable in a dark-themed viewer.
                 pageBitmap.eraseColor(PAPER)
                 page.render(pageBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-
-                val canvasBitmap =
-                    Bitmap.createBitmap(TARGET_WIDTH, TARGET_HEIGHT, Bitmap.Config.ARGB_8888)
-                Canvas(canvasBitmap).apply {
-                    drawColor(PAPER)
-                    drawBitmap(pageBitmap, null, Rect(box.left, box.top, box.right, box.bottom), null)
-                }
-                pageBitmap.recycle()
-                canvasBitmap
+                pageBitmap
             }
         } catch (e: Exception) {
             Log.w(TAG, "Could not render ${file.name}", e)
@@ -112,12 +141,4 @@ object PdfPageRenderer {
             runCatching { descriptor?.close() }
         }
     }
-
-    /**
-     * Halves the byte cost for the trip through Binder. Text suffers slightly at 16-bit colour;
-     * that is the right trade against losing the notification outright, and the in-app viewer still
-     * shows the full-quality render.
-     */
-    fun toNotificationBitmap(source: Bitmap): Bitmap =
-        source.copy(Bitmap.Config.RGB_565, false) ?: source
 }
