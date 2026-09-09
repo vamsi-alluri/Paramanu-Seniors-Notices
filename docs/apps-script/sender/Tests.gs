@@ -290,6 +290,11 @@ function t_sendNotice_(created) {
   t_ok_('sendNotice records the send', stored && stored.title === '[selftest] notice');
   t_ok_('sendNotice records no error', !stored.error, stored.error || '');
   t_ok_('sendNotice captured the FCM name', !!stored.fcmName, stored.fcmName || 'missing');
+
+  // Who sent it. Compared against requireEditor_ rather than a literal so the test does not have
+  // to know which allowlisted person is running the suite.
+  t_ok_('sendNotice records sentBy', !!stored.sentBy, stored.sentBy || 'missing');
+  t_eq_('sentBy is the caller', stored.sentBy, requireEditor_());
 }
 
 function t_sendStatus_(created) {

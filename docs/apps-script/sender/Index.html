@@ -96,8 +96,8 @@
 
 <h2>Recently sent</h2>
 <table>
-  <thead><tr><th>When</th><th>Title</th><th>Message</th></tr></thead>
-  <tbody id="sent"><tr><td colspan="3">Loading...</td></tr></tbody>
+  <thead><tr><th>When</th><th>By</th><th>Title</th><th>Message</th></tr></thead>
+  <tbody id="sent"><tr><td colspan="4">Loading...</td></tr></tbody>
 </table>
 
 <script>
@@ -161,10 +161,11 @@
 
   function renderSent(rows) {
     var body = el('sent');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="3">Nothing sent yet.</td></tr>'; return; }
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="4">Nothing sent yet.</td></tr>'; return; }
     body.innerHTML = rows.map(function (r) {
       var when = r.sentAt ? new Date(r.sentAt).toLocaleString() : '';
       return '<tr class="' + (r.failed ? 'failed' : '') + '"><td>' + esc(when) +
+             '</td><td>' + esc(r.sentBy || '') +
              '</td><td>' + esc(r.title) + (r.failed ? ' (failed)' : '') +
              '</td><td>' + esc(r.body) + '</td></tr>';
     }).join('');

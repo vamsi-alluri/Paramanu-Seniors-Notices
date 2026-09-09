@@ -248,7 +248,7 @@ function checkPin_(pin) {
 }
 
 function sendNotice(title, body, category, pin) {
-  requireEditor_();
+  var by = requireEditor_();
   // Every path that reaches FCM checks the PIN, not just the QR one. The compose page is the more
   // dangerous of the two: it sends arbitrary text rather than one of two fixed messages.
   checkPin_(pin);
@@ -265,7 +265,7 @@ function sendNotice(title, body, category, pin) {
   var logId = nextLogId_();
   var sentAt = new Date().toISOString();
 
-  firebase_('put', '/sent/' + logId + '.json', { title: title, body: body, category: category, sentAt: sentAt, scriptVersion: SCRIPT_VERSION });
+  firebase_('put', '/sent/' + logId + '.json', { title: title, body: body, category: category, sentAt: sentAt, sentBy: by, scriptVersion: SCRIPT_VERSION });
 
   // Data-only. A `notification` block here would make the FCM SDK draw the tray notification
   // itself while the app is backgrounded: onMessageReceived would never run, the entitlement check
@@ -298,7 +298,7 @@ function listSent(limit) {
   var rows = [];
   for (var logId in all) {
     if (!all.hasOwnProperty(logId)) continue;
-    rows.push({ logId: logId, title: all[logId].title || '', body: all[logId].body || '', category: all[logId].category || 'NOTICES', sentAt: all[logId].sentAt || '', failed: !!all[logId].error });
+    rows.push({ logId: logId, title: all[logId].title || '', body: all[logId].body || '', category: all[logId].category || 'NOTICES', sentAt: all[logId].sentAt || '', sentBy: all[logId].sentBy || '', failed: !!all[logId].error });
   }
   rows.sort(function (a, b) { return Number(b.logId) - Number(a.logId); });
   return rows;
@@ -366,6 +366,8 @@ function statusMessage_(which) {
  * that asked for the daily status and lands on the quiet channel. Notices are untouched.
  */
 function sendStatus(which, pin) {
+  // Attribution is not needed here: the actual write happens in sendNotice below, which records
+  // the caller itself. This call stays because it refuses a non-editor before the duplicate scan.
   requireEditor_();
   checkPin_(pin);
 
