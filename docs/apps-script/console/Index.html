@@ -409,7 +409,7 @@
     body.innerHTML = page.map(function (r) {
       var state = r.revoked ? '<span class="pill revoked">Revoked</span>'
                 : r.claimed ? '<span class="pill used">In use</span>'
-                            : '<span class="pill free">Not used</span>';
+                            : '<span class="pill free">Unused</span>';
 
       var actions = [];
       if (r.revoked) {

@@ -348,26 +348,40 @@ function t_pushRevoke_() {
 }
 
 function t_doPost_() {
-  function post(body) {
-    return JSON.parse(doPost({ postData: { contents: JSON.stringify(body) } }).getContent());
+  function post(pathInfo, body) {
+    return JSON.parse(doPost({
+      pathInfo: pathInfo,
+      postData: { contents: JSON.stringify(body) }
+    }).getContent());
   }
 
-  var unknown = post({ action: 'nonsense' });
-  t_ok_('doPost refuses an unknown action', !unknown.ok, unknown.error || '');
-  t_ok_('the refusal names the action', String(unknown.error).indexOf('nonsense') >= 0, unknown.error);
+  var unknown = post('nonsense', {});
+  t_ok_('doPost refuses an unknown endpoint', !unknown.ok, unknown.error || '');
+  t_ok_('the refusal names the path', String(unknown.error).indexOf('nonsense') >= 0, unknown.error);
 
-  var malformed = post({ action: 'revoke', code: 'nope' });
+  var bare = post('', {});
+  t_ok_('doPost refuses the bare /exec', !bare.ok, bare.error || '');
+
+  var malformed = post('revoke', { code: 'nope' });
   t_ok_('doPost refuses a malformed code', !malformed.ok, malformed.error || '');
 
-  // doPost answers with JSON rather than throwing, so a console that cannot parse a thrown Apps
+  // doPost answers with JSON rather than throwing, so a caller that cannot parse a thrown Apps
   // Script error page still learns what happened.
   var empty = JSON.parse(doPost({}).getContent());
-  t_ok_('doPost survives an empty body', !empty.ok, empty.error || '');
+  t_ok_('doPost survives an empty request', !empty.ok, empty.error || '');
 
-  var good = post({ action: 'revoke', code: 'ZZZZZZZZ', by: 'someone-else@example.org' });
+  var good = post('revoke', { code: 'ZZZZZZZZ', by: 'someone-else@example.org' });
   t_ok_('doPost pushes a valid revoke', good.ok, good.error || '');
   t_eq_('doPost attributes to the token, not the payload', good.by, requireEditor_());
   t_eq_('a mismatched claim is recorded', good.claimedBy, 'someone-else@example.org');
+
+  // A redirect can strip the path, so the body's action still routes.
+  var viaBody = post(undefined, { action: 'revoke', code: 'ZZZZZZZZ' });
+  t_ok_('the body action still routes when the path is lost', viaBody.ok, viaBody.error || '');
+
+  // A leading slash is what an assembled URL actually produces.
+  var slashed = post('/revoke', { code: 'ZZZZZZZZ' });
+  t_ok_('a leading slash in pathInfo still routes', slashed.ok, slashed.error || '');
 }
 
 function t_testConnection_() {

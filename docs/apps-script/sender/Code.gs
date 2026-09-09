@@ -443,14 +443,23 @@ function pushRevoke_(code) {
  * that can leak, and it would say nothing about who acted.
  *
  * No PIN. The PIN guards the paths where arbitrary text reaches every phone; this one cannot.
+ *
+ * ROUTED BY PATH. Apps Script fills `e.pathInfo` with whatever follows /exec, so the console posts
+ * to `<sender>/exec/revoke` and this reads "revoke". The body's `action` is accepted as well, because
+ * a request that arrives through a redirect can lose its path, and a revoke that is silently
+ * ignored is worse than one that arrives by either route.
+ *
+ * Anything else is refused rather than defaulted: a future second endpoint must be added here
+ * deliberately, not inherited by whatever happens to POST to the bare /exec.
  */
 function doPost(e) {
   var out = { ok: false };
   try {
     var caller = requireEditor_();
     var payload = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    var route = String((e && e.pathInfo) || payload.action || '').replace(/^\/+|\/+$/g, '');
 
-    if (payload.action !== 'revoke') throw new Error('Unknown action: ' + payload.action);
+    if (route !== 'revoke') throw new Error('Unknown endpoint: "' + route + '". Expected /exec/revoke.');
     if (!isValidRevokeCode_(payload.code)) throw new Error('Not a valid code.');
 
     out.fcmName = pushRevoke_(payload.code);

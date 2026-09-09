@@ -13,7 +13,7 @@
  *        SERVICE_ACCOUNT_JSON  = <the entire JSON file contents>
  *        DATABASE_URL          = https://paramanu-seniors-default-rtdb.asia-southeast1.firebasedatabase.app
  *        ALLOWED_EDITORS       = <comma-separated Google account emails permitted to use this>
- *        SENDER_URL            = <the sender web app's /exec URL>   (optional; see below)
+ *        SENDER_URL            = <the sender web app's /exec URL, no trailing path>  (optional)
  *     Take DATABASE_URL from the Realtime Database page; it is region qualified.
  *  5. Deploy -> Web app.
  *       Execute as:     User accessing the web app   <- REQUIRED, see requireEditor_
@@ -368,8 +368,12 @@ function pushRevokeToSender_(code, by) {
   var url = PropertiesService.getScriptProperties().getProperty('SENDER_URL');
   if (!url) return { ok: false, error: 'No SENDER_URL is set, so the revoke was not pushed.' };
 
+  // Routed by path: the sender reads e.pathInfo. `action` rides along in the body too, because a
+  // redirected request can arrive with its path stripped.
+  var endpoint = url.replace(/\/+$/, '') + '/revoke';
+
   try {
-    var response = UrlFetchApp.fetch(url, {
+    var response = UrlFetchApp.fetch(endpoint, {
       method: 'post',
       contentType: 'application/json',
       headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
@@ -377,10 +381,26 @@ function pushRevokeToSender_(code, by) {
       muteHttpExceptions: true,
       followRedirects: true
     });
-    var parsed = JSON.parse(response.getContentText());
-    // A refusal arrives as an HTML sign-in page, not JSON, when the deployment is misconfigured;
-    // JSON.parse throws on that and the catch below turns it into a readable error.
-    return parsed && typeof parsed.ok !== 'undefined' ? parsed : { ok: false, error: 'Unexpected reply from the sender.' };
+
+    var text = response.getContentText();
+
+    // The failure that actually happens is an HTML page where JSON was expected: Google's sign-in
+    // page when the token is not accepted, or Apps Script's error page when the deployment has not
+    // been given a New version and doPost does not yet exist in the version /exec serves.
+    // "Unexpected token '<'" tells a staff member nothing, so name the two causes instead.
+    if (text.charAt(0) === '<') {
+      return {
+        ok: false,
+        error: 'The sender replied with a web page instead of JSON (HTTP ' + response.getResponseCode() +
+               '). Either the sender has not been redeployed as a New version, so /exec/revoke does ' +
+               'not exist yet, or this console is not permitted to call it.'
+      };
+    }
+
+    var parsed = JSON.parse(text);
+    return parsed && typeof parsed.ok !== 'undefined'
+      ? parsed
+      : { ok: false, error: 'Unexpected reply from the sender: ' + text.slice(0, 200) };
   } catch (err) {
     return { ok: false, error: String(err && err.message ? err.message : err) };
   }
