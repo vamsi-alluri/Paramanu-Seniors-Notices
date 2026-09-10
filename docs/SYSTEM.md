@@ -4,7 +4,8 @@ Everything needed to pick this project up cold: how the pieces fit, what is done
 the traps that cost real time to find.
 
 **Status (2026-09-09):** **approved and live in Play closed testing, with 14 testers.** The privacy
-policy rejections are resolved. Source is at `versionCode 6`, `versionName 0.3.2`.
+policy rejections are resolved. Source is at `versionCode 8`, `versionName 0.4.0` — the audit trail,
+pushed revocation, printing and attachment release.
 
 Two things this changed, both of which now matter:
 
@@ -100,7 +101,7 @@ ui/          ActivationScreen  NoticeListScreen  SettingsScreen  NoticeViewerScr
              NotificationAccess  ShareText (tested)  theme/
 ```
 
-**Tests:** 67 JVM unit tests. `GeneratedCodeCompatibilityTest` is the important one — it pins the
+**Tests:** 84 JVM unit tests. `GeneratedCodeCompatibilityTest` is the important one — it pins the
 Kotlin validator against codes produced by the JavaScript generator. If those two drift, every
 printed slip is rejected on every phone with a message blaming the user for mistyping, discovered
 at a counter by someone in their eighties.
@@ -471,9 +472,9 @@ the code screen.
 1. ~~**Publish `docs/privacy-policy.md`**~~ — **done.** Live at
    paramanuseniorshealth.org/privacy-policy-app/, alongside the website-only policy. Keep both.
 2. ~~**Upload and resubmit.**~~ — **done.** Approved in closed testing.
-3. **Device-verify `versionCode 4`.** The welcome notice, the test button, the contact links and the
-   absence of a "Testing" entry in system notification settings have **never run on hardware** — the
-   phone was off the bridge when they were written.
+3. ~~**Device-verify.**~~ — **done.** `versionCode 8` was exercised on hardware before release:
+   codes, revoke, restore, release, printing and the attachment work. What remains unverified is
+   the Apps Script side until it is pasted and deployed — see item 0.
 4. **Confirm `/codes/P1AYREVQ` exists and is unclaimed** after the launch-day clear-out. It was
    destroyed by a root import once already. If the reviewer cannot get past the code screen,
    nothing else matters.
