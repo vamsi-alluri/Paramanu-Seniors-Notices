@@ -129,6 +129,7 @@ fun ActivationScreen(
                     when (error) {
                         RedeemResult.Mistyped -> R.string.activation_error_mistyped
                         RedeemResult.NotAccepted -> R.string.activation_error_not_accepted
+                        RedeemResult.SameCode -> R.string.activation_error_same_code
                         RedeemResult.Offline -> R.string.activation_error_offline
                         RedeemResult.Success -> R.string.activation_error_not_accepted
                     }

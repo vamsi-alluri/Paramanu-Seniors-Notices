@@ -23,6 +23,7 @@
     <string name="activation_where_to_get_code">You can collect a code from the dispensary counter.</string>
     <string name="activation_error_mistyped">That code does not look right. Please check each character and try again.</string>
     <string name="activation_error_not_accepted">That code was not accepted. It may already have been used. Please ask at the counter.</string>
+    <string name="activation_error_same_code">That is the code this phone already had, and it has been stopped. Please ask at the counter for a new one.</string>
     <string name="activation_error_offline">Could not connect. Please check your internet and try again.</string>
 
     <!-- Notice list -->

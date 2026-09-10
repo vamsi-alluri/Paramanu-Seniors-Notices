@@ -33,6 +33,17 @@ sealed interface RedeemResult {
     /** Structurally fine, but the backend refused it -- unknown code, or already claimed. */
     data object NotAccepted : RedeemResult
 
+    /**
+     * The code already on this phone, typed again -- almost always the one that has just been
+     * stopped.
+     *
+     * Answered locally, without asking the server. The rules would refuse it anyway (a revoked code
+     * carries `usedBy` and `revoked`, and the write requires neither), but the refusal comes back
+     * indistinguishable from any other and would be reported as "may already have been used" -- to
+     * somebody holding the very slip that code is printed on.
+     */
+    data object SameCode : RedeemResult
+
     /** Could not reach the backend. Distinct from [NotAccepted] so the user is told to retry. */
     data object Offline : RedeemResult
 }

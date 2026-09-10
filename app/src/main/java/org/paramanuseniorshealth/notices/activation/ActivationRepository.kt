@@ -117,6 +117,11 @@ class ActivationRepository(private val context: Context) {
         if (!ActivationCode.isValid(rawCode)) return RedeemResult.Mistyped
         val code = ActivationCode.normalise(rawCode)
 
+        // Retyping the code this phone already holds. Answered here rather than by the server: the
+        // rules would refuse it, but only as a generic permission denial, and the user would be
+        // told their code "may already have been used" while holding the slip it is printed on.
+        if (code == storedCode) return RedeemResult.SameCode
+
         return withTimeoutOrNull(NETWORK_TIMEOUT_MS) {
             try {
                 // Reuse the existing anonymous account when there is one: signing in again would
