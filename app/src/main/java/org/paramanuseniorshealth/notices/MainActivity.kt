@@ -171,7 +171,12 @@ private fun NoticesApp(
             // consumes it, or every Scaffold would pad for a status bar that is already covered.
             RevokedBanner(
                 code = viewModel.activationCode,
-                onOpenSettings = { viewModel.show(Screen.Settings) },
+                checking = checking,
+                onRecheck = viewModel::recheckActivation,
+                // Already there: the button would go nowhere, and Settings carries its own
+                // Check again alongside the code and the helpdesk number.
+                onOpenSettings = if (screen is Screen.Settings) null
+                                 else ({ viewModel.show(Screen.Settings) }),
                 modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
             )
         }

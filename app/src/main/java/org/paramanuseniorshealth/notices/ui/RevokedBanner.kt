@@ -1,6 +1,7 @@
 package org.paramanuseniorshealth.notices.ui
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
@@ -30,7 +31,9 @@ import org.paramanuseniorshealth.notices.activation.ActivationCode
 @Composable
 fun RevokedBanner(
     code: String?,
-    onOpenSettings: () -> Unit,
+    checking: Boolean,
+    onRecheck: () -> Unit,
+    onOpenSettings: (() -> Unit)?,
     modifier: Modifier = Modifier,
 ) {
     Surface(
@@ -55,14 +58,28 @@ fun RevokedBanner(
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }
-            TextButton(
-                onClick = onOpenSettings,
-                modifier = Modifier.padding(top = 2.dp),
-            ) {
-                Text(
-                    text = stringResource(R.string.revoked_banner_action),
-                    style = MaterialTheme.typography.titleMedium,
-                )
+            // "Check again" first: it is the one they will press repeatedly, every time they come
+            // back from the helpdesk. "What to do" is read once, on the day they are cut off.
+            Row(modifier = Modifier.padding(top = 2.dp)) {
+                TextButton(onClick = onRecheck, enabled = !checking) {
+                    Text(
+                        text = stringResource(
+                            if (checking) R.string.settings_recheck_checking
+                            else R.string.settings_recheck_action
+                        ),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                // Omitted on the Settings screen itself, where it would be a button that visibly
+                // does nothing.
+                if (onOpenSettings != null) {
+                    TextButton(onClick = onOpenSettings) {
+                        Text(
+                            text = stringResource(R.string.revoked_banner_action),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                    }
+                }
             }
         }
     }
