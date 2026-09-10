@@ -50,11 +50,13 @@ fun SettingsScreen(
     subscriptions: Map<Subscription, Boolean>,
     activationCode: String?,
     revoked: Boolean,
+    checking: Boolean,
     testingUnlocked: Boolean,
     versionName: String,
     onSubscriptionChange: (Subscription, Boolean) -> Unit,
     onSendTest: () -> Unit,
     onUnlockTesting: () -> Unit,
+    onRecheck: () -> Unit,
     onEnterNewCode: () -> Unit,
     onReset: () -> Unit,
     onBack: () -> Unit,
@@ -186,10 +188,32 @@ fun SettingsScreen(
                 HorizontalDivider()
             }
 
-            // Offered only while revoked. At any other time the code screen is not somewhere a user
-            // has any reason to go, and putting a permanent door to it in Settings invites somebody
-            // to wander in and strand themselves.
+            // Both of these are offered only while revoked. At any other time the code screen is
+            // not somewhere a user has any reason to go, and a permanent door to it in Settings
+            // invites somebody to wander in and strand themselves.
             if (revoked) {
+                Column {
+                    Text(
+                        text = stringResource(R.string.settings_recheck),
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_recheck_explainer),
+                        style = MaterialTheme.typography.bodyLarge,
+                    )
+                    Button(
+                        onClick = onRecheck,
+                        enabled = !checking,
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) {
+                        Text(stringResource(
+                            if (checking) R.string.settings_recheck_checking
+                            else R.string.settings_recheck_action
+                        ))
+                    }
+                }
+                HorizontalDivider()
+
                 Column {
                     Text(
                         text = stringResource(R.string.settings_new_code),

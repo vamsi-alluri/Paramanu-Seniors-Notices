@@ -16,6 +16,8 @@ import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -117,6 +119,7 @@ private fun NoticesApp(
     val officeInfo by viewModel.officeInfo.collectAsStateWithLifecycle()
     val testingUnlocked by viewModel.testingUnlocked.collectAsStateWithLifecycle()
     val revoked by viewModel.revoked.collectAsStateWithLifecycle()
+    val checking by viewModel.checking.collectAsStateWithLifecycle()
     val downloadingPdf by viewModel.downloadingPdf.collectAsStateWithLifecycle()
 
     val access = rememberNotificationAccessState()
@@ -141,6 +144,11 @@ private fun NoticesApp(
             Toast.makeText(context, messageRes, Toast.LENGTH_LONG).show()
         }
     }
+
+    // Re-check whenever the app comes forward. Previously the only check was in the view model's
+    // init, which survives a trip through recents -- so a user whose code had been restored had to
+    // know to swipe the app away and reopen it, which nobody knows.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed() }
 
     // The permission prompt is deliberately not raised on the code screen: asking before the user
     // has any reason to expect notices is how a denial happens, and on Android 13+ a denial
@@ -235,6 +243,7 @@ private fun NoticesApp(
                 subscriptions = subscriptions,
                 activationCode = viewModel.activationCode,
                 revoked = revoked,
+                checking = checking,
                 testingUnlocked = testingUnlocked,
                 versionName = BuildConfig.VERSION_NAME,
                 onSubscriptionChange = viewModel::setSubscribed,
@@ -256,6 +265,7 @@ private fun NoticesApp(
                     }
                 },
                 onUnlockTesting = viewModel::unlockTesting,
+                onRecheck = viewModel::recheckActivation,
                 onEnterNewCode = viewModel::enterNewCode,
                 onReset = viewModel::reset,
                 onBack = viewModel::backToNotices,

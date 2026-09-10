@@ -123,6 +123,13 @@ class NoticeViewModel(
      */
     val revoked: StateFlow<Boolean> = activation.revoked
 
+    /** True while "Check again" is in flight, so the button can say so. */
+    private val _checking = MutableStateFlow(false)
+    val checking: StateFlow<Boolean> = _checking.asStateFlow()
+
+    /** When the server was last asked, for the resume throttle. Not persisted: per foreground run. */
+    private var lastCheckedAt = 0L
+
     /**
      * Notices whose circular is downloading right now.
      *
@@ -214,25 +221,71 @@ class NoticeViewModel(
      * their phone had no signal at launch would be indefensible.
      */
     fun refreshActivation() {
-        viewModelScope.launch {
-            when (activation.verify()) {
-                // suspendClaim and resumeClaim publish the change themselves, so there is nothing
-                // to mirror here.
-                ActivationState.Revoked -> activation.suspendClaim()
+        viewModelScope.launch { applyVerification() }
+    }
 
-                ActivationState.Active -> {
-                    // The fastest route back for a restored code, for anyone who does open the app.
-                    if (activation.isRevoked) {
-                        activation.resumeClaim()
-                        notices.clearRevokedNotice()
-                    }
+    /**
+     * Asks the server and applies the answer. Returns it so a caller can report the outcome.
+     *
+     * suspendClaim and resumeClaim publish the change themselves, so there is nothing to mirror
+     * into a local flag here.
+     */
+    private suspend fun applyVerification(): ActivationState {
+        val state = activation.verify()
+        when (state) {
+            ActivationState.Revoked -> activation.suspendClaim()
+
+            ActivationState.Active -> {
+                if (activation.isRevoked) {
+                    activation.resumeClaim()
+                    notices.clearRevokedNotice()
                 }
-
-                // Genuinely no claim on this device: a fresh install, or after a reset.
-                ActivationState.NotActivated -> _screen.value = Screen.Activation
-
-                ActivationState.Unknown -> Unit
             }
+
+            // Genuinely no claim on this device: a fresh install, or after a reset.
+            ActivationState.NotActivated -> _screen.value = Screen.Activation
+
+            ActivationState.Unknown -> Unit
+        }
+        lastCheckedAt = System.currentTimeMillis()
+        return state
+    }
+
+    /**
+     * Called whenever the app comes to the foreground.
+     *
+     * Without this the only check was in `init`, which runs when the view model is created -- so
+     * bringing the app forward from recents re-checked nothing, and a user whose code had been
+     * restored had to know to swipe the app away and reopen it. Nobody knows that.
+     *
+     * A revoked phone checks every time: its user is the one actively waiting for an answer, and
+     * they may be standing at the counter. An active phone is throttled, because switching between
+     * two apps should not open a database connection each way.
+     */
+    fun onResumed() {
+        val stale = System.currentTimeMillis() - lastCheckedAt >= RESUME_RECHECK_MS
+        if (activation.isRevoked || stale) refreshActivation()
+    }
+
+    /**
+     * The user pressing "Check again" after being told their code was restored.
+     *
+     * Always asks, however recently it last checked -- a throttle here would answer somebody who
+     * has just come off the phone to the helpdesk with silence. Says what happened either way,
+     * because a button that appears to do nothing is worse than no button.
+     */
+    fun recheckActivation() {
+        if (_checking.value) return
+        _checking.value = true
+        viewModelScope.launch {
+            val message = when (applyVerification()) {
+                ActivationState.Active -> R.string.toast_access_restored
+                ActivationState.Revoked -> R.string.toast_still_stopped
+                ActivationState.Unknown -> R.string.toast_check_failed
+                ActivationState.NotActivated -> R.string.toast_still_stopped
+            }
+            _messages.tryEmit(message)
+            _checking.value = false
         }
     }
 
@@ -351,6 +404,15 @@ class NoticeViewModel(
         private const val RESOLVE_ATTEMPTS = 5
         private const val RESOLVE_RETRY_MS = 200L
         private const val HIGHLIGHT_MS = 2_500L
+
+        /**
+         * How stale an answer may be before coming to the foreground re-asks.
+         *
+         * Short, because an app open is a natural moment to check and they are spread out across
+         * users -- unlike a broadcast, which wakes four hundred phones at once and is why the
+         * per-notice check had to move off the message path entirely.
+         */
+        private const val RESUME_RECHECK_MS = 60_000L
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {

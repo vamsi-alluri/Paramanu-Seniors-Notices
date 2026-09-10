@@ -98,6 +98,14 @@
     <string name="revoked_banner_action">What to do</string>
     <!-- Settings, when the code has been revoked. -->
     <string name="settings_code_revoked">This code has been stopped.</string>
+    <string name="settings_recheck">Has your code been turned back on?</string>
+    <string name="settings_recheck_explainer">If you have spoken to the helpdesk and they have turned your code back on, check here.</string>
+    <string name="settings_recheck_action">Check again</string>
+    <string name="settings_recheck_checking">Checking…</string>
+    <string name="toast_access_restored">Your code is working again. Notices will start arriving.</string>
+    <string name="toast_still_stopped">Your code is still stopped. Please speak to the helpdesk.</string>
+    <string name="toast_check_failed">Could not check just now. Please check your internet and try again.</string>
+
     <string name="settings_new_code">Enter a new code</string>
     <string name="settings_new_code_explainer">If the counter has given you a new slip, type it here. Your saved notices are kept.</string>
     <string name="settings_new_code_action">Enter a new code</string>
