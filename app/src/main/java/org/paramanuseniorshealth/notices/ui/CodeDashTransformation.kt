@@ -18,23 +18,21 @@ import org.paramanuseniorshealth.notices.activation.ActivationCode
  */
 object CodeDashTransformation : VisualTransformation {
 
-    private const val GROUP = 4
-
     override fun filter(text: AnnotatedString): TransformedText {
         val raw = text.text
-        if (raw.length <= GROUP) {
+        if (raw.length < ActivationCode.GROUP) {
             return TransformedText(text, OffsetMapping.Identity)
         }
 
-        val grouped = raw.substring(0, GROUP) + "-" + raw.substring(GROUP)
+        val grouped = raw.substring(0, ActivationCode.GROUP) + "-" + raw.substring(ActivationCode.GROUP)
 
         val mapping = object : OffsetMapping {
             // One character is inserted at index GROUP, so every position after it shifts by one.
             override fun originalToTransformed(offset: Int): Int =
-                if (offset <= GROUP) offset else (offset + 1).coerceAtMost(grouped.length)
+                if (offset <= ActivationCode.GROUP) offset else (offset + 1).coerceAtMost(grouped.length)
 
             override fun transformedToOriginal(offset: Int): Int =
-                if (offset <= GROUP) offset else (offset - 1).coerceAtMost(raw.length)
+                if (offset <= ActivationCode.GROUP) offset else (offset - 1).coerceAtMost(raw.length)
         }
 
         return TransformedText(AnnotatedString(grouped), mapping)
