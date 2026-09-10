@@ -215,10 +215,12 @@ function nextLogId_() {
 /**
  * Checks the staff PIN, with lockout.
  *
- * The PIN is the only thing standing between this web app and four hundred phones. It has to be
- * deployed as "Anyone with the link" for a QR scan to work without a Google sign-in, which means
- * anyone who learns the URL can reach these functions -- so an unlimited guessing budget against a
- * short numeric PIN would not be a lock at all.
+ * A second factor, not the only one. This was written when the web app had to be deployed as
+ * "Anyone with the link" so a QR scan worked without a Google sign-in, which meant anyone who
+ * learned the URL could reach these functions. That is no longer true: every entry point calls
+ * requireEditor_() first and an address outside ALLOWED_EDITORS is refused before any payload is
+ * read. The PIN stays on the compose path, which sends arbitrary text to four hundred phones, and
+ * can be dropped entirely with REQUIRE_STAFF_PIN.
  *
  * The PIN never leaves the server. It lives in Script Properties, the pages never receive it, and
  * nothing is written to browser storage: staff type it for each send. That is deliberate friction.
@@ -248,7 +250,7 @@ function checkPin_(pin) {
 }
 
 function sendNotice(title, body, category, pin) {
-  requireEditor_();
+  var by = requireEditor_();
   // Every path that reaches FCM checks the PIN, not just the QR one. The compose page is the more
   // dangerous of the two: it sends arbitrary text rather than one of two fixed messages.
   checkPin_(pin);
@@ -265,7 +267,7 @@ function sendNotice(title, body, category, pin) {
   var logId = nextLogId_();
   var sentAt = new Date().toISOString();
 
-  firebase_('put', '/sent/' + logId + '.json', { title: title, body: body, category: category, sentAt: sentAt, scriptVersion: SCRIPT_VERSION });
+  firebase_('put', '/sent/' + logId + '.json', { title: title, body: body, category: category, sentAt: sentAt, sentBy: by, scriptVersion: SCRIPT_VERSION });
 
   // Data-only. A `notification` block here would make the FCM SDK draw the tray notification
   // itself while the app is backgrounded: onMessageReceived would never run, the entitlement check
@@ -298,7 +300,7 @@ function listSent(limit) {
   var rows = [];
   for (var logId in all) {
     if (!all.hasOwnProperty(logId)) continue;
-    rows.push({ logId: logId, title: all[logId].title || '', body: all[logId].body || '', category: all[logId].category || 'NOTICES', sentAt: all[logId].sentAt || '', failed: !!all[logId].error });
+    rows.push({ logId: logId, title: all[logId].title || '', body: all[logId].body || '', category: all[logId].category || 'NOTICES', sentAt: all[logId].sentAt || '', sentBy: all[logId].sentBy || '', failed: !!all[logId].error });
   }
   rows.sort(function (a, b) { return Number(b.logId) - Number(a.logId); });
   return rows;
@@ -366,6 +368,8 @@ function statusMessage_(which) {
  * that asked for the daily status and lands on the quiet channel. Notices are untouched.
  */
 function sendStatus(which, pin) {
+  // Attribution is not needed here: the actual write happens in sendNotice below, which records
+  // the caller itself. This call stays because it refuses a non-editor before the duplicate scan.
   requireEditor_();
   checkPin_(pin);
 
@@ -384,6 +388,43 @@ function sendStatus(which, pin) {
   }
 
   return sendNotice(message.title, message.body, 'STATUS', pin);
+}
+
+// ---------------------------------------------------------------- Revocation
+
+/**
+ * Broadcasts a revocation so the holder stops delivery within seconds rather than waiting for its
+ * next scheduled verification.
+ *
+ * This is a broadcast, not per-device addressing. onNewToken is deliberately not overridden in the
+ * app and everything here is topic-addressed, so every subscribed phone receives this and tests
+ * the code against its own. That publishes the revoked code to all of them, which is harmless -- a
+ * code carrying revoked = true is useless to whoever reads it -- but it is what is being sent.
+ *
+ * It cannot be authoritative. FCM is best-effort, and a phone that is switched off past the
+ * message TTL never sees it, which is why the periodic verification on the device stays as the
+ * safety net. See docs/decisions.md.
+ */
+function pushRevoke_(code) {
+  var message = { message: {
+    topic: TOPIC_OVERRIDE || TOPIC,
+    android: { priority: 'high' },
+    // Data-only and deliberately empty of title and body: this shows the user nothing, it only
+    // invalidates. A notification block here would be drawn by the SDK and onMessageReceived
+    // would never run, so the revoke would be displayed and never applied.
+    data: { type: 'revoke', code: String(code) }
+  } };
+
+  var response = UrlFetchApp.fetch(
+    'https://fcm.googleapis.com/v1/projects/' + property_('PROJECT_ID') + '/messages:send',
+    { method: 'post', contentType: 'application/json',
+      headers: { Authorization: 'Bearer ' + accessToken_() },
+      payload: JSON.stringify(message), muteHttpExceptions: true });
+
+  if (response.getResponseCode() >= 300) {
+    throw new Error('FCM refused the revoke: ' + response.getContentText());
+  }
+  return JSON.parse(response.getContentText()).name || '';
 }
 
 // ---------------------------------------------------------------- Web app

@@ -18,6 +18,12 @@
  *       Execute as:     User accessing the web app   <- REQUIRED, see requireEditor_
  *       Who has access: Anyone with a Google account
  *
+ * This console never gets FCM credentials and cannot broadcast anything itself; issuing codes and
+ * reaching four hundred phones stay separate jobs. Revoke writes /revokeQueue and a minute-ly
+ * trigger in the SENDER project broadcasts it -- see Revoker.gs there. If that trigger is not
+ * installed, Revoke still works: it is recorded in /codes and /audit, and phones act on it at their
+ * next daily check. Only the speed depends on the trigger.
+ *
  * The service account key is a real credential. It lives in Script Properties, never in this file,
  * and never in the Android app.
  */
@@ -42,12 +48,81 @@ function checkCharacter(payload) {
   return ALPHABET.charAt(sum % ALPHABET.length);
 }
 
-function generateCode_() {
-  var payload = '';
-  for (var i = 0; i < PAYLOAD_LENGTH; i++) {
-    payload += ALPHABET.charAt(Math.floor(Math.random() * ALPHABET.length));
+/** How many different characters must each appear more than once in a payload. */
+var PAYLOAD_MIN_REPEATS = 2;
+
+/**
+ * Codes that exist for Play review and must never reach a member of the public.
+ *
+ * `P1AYREVQ` is the app access code given to Play reviewers. It has to exist and stay unclaimed, or
+ * a reviewer cannot get past the code screen.
+ *
+ * This exists **only** to keep it off the print sheet. Printing is the one bulk action here: one
+ * button covers every eligible code across every page, and the note that explains what a code is
+ * for is in the table, not on the slip -- so nobody is looking at this row at the moment it would
+ * come out of the printer and be handed over at a counter.
+ *
+ * Deleting is not guarded, deliberately. Every code carries a `note` saying what it is, deletion is
+ * one row at a time behind a confirmation, and refusing it would be second-guessing a staff member
+ * who is looking straight at the row.
+ *
+ * Note that it cannot be regenerated either way: `P1AYREVQ` has no repeated characters, so
+ * generateCode_ will never produce it. Hand-written or gone.
+ */
+var RESERVED_CODES = ['P1AYREVQ'];
+
+function isReservedCode_(code) {
+  return RESERVED_CODES.indexOf(String(code).toUpperCase()) >= 0;
+}
+
+/** How many of [s]'s characters appear more than once. Pure, so the rule can be tested. */
+function countRepeatingCharacters_(s) {
+  var counts = {};
+  for (var i = 0; i < s.length; i++) {
+    var ch = s.charAt(i);
+    counts[ch] = (counts[ch] || 0) + 1;
   }
-  return payload + checkCharacter(payload);
+  var repeating = 0;
+  for (var key in counts) {
+    if (counts.hasOwnProperty(key) && counts[key] >= 2) repeating++;
+  }
+  return repeating;
+}
+
+/**
+ * A code in which at least two different characters each occur more than once.
+ *
+ * Codes are read aloud across a counter to someone in their eighties, and again over the phone to
+ * the helpdesk afterwards, so they need something to hold on to. Two separate repeats do that:
+ * AXGX-BBBE and 003C-93VV are easy to say back. Adjacency is not required and is not the point.
+ *
+ * An earlier version forced a contiguous run of three instead, and it produced exactly the codes
+ * that turned out to be hard: GGGW-YBHZ and EWNN-NMGA have one repeated character and six unrelated
+ * ones, and a run of three invites the question "was that two Gs or three?" -- which the check
+ * character catches, but only after somebody has typed it wrong at a counter.
+ *
+ * Rejection sampling rather than construction: placing chosen characters in chosen slots would
+ * bias the distribution towards whatever pattern the construction happened to favour. Drawing
+ * uniformly and discarding what does not qualify keeps every allowed payload equally likely. About
+ * one draw in twelve qualifies, so a run of two hundred costs a few thousand cheap iterations.
+ *
+ * COST IN GUESSABILITY: the payload space falls from 32^7 (about 34 billion) to roughly 8% of that,
+ * about 2.9 billion. Against four hundred live codes that is under one in seven million per guess,
+ * each guess costing an authenticated write the rules refuse, and /codes cannot be listed.
+ */
+function generateCode_() {
+  // A ceiling, not a expectation: at an 8% acceptance rate the odds of reaching it are vanishing,
+  // and a bounded loop cannot hang the console if the alphabet or the rule is ever changed badly.
+  for (var attempt = 0; attempt < 1000; attempt++) {
+    var payload = '';
+    for (var i = 0; i < PAYLOAD_LENGTH; i++) {
+      payload += ALPHABET.charAt(Math.floor(Math.random() * ALPHABET.length));
+    }
+    if (countRepeatingCharacters_(payload) >= PAYLOAD_MIN_REPEATS) {
+      return payload + checkCharacter(payload);
+    }
+  }
+  throw new Error('Could not generate a code with enough repeated characters; check the rule.');
 }
 
 function isValidCode(code) {
@@ -163,6 +238,86 @@ function firebase_(method, path, payload) {
   return text ? JSON.parse(text) : null;
 }
 
+// ---------------------------------------------------------------- Audit
+
+/**
+ * The only events the audit may contain. A closed set on purpose: a typo that invents a sixth
+ * event would produce a row nobody ever queries, and the log is the record the NGO is meant to
+ * trust without asking a developer.
+ */
+var AUDIT_EVENTS = ['issued', 'printed', 'revoked', 'restored', 'released', 'note', 'deleted'];
+
+/**
+ * Appends one entry to a code's history.
+ *
+ * POST rather than PATCH so Realtime Database mints the key. A client-generated key from
+ * Date.now() is exactly what silently lost a notice in SYSTEM.md quirk 5.12: two actions inside
+ * one millisecond and the second overwrites the first with no error anywhere.
+ *
+ * This never writes to /codes. Adding a field there needs a matching .validate rule or the app's
+ * claim write starts failing for every unclaimed slip -- see the note on `note` in SYSTEM.md 6a.
+ */
+function audit_(code, event, by, extra) {
+  if (AUDIT_EVENTS.indexOf(event) < 0) throw new Error('Unknown audit event: ' + event);
+
+  var entry = { at: Date.now(), by: by, event: event };
+  if (extra) {
+    for (var key in extra) {
+      if (extra.hasOwnProperty(key) && extra[key] !== undefined && extra[key] !== null) {
+        entry[key] = extra[key];
+      }
+    }
+  }
+  firebase_('post', '/audit/' + code + '.json', entry);
+}
+
+/**
+ * A code's stored history plus the one event that is never stored: the device's own claim.
+ *
+ * The phone cannot write here. Letting it would mean opening /audit to 400 devices, and the audit
+ * is only trustworthy because nothing but the console can reach it. So the claim is reconstructed
+ * from /codes/{CODE}.activatedAt at render time.
+ *
+ * Known limit: activatedAt holds only the most recent claim, so a released-and-reclaimed code
+ * shows just the latest. The console actions either side still show the shape of what happened.
+ */
+/**
+ * Whether a slip has been printed for this code, derived from its history.
+ *
+ * Not a field on /codes. A new sibling there needs its own .validate rule or the $other catch-all
+ * refuses the app's claim write for every unclaimed slip -- the trap that adding `note` sprang once
+ * already. The audit is the record of what has been done to a code, and printing is one of those
+ * things, so the state lives there and costs no rules change.
+ *
+ * A Release clears it: the code goes back into the pool for somebody new, and whatever slip was
+ * printed before belongs to the person who has just stopped using it.
+ */
+function codeIsPrinted_(timeline) {
+  var printed = false;
+  for (var i = 0; i < (timeline || []).length; i++) {
+    if (timeline[i].event === 'printed') printed = true;
+    else if (timeline[i].event === 'released') printed = false;
+  }
+  return printed;
+}
+
+function auditTimeline_(entries, node) {
+  var out = [];
+
+  for (var key in entries) {
+    if (!entries.hasOwnProperty(key)) continue;
+    var e = entries[key] || {};
+    out.push({ at: e.at || 0, by: e.by || '', event: e.event || '', to: e.to || '' });
+  }
+
+  if (node && node.activatedAt) {
+    out.push({ at: node.activatedAt, by: '', event: 'claimed', to: '' });
+  }
+
+  out.sort(function (a, b) { return a.at - b.at; });
+  return out;
+}
+
 // ---------------------------------------------------------------- Operations
 
 /**
@@ -172,7 +327,7 @@ function firebase_(method, path, payload) {
  * every code already issued, including the claims attached to them.
  */
 function createCodes(count, note) {
-  requireEditor_();
+  var by = requireEditor_();
   count = Math.max(1, Math.min(200, parseInt(count, 10) || 1));
   note = (note || '').toString().trim().slice(0, 120);
 
@@ -193,6 +348,18 @@ function createCodes(count, note) {
   }
 
   firebase_('patch', '/codes.json', updates);
+
+  // One multi-path PATCH rather than up to 200 POSTs. Safe to use a client-generated key here
+  // precisely because these codes did not exist a moment ago, so their logs are empty and cannot
+  // collide. Every other audit write uses POST and lets the server mint the key.
+  var auditUpdates = {};
+  for (var i = 0; i < created.length; i++) {
+    var entry = { at: issued, by: by, event: 'issued' };
+    if (note) entry.to = note;
+    auditUpdates[created[i] + '/' + issued] = entry;
+  }
+  firebase_('patch', '/audit.json', auditUpdates);
+
   return created;
 }
 
@@ -204,10 +371,11 @@ function createCodes(count, note) {
  * app from altering it.
  */
 function setNote(code, note) {
-  requireEditor_();
+  var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   note = (note || '').toString().trim().slice(0, 120);
   firebase_('patch', '/codes/' + code + '.json', { note: note || null });
+  audit_(code, 'note', by, { to: note });
   return listCodes();
 }
 
@@ -224,9 +392,16 @@ function setNote(code, note) {
  * revokeCode for a device you intend to cut off; use this only for one that is genuinely gone.
  */
 function releaseCode(code) {
-  requireEditor_();
+  var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { usedBy: null, activatedAt: null, revoked: null });
+
+  // Drop any revoke still waiting to be broadcast. A released code goes back into the pool, so a
+  // stale revoke firing afterwards would cut off whoever claims it next -- they would type a fresh
+  // slip and be told immediately that they had been removed.
+  firebase_('delete', '/revokeQueue/' + code + '.json');
+
+  audit_(code, 'released', by);
   return listCodes();
 }
 
@@ -234,11 +409,13 @@ function releaseCode(code) {
 function listCodes() {
   requireEditor_();
   var all = firebase_('get', '/codes.json') || {};
+  var audit = firebase_('get', '/audit.json') || {};
   var rows = [];
   for (var code in all) {
     if (!all.hasOwnProperty(code)) continue;
     var node = all[code] || {};
-    rows.push({ code: code, formatted: code.substring(0, 4) + '-' + code.substring(4), issued: node.issued || 0, claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true, note: node.note || '' });
+    var timeline = auditTimeline_(audit[code], node);
+    rows.push({ code: code, formatted: code.substring(0, 4) + '-' + code.substring(4), issued: node.issued || 0, claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true, printed: codeIsPrinted_(timeline), reserved: isReservedCode_(code), note: node.note || '', audit: timeline, lastChange: timeline.length ? timeline[timeline.length - 1] : null });
   }
   rows.sort(function (a, b) { return b.issued - a.issued; });
   return rows;
@@ -249,16 +426,122 @@ function listCodes() {
  * claim it afresh, because the rules only refuse a code that already carries usedBy.
  */
 function revokeCode(code) {
-  requireEditor_();
+  var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { revoked: true });
+
+  // The database is the truth; the queue is only how the phone hears about it sooner. A minute-ly
+  // trigger in the sender drains this and broadcasts, because this console has no FCM credentials
+  // and is deliberately not given any (SYSTEM.md 2.3).
+  //
+  // Keyed by code, so revoking the same one twice leaves one pending entry rather than two. PUT
+  // rather than PATCH for the same reason: a second revoke replaces the first outright.
+  firebase_('put', '/revokeQueue/' + code + '.json', { at: Date.now(), by: by });
+
+  audit_(code, 'revoked', by);
+  return listCodes();
+}
+
+/**
+ * Records that slips have been printed for [codes].
+ *
+ * Called after the print dialog has been dismissed, not before: marking first and printing second
+ * would mark a run the user cancelled, and there is no way to ask a browser whether paper actually
+ * came out. The page confirms instead.
+ *
+ * One multi-path PATCH rather than a POST per code, because a run can be two hundred slips. The
+ * key is unique within a code by construction -- one entry per code per call, keyed on the shared
+ * timestamp -- and the timeline sorts on `at` rather than on the key, so it need not be a push id.
+ *
+ * A code that has since been claimed is skipped rather than refused: the run may have been sitting
+ * on screen for a while, and failing the whole batch because one person activated meanwhile would
+ * be worse than quietly not marking that one.
+ */
+function markPrinted(codes) {
+  var by = requireEditor_();
+  if (!codes || !codes.length) return listCodes();
+
+  var all = firebase_('get', '/codes.json') || {};
+  var at = Date.now();
+  var updates = {};
+  var marked = 0;
+
+  for (var i = 0; i < codes.length; i++) {
+    var code = String(codes[i]);
+    if (!isValidCode(code)) continue;
+    var node = all[code];
+    if (!node || node.usedBy || node.revoked === true) continue;
+    // Belt and braces: the page leaves it off the sheet, so it should never reach here.
+    if (isReservedCode_(code)) continue;
+    updates[code + '/p' + at] = { at: at, by: by, event: 'printed' };
+    marked++;
+  }
+
+  if (marked) firebase_('patch', '/audit.json', updates);
+  return listCodes();
+}
+
+/**
+ * Whether a code may be deleted, given its stored node. Pure, so the rule can be tested.
+ *
+ * Only a code nobody has ever claimed. Deleting a claimed one would cut that phone off at its next
+ * check with no explanation anywhere -- the device would find no node, read that as a withdrawn
+ * claim, and raise the revocation banner. Revoke does that deliberately and reversibly; this must
+ * not do it by accident.
+ *
+ * A revoked-but-never-claimed code is deletable: revoked or not, nobody ever used it.
+ */
+function codeIsDeletable_(node) {
+  if (!node) return false;
+  return !node.usedBy;
+}
+
+/**
+ * Removes a code that was generated but never used.
+ *
+ * For over-generation and misprints. Note what this cannot know: unclaimed is not the same as
+ * unprinted. A slip for this code may already be in somebody's pocket, and deleting it means they
+ * will be told "that code was not accepted" at the counter with nothing to explain why -- so the
+ * page asks before calling this.
+ *
+ * The /audit node is deliberately kept. It is the only remaining record that this code ever
+ * existed, and the only way to answer "why did this slip stop working"; the code itself is gone
+ * from /codes, so nothing lists it any more.
+ */
+function deleteCode(code) {
+  var by = requireEditor_();
+  if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
+
+  var node = firebase_('get', '/codes/' + code + '.json');
+  if (!node) throw new Error(code + ' does not exist.');
+
+  // Checked here and not only in the page: a hidden button is not a rule.
+  if (!codeIsDeletable_(node)) {
+    throw new Error(code + ' has been claimed by a phone and cannot be deleted. Use Revoke to cut ' +
+                    'that phone off, or Release if the phone is gone.');
+  }
+
+  firebase_('delete', '/codes/' + code + '.json');
+  // Defensive: an unclaimed code should never have one, but a leftover entry would otherwise sit
+  // in the queue forever, since the drain looks the code up and it no longer exists.
+  firebase_('delete', '/revokeQueue/' + code + '.json');
+
+  audit_(code, 'deleted', by);
   return listCodes();
 }
 
 function unrevokeCode(code) {
-  requireEditor_();
+  var by = requireEditor_();
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
   firebase_('patch', '/codes/' + code + '.json', { revoked: null });
+
+  // Drop any revoke the sender has not broadcast yet. Revoking and restoring inside a minute would
+  // otherwise push a revoke for a code that is live again -- recoverable, because the device
+  // re-verifies and resumes, but it would blank someone's notices and raise the banner for no
+  // reason at all.
+  firebase_('delete', '/revokeQueue/' + code + '.json');
+
+  audit_(code, 'restored', by);
   return listCodes();
 }
 

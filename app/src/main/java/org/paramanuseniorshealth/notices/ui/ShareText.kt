@@ -8,9 +8,13 @@ import java.time.format.DateTimeFormatter
 /**
  * Renders selected notifications as the plain text handed to the share sheet.
  *
- * Images are deliberately not shared. Sending them would mean attaching files through a
- * FileProvider, and the cached copies are pruned to the newest ten, so a share could silently
- * carry nothing. Text is always available and always complete.
+ * This used to be the whole of sharing, on the reasoning that attaching a file through a
+ * FileProvider could silently carry nothing once the cached copy had been pruned. The reasoning was
+ * right and the conclusion was too broad: AttachmentActions now offers a file alongside this text,
+ * but only where the file is still on the phone, so the failure that argument was about cannot
+ * happen. This remains what a multi-select share produces, and the text that accompanies a shared
+ * attachment -- a picture arriving in a chat with no title or date is a poor way to pass on a
+ * notice.
  *
  * Timestamps carry their zone because a shared alert usually ends up somewhere the reader's clock
  * differs from the phone's -- a chat with a colleague, a ticket, a note read weeks later.

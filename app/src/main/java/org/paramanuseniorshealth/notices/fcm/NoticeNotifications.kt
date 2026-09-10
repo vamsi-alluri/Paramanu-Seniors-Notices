@@ -110,9 +110,16 @@ object NoticeNotifications {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val style = if (image != null) {
+        // Sized here, and only here. Both bitmaps cross a Binder transaction capped near 1MB, and
+        // going over throws TransactionTooLargeException -- which loses the whole notification, not
+        // just the picture. Passing one full-size bitmap to both slots, as this did, put a portrait
+        // poster over the line on its own. See TrayArtwork.
+        val picture = image?.let { TrayArtwork.bigPicture(it) }
+        val icon = image?.let { TrayArtwork.largeIcon(it) }
+
+        val style = if (picture != null) {
             NotificationCompat.BigPictureStyle()
-                .bigPicture(image)
+                .bigPicture(picture)
                 .setSummaryText(body)
                 // Otherwise the thumbnail stays pinned in the corner once expanded.
                 .bigLargeIcon(null as Bitmap?)
@@ -125,7 +132,7 @@ object NoticeNotifications {
             .setContentTitle(title)
             .setContentText(body)
             .setStyle(style)
-            .setLargeIcon(image)
+            .setLargeIcon(icon)
             .setPriority(
                 if (subscription == Subscription.NOTICES) NotificationCompat.PRIORITY_HIGH
                 else NotificationCompat.PRIORITY_LOW

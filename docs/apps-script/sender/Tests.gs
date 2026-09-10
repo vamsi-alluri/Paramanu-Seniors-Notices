@@ -290,6 +290,11 @@ function t_sendNotice_(created) {
   t_ok_('sendNotice records the send', stored && stored.title === '[selftest] notice');
   t_ok_('sendNotice records no error', !stored.error, stored.error || '');
   t_ok_('sendNotice captured the FCM name', !!stored.fcmName, stored.fcmName || 'missing');
+
+  // Who sent it. Compared against requireEditor_ rather than a literal so the test does not have
+  // to know which allowlisted person is running the suite.
+  t_ok_('sendNotice records sentBy', !!stored.sentBy, stored.sentBy || 'missing');
+  t_eq_('sentBy is the caller', stored.sentBy, requireEditor_());
 }
 
 function t_sendStatus_(created) {
@@ -327,6 +332,65 @@ function t_doGet_() {
   t_ok_('doGet survives no event object', !!bare);
 }
 
+function t_pushRevoke_() {
+  // TOPIC_OVERRIDE is already TEST_TOPIC for the whole suite, so this reaches no real phone.
+  var name = pushRevoke_('ZZZZZZZZ');
+  t_ok_('pushRevoke_ returns an FCM name', String(name).indexOf('projects/') === 0, String(name));
+}
+
+function t_revokerIsValidCode_() {
+  t_ok_('accepts a well-formed code', revokerIsValidCode_('A1B2C3D4'));
+  t_ok_('refuses a dashed code', !revokerIsValidCode_('A1B2-C3D4'));
+  t_ok_('refuses lowercase', !revokerIsValidCode_('a1b2c3d4'));
+  t_ok_('refuses the wrong length', !revokerIsValidCode_('A1B2C3D'));
+  t_ok_('refuses nothing at all', !revokerIsValidCode_(''));
+  t_ok_('refuses undefined', !revokerIsValidCode_(undefined));
+}
+
+/**
+ * Drains a seeded queue against TEST_TOPIC.
+ *
+ * Uses a code under /codes that this test creates and removes, because the drain re-reads the code
+ * before broadcasting -- that re-read is the guard that stops a stale revoke cutting off whoever
+ * claims a released code next, so a test that bypassed it would be testing nothing.
+ */
+function t_revokerDrain_() {
+  var live = 'ZZZZZZZZ';     // revoked: should be broadcast and cleared
+  var stale = 'YYYYYYYY';    // not revoked: should be dropped without sending
+  var junk = 'not-a-code';   // malformed key: should be discarded
+
+  try {
+    firebase_('put', '/codes/' + live + '.json', { issued: Date.now(), revoked: true });
+    firebase_('put', '/codes/' + stale + '.json', { issued: Date.now() });
+    firebase_('put', '/revokeQueue/' + live + '.json', { at: Date.now(), by: 'test@example.org' });
+    firebase_('put', '/revokeQueue/' + stale + '.json', { at: Date.now(), by: 'test@example.org' });
+    firebase_('put', '/revokeQueue/' + junk + '.json', { at: Date.now(), by: 'test@example.org' });
+
+    var result = revokerDrain_();
+
+    t_eq_('drain broadcasts the revoked one', result.pushed, 1);
+    t_eq_('drain skips the stale and the malformed', result.skipped, 2);
+    t_eq_('drain reports no failures', result.failed, 0);
+
+    t_ok_('the broadcast entry is cleared',
+      firebase_('get', '/revokeQueue/' + live + '.json') === null);
+    t_ok_('a code no longer revoked is dropped without sending',
+      firebase_('get', '/revokeQueue/' + stale + '.json') === null);
+    t_ok_('a malformed key is discarded',
+      firebase_('get', '/revokeQueue/' + junk + '.json') === null);
+
+    // An empty queue must cost nothing and report nothing.
+    var empty = revokerDrain_();
+    t_eq_('an empty queue pushes nothing', empty.pushed, 0);
+  } finally {
+    firebase_('delete', '/codes/' + live + '.json');
+    firebase_('delete', '/codes/' + stale + '.json');
+    firebase_('delete', '/revokeQueue/' + live + '.json');
+    firebase_('delete', '/revokeQueue/' + stale + '.json');
+    firebase_('delete', '/revokeQueue/' + junk + '.json');
+  }
+}
+
 function t_testConnection_() {
   var threw = false;
   try { testConnection(); } catch (e) { threw = true; }
@@ -359,6 +423,9 @@ function runAllTests() {
     t_statusWording_();
     t_sendNotice_(created);
     t_sendStatus_(created);
+    t_pushRevoke_();
+    t_revokerIsValidCode_();
+    t_revokerDrain_();
     t_doGet_();
     t_testConnection_();
   } catch (e) {

@@ -3,20 +3,27 @@
 Everything needed to pick this project up cold: how the pieces fit, what is done, what is not, and
 the traps that cost real time to find.
 
-**Status (2026-09-03):** in Play **closed testing**, resubmission deliberately held.
-`versionCode 4`, `versionName 0.3.0` is built and ready but **not uploaded**.
+**Status (2026-09-09):** **approved and live in Play closed testing, with 14 testers.** The privacy
+policy rejections are resolved. Source is at `versionCode 6`, `versionName 0.3.2`.
 
-The app was flagged under **News and Magazines policy** — "app does not contain any news articles or
-app maybe incorrectly declared as News app". The category was simply wrong: this is not a news
-publication. **The category has been changed to Communication**, which also clears the News
-declaration and its journalism attestations.
+Two things this changed, both of which now matter:
 
-Resubmission waits on one thing: the app's policy at `paramanuseniorshealth.org/privacy-policy-app/`.
-The site's own `/privacy-policy` is a separate, website-only page that serves a
-**website-only** policy ("we do not use cookies and we do not collect any personal data", last
-updated 4 July 2026) that mentions no app, no Android, and no Firebase. Play checks that the policy
-covers the app, and that page contradicts the app's own Data Safety position. The replacement text
-is `docs/privacy-policy.md`; the NGO expects to publish it around 2026-09-05.
+- **Sends reach 14 real phones.** Closed testing subscribes to the same `notices-v1` topic as
+  production — deliberate, but it stopped being theoretical the moment there were real testers.
+  Anything sent from the sender, and anything the RSS poller picks up, goes to all of them. There is
+  no separate testing audience; `TOPIC_OVERRIDE` and `TEST_TOPIC` exist for the Apps Script suite,
+  not for staff sends.
+- **Production is still ahead.** Closed-testing approval is not production approval. An individual
+  developer account has to hold a group of testers for a continuous period before production access
+  is granted, which is the likely reason for the 14.
+
+Resolved, kept because it cost real time: the app was flagged under **News and Magazines policy** —
+"app does not contain any news articles or app maybe incorrectly declared as News app". The category
+was simply wrong; this is not a news publication. **The category is now Communication**, which also
+clears the News declaration and its journalism attestations. Separately, Play requires the policy to
+cover the *app*, and the site's own `/privacy-policy` is a website-only page that mentions no app,
+no Android and no Firebase; the app's policy lives at `paramanuseniorshealth.org/privacy-policy-app/`
+from `docs/privacy-policy.md`. Keep the two pages distinct.
 
 | | |
 |---|---|
@@ -93,20 +100,46 @@ ui/          ActivationScreen  NoticeListScreen  SettingsScreen  NoticeViewerScr
              NotificationAccess  ShareText (tested)  theme/
 ```
 
-**Tests:** 22 JVM unit tests. `GeneratedCodeCompatibilityTest` is the important one — it pins the
+**Tests:** 67 JVM unit tests. `GeneratedCodeCompatibilityTest` is the important one — it pins the
 Kotlin validator against codes produced by the JavaScript generator. If those two drift, every
 printed slip is rejected on every phone with a message blaming the user for mistyping, discovered
 at a counter by someone in their eighties.
 
 ### 2.2 Console (Apps Script) — `docs/apps-script/console/`
 
-Generates codes, prints cut-out slips, revokes, releases, per-code notes, and manages the saved
-messages the sender offers. Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`.
+Generates codes, prints cut-out slips, revokes, restores, releases, per-code notes, the office-hours
+banner, and the saved messages the sender offers. The codes table sorts on every column, pages
+locally, and shows each code's last change with its full history.
+
+Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `ALLOWED_EDITORS`. `Tests.gs` covers the
+pure helpers only.
+
+Revoke writes `/revokeQueue/{CODE}`; the sender's trigger broadcasts it. Restore and Release both
+delete any pending entry, so a revoke cannot fire for a code that is live again or back in the pool.
+If that trigger is not installed, Revoke still works — it is recorded in `/codes` and `/audit`, and
+phones act on it at their next daily check. Only the speed depends on it.
 
 ### 2.3 Sender (Apps Script) — `docs/apps-script/sender/`
 
-`Code.gs`, `Index.html` (compose), `Status.html` (QR confirmation), `Tests.gs` (43 e2e tests).
-Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `PROJECT_ID`, `STAFF_PIN`.
+`Code.gs`, `Index.html` (compose), `Status.html` (QR confirmation), `Poller.gs` (RSS trigger),
+`Tests.gs`. Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `PROJECT_ID`, `STAFF_PIN`,
+`ALLOWED_EDITORS`, optionally `REQUIRE_STAFF_PIN` and `ALERTS_FEED_URL`.
+
+Deployed **Execute as: User accessing** / **Anyone with a Google account** — *not* "Anyone with the
+link", which this document claimed until the QR path was retired. `requireEditor_()` refuses an
+address outside `ALLOWED_EDITORS`, and returns the caller's email so every send records `sentBy`.
+
+**There is no `doPost`.** The sender exposes no POST surface at all; `/exec` answers `doGet` only.
+
+`Revoker.gs` broadcasts revocations for the console on a **one-minute trigger**: it reads
+`/revokeQueue`, re-reads each code to confirm it is still revoked, calls `pushRevoke_`, and deletes
+the entry only after FCM accepts it. Install with `revokerInstallTrigger()`; inspect with
+`revokerDryRun()`, which sends nothing.
+
+An earlier design had the console POST here with the staff member's OAuth token. It returns HTTP 401
+on every request — `ScriptApp.getOAuthToken()` cannot authorize a call into another project's web
+app — and no manifest scope fixes it. **Do not re-investigate the 401**; the evidence is in
+`docs/decisions.md`.
 
 Separate project from the console so issuing codes and sending messages are separate jobs.
 
@@ -122,7 +155,7 @@ Every claim in the policy was checked against the code, not asserted. If the app
 anything -- the aggregate topic counters discussed for a later release included -- the policy and
 the Play Data Safety form both need revisiting.
 
-### 2.5 bit.ly QR links
+### 2.5 bit.ly QR links — RETIRED, pending removal
 
 `bit.ly/dispensary-closed` → `<sender>/exec?status=closed`, and an equivalent for `open`.
 
@@ -130,16 +163,40 @@ The short link is indirection that makes the QR reprintable: if the deployment i
 the bit.ly rather than reprinting the poster. **The QR carries no authority** — scanning only opens
 a confirmation page; sending needs the PIN.
 
+**The NGO no longer wants the QR.** Daily status goes out through the sender's saved-message
+buttons instead. The code is still present and callable — `doGet(?status=)`, `sendStatus`,
+`Status.html` — and removing it is separate work that has not been done, so this section stays until
+it is.
+
 ---
 
 ## 3. Data model (RTDB)
 
 ```
 /codes/{CODE}       issued, usedBy, activatedAt, revoked, note
+/audit/{CODE}/{id}  at, by, event, to                  (console only; phones cannot read it)
+/revokeQueue/{CODE} at, by                             (console writes, sender's trigger drains)
 /templates/{id}     label, title, body, updated       (console-managed, app cannot read)
-/sent/{logId}       title, body, category, sentAt, fcmName, error
+/sent/{logId}       title, body, category, sentAt, sentBy, fcmName, error
 /info               heading, lines                     (app reads; "lines" is ONE newline string)
 ```
+
+`/audit` is append-only and deliberately **not** part of `/codes`. A new field on `/codes/{CODE}`
+needs its own `.validate` rule or the `$other: false` catch-all refuses the app's claim write for
+every unclaimed slip — which is what adding `note` did once (§6a). Keeping the history in a separate
+node means it needs no rules change at all.
+
+`event` is one of `issued`, `printed`, `revoked`, `restored`, `released`, `note`, `deleted`. An
+eighth, `claimed`, is **synthesised** by the console from `activatedAt` rather than stored: the
+phone cannot write to `/audit` and must not be able to. Codes issued before this existed are not
+backfilled, so they read as never printed.
+
+The audit is also where the **printed** state lives, as `codeIsPrinted_` replaying the timeline —
+`printed` sets it, `released` clears it. Deriving it costs nothing (the timeline is already built
+for the table) and avoids a new field on `/codes`.
+
+A `deleted` code keeps its `/audit` node after `/codes` is gone, so nothing lists it any more but
+the history remains for anyone who looks the code up directly.
 
 Rules (`database.rules.json`): deny by default. `/codes/$code` is readable and claim-writable by an
 authenticated user; `/codes` itself is **not** readable, so codes cannot be enumerated. `/info` is
@@ -226,16 +283,21 @@ vanished with no error anywhere. `nextLogId_()` increments past any id already i
 ### 5.13 Crockford Base32 excludes I, L, O, U
 `normalise()` folds `O`→`0` and `I`/`L`→`1`. A payload containing `L` has no check character at all.
 
-### 5.14 RTDB allows 100 *simultaneous* connections, and this is a broadcast app
-The limit is about concurrency, not users. When a notice reaches 400 phones they all wake at once
-and every one calls `verify()`, opening an RTDB websocket — roughly 400 connections against a cap of
-100, on every send. Connections past the limit are refused.
+### 5.14 RTDB allows 100 *simultaneous* connections, and this is a broadcast app — FIXED
+The limit is about concurrency, not users. When a notice reached 400 phones they all woke at once
+and every one called `verify()`, opening an RTDB websocket — roughly 400 connections against a cap
+of 100, on every send. Connections past the limit are refused.
 
-It degrades gracefully only by accident: a refused connection throws, which becomes
-`ActivationState.Unknown`, which permits delivery. So users see everything and nothing looks broken
-— but **the entitlement gate stops working during exactly the event it exists for**, meaning a
-revocation does not take effect on a broadcast. Firestore has no connection cap on Spark, and the
-read volume here (~400 reads per broadcast) is far inside its 50k/day.
+It degraded gracefully only by accident: a refused connection throws, which became
+`ActivationState.Unknown`, which permits delivery. So users saw everything and nothing looked broken
+— but **the entitlement gate stopped working during exactly the event it exists for**.
+
+**Fixed.** The gate now answers from persisted state with no network at all
+(`ActivationRepository.gate`), and the network half runs in `ActivationRefreshWorker`, jittered
+across 0–15 minutes and calling `goOffline()` so the socket is not held open idling for a minute
+afterwards. Steady state is about one connection per device per day. See `docs/decisions.md`.
+
+Keep this entry: the trap returns the moment anything calls `verify()` from `onMessageReceived`.
 
 ### 5.15 A Play category can drag in a whole declaration regime
 Choosing News and Magazines produced a journalism questionnaire (editorial guidelines, standards
@@ -255,10 +317,24 @@ problem that is already fixed.
 - **`Unknown` entitlement permits delivery.** Only a definitive `Revoked` suppresses a notice.
   Failing closed would mean someone in their eighties misses a closure notice because of a weak
   signal — worse than a revoked device seeing one more public announcement.
-- **Revocation is cooperative, not enforced.** The payload reaches the device; the app declines to
-  display it. Adequate because every notice is public anyway. **Not access control.**
-- **The PIN is required on every send path**, not just the QR, because the web app must be
-  deployed "Anyone with the link" for scanning to work without a Google sign-in.
+- **Revocation is pushed, and cooperative.** The console asks the sender to broadcast a data-only
+  `{"type":"revoke","code":…}`; the holding device applies it on receipt, within seconds. It remains
+  cooperative — the payload reaches the device and the app declines to act — and it is still **not
+  access control**. Every notice is public anyway. A daily verification catches any phone that was
+  switched off when the broadcast went out.
+- **Revocation suspends the claim; it does not surrender it.** The code and anonymous UID are kept,
+  so a console **Restore** brings the device back on its own. Discarding them stranded the user
+  permanently: the rules refuse to write `usedBy` on a code that already carries one, so the same
+  slip could never be retyped and Restore had nothing to restore.
+- **A revoked user keeps their notices**, behind a banner saying no more will arrive and to call the
+  helpdesk with their code. Hiding them protected nothing — the code screen was lifted by *any*
+  valid slip, not just their own — and it cost them everything they had already received.
+- **The PIN is a second factor, not the only one.** Every entry point calls `requireEditor_()`
+  first, and the web apps are deployed "Anyone with a Google account" against an `ALLOWED_EDITORS`
+  allowlist. `REQUIRE_STAFF_PIN=false` drops the PIN and relies on the allowlist alone.
+- **The console has no FCM credentials and is not given any.** It asks the sender to broadcast a
+  revoke over HTTPS, forwarding the staff member's own OAuth token so the sender checks the same
+  allowlist. Issuing codes and reaching 400 phones stay separate jobs (§2.3).
 - **The PIN is never stored in the browser.** Typed per send, on purpose.
 - **Dynamic colour is off.** It derives the palette from the wallpaper; contrast is not negotiable
   for this audience.
@@ -355,9 +431,14 @@ the code screen.
 - Welcome notice written locally on activation, so the list is never empty.
 - "Check notifications" button, contact section, privacy policy link.
 - Analytics and `AD_ID` removed; six permissions in the release manifest.
-- Console: codes, slips, notes, revoke, release, saved messages.
-- Sender: compose with live notification preview, saved-message chips, PIN, QR status pair.
-- 36 Android unit tests, 43 Apps Script e2e tests.
+- Console: codes, slips, notes, revoke, restore, release, saved messages, sortable paged table,
+  per-code audit history.
+- Sender: compose with live notification preview, saved-message chips, PIN, QR status pair,
+  `sentBy` attribution, and the revoke endpoint the console calls.
+- Pushed revocation applied on receipt; entitlement verification moved off the message path into
+  WorkManager; a revoked device keeps its notices behind a banner and recovers on Restore.
+- 67 Android unit tests. Apps Script tests run from the editor (`runAllTests` in the sender,
+  `runConsoleTests` in the console) and have **not** been run since these changes — see §9.
 - Play assets: 512 icon, 1024×500 feature graphic, 4 screenshots, listing copy.
 - Verified end to end on an SM-S928U1 (Android 16) at `versionCode 3`: notices delivered, office
   header renders, dark and light themes correct, dash formatting and keyboard behaviour correct.
@@ -368,15 +449,38 @@ the code screen.
 
 **Before production**
 
-1. **Publish `docs/privacy-policy.md`** at paramanuseniorshealth.org/privacy-policy-app/, alongside the
-   website-only policy currently there. **Blocks resubmission.**
-2. **Upload `versionCode 4` and resubmit.** Only after (1).
+0. **Deploy and verify the audit / revocation work.** All of it is written and the Android half is
+   covered by unit tests, but none of it has run against Google's infrastructure or on a phone:
+   - ~~Paste `console/Tests.gs`, run `runConsoleTests`~~ — **done, `All 34 passed.`**
+   - Paste `sender/Revoker.gs`, run `revokerDryRun()` (sends nothing), then
+     `revokerInstallTrigger()`. No new Script Properties, and no redeploy needed — a trigger is not
+     served by `/exec`.
+   - Sender: run `runAllTests`. Redeploy only if `Code.gs` changed; `doPost` has been removed, so
+     the web app now answers `doGet` alone.
+   - Revoke a test code and watch `/revokeQueue`: the entry should appear and be gone within a
+     minute. Then revoke another and Restore it immediately — no revoke should be broadcast at all.
+   - Issue two codes, then revoke / restore / release / re-note them and check the history renders
+     in order with the right email on each.
+   - On a phone: activate, revoke from the console, confirm the tray notification arrives within
+     seconds, the banner appears above the office hours with the dashed code, the old notices are
+     still listed, and a notice sent while revoked does not appear. Then Restore and confirm
+     delivery resumes and the banner and its history row both disappear.
+   - Confirm a *fresh* code can still be claimed. Nothing here touches `/codes` or the rules, but
+     activation is what this project has broken before and it costs one slip to be sure.
+
+1. ~~**Publish `docs/privacy-policy.md`**~~ — **done.** Live at
+   paramanuseniorshealth.org/privacy-policy-app/, alongside the website-only policy. Keep both.
+2. ~~**Upload and resubmit.**~~ — **done.** Approved in closed testing.
 3. **Device-verify `versionCode 4`.** The welcome notice, the test button, the contact links and the
    absence of a "Testing" entry in system notification settings have **never run on hardware** — the
    phone was off the bridge when they were written.
-4. **Confirm `/codes/P1AYREVQ` exists and is unclaimed** in the live database. It was destroyed by
-   the root import; if the reviewer cannot get past the code screen, nothing else matters.
-5. **App access code for review:** `P1AYREVQ` is reserved and must never be handed out.
+4. **Confirm `/codes/P1AYREVQ` exists and is unclaimed** after the launch-day clear-out. It was
+   destroyed by a root import once already. If the reviewer cannot get past the code screen,
+   nothing else matters.
+5. **App access code for review:** `P1AYREVQ` is reserved and must never be handed out. It is left
+   off the print sheet so a batch print cannot put it on a slip; keeping it out of a Delete is what
+   its `note` is for. It has no repeated characters, so the generator cannot recreate it — it is
+   hand-written or it is gone.
 6. **Written authorisation from the NGO** before `BARC` appears in listing text.
 7. **Real office hours** in `/info` — currently placeholders.
 8. **Restrict console access** to named people; Script Properties are readable by any editor, so
@@ -421,13 +525,102 @@ Firestore rather than RTDB if they are built.
 
 ## 10. Runbooks
 
-**Issue codes** — console → count + optional note → Generate → Print slips (unclaimed only).
+**Issue codes** — console → count + optional note → Generate → Print slips.
+
+Printing covers every code that is unclaimed, unrevoked **and not yet printed**, across all pages,
+not only the page on screen. After the print dialog closes the console asks whether the slips came
+out; saying yes marks them `printed`, so the next run does not repeat them. Saying no leaves them
+unprinted and they come out again — the right way round, since an unmarked printed slip only wastes
+paper whereas a marked unprinted one goes quietly missing from every future run.
+
+Each slip carries the code at 30pt monospace, two lines of instruction, and a **15mm QR to the Play
+listing** with "No app yet? Scan to install it." The QR is a base64 PNG embedded in `Index.html`,
+not fetched from a chart service: the URL never changes, and a slip printed against a service that
+happened to be slow would come out with an empty box that nobody notices until the sheets are cut
+up. At 41 modules, 15mm gives 0.37mm per module — just above the ~0.33mm floor for reliable
+scanning, and the smallest size that still decoded with blur and noise added.
+
+**Printed** is a fourth state alongside Unused, In use and Revoked, and it is derived from the audit
+rather than stored on `/codes` — a new sibling field there would break the app's claim write (§6a).
+A **Release** clears it: the code returns to the pool for somebody new, who needs a fresh slip.
+Tick "include already printed" to reprint a lost one.
+
+Generated payloads always contain **at least two different characters that each appear more than
+once** — `SCCM-7VV7`, `0V0J-RYRJ`, `AEE5-D1D6` — so staff have something to hold on to when reading
+one across a counter or back over the phone. Adjacency is not required and is not the point.
+
+An earlier version forced a contiguous run of three instead. It produced `GGGW-YBHZ` and
+`EWNN-NMGA`: one repeated character, six unrelated ones, and a run that invites "was that two Gs or
+three?". Staff rejected them on sight. Do not go back to it.
+
+The generator rejection-samples rather than constructing a pattern, so every allowed payload stays
+equally likely; about one draw in twelve qualifies. Only the sampling changed — the check-character
+rule is untouched, so codes issued before this are still valid and the codes pinned in
+`GeneratedCodeCompatibilityTest` must not be regenerated. It narrows the payload space from ~34
+billion to ~2.9 billion, which against 400 live codes and an unlistable `/codes` is not a guessing
+risk.
 
 **Send a notice** — sender → pick a saved message or write one → check the preview → PIN → Send.
 
 **Daily status** — scan the counter QR → confirm → PIN. A repeat within 10 minutes is refused.
 
-**Cut a phone off** — console → Revoke. For a phone that is gone, use Release instead.
+**Remove codes generated by mistake** — console → Delete, offered only on a code nobody has ever
+claimed. `deleteCode` refuses a claimed one regardless of what the page shows: deleting it would cut
+that phone off at its next check with no explanation, since a missing node reads as a withdrawn
+claim. Use Revoke for that instead, which is deliberate and reversible.
+
+**Unclaimed is not unprinted.** A slip for the deleted code may already be in somebody's pocket, and
+they will be told at the counter that their code was not accepted. The `/audit` entry is kept when
+the code is deleted — it is then the only record the code ever existed, and the only way to answer
+"why did this slip stop working".
+
+**Cut a phone off** — console → Revoke. The phone applies it within seconds of the push, keeps its
+notices behind a banner telling the user to call the helpdesk with their code, and stops receiving.
+The code stays claimed by that device and cannot be handed to anyone else.
+
+**Let somebody back in** — console → Restore, on the *same* code. The phone resumes on its own: at
+once if the app is opened, otherwise within a day. Do not issue a fresh slip for this; a revoked
+code is not consumed, and the user keeps their history. For a phone that is genuinely gone —
+uninstalled, replaced, data cleared — use Release instead, which returns the code to the pool.
+
+**Read a code's history** — console → the Last change column, then `history` on the row. Every
+issue, revoke, restore, release and note change, with who did it and when.
+
+**Clear the slate for the production launch** — there is no test environment by choice; production
+*is* the environment, and the only isolation is `TEST_TOPIC` for the Apps Script suite. So launch
+day means clearing the testing data out of the live database.
+
+Done from the console and the data viewer, **not** by importing anything. Nothing here goes near the
+root, so quirk 5.6 never comes into it:
+
+1. **Codes** — staff delete each unused or released code from the console. Every code is named in
+   its `note`, so this is read-and-decide, not a sweep. A tester's *claimed* code has to be
+   **Released first** — `deleteCode` refuses a claimed code, because deleting one would cut that
+   phone off with no explanation — and once released it is unclaimed and deletable.
+2. **`/sent`** — deleted by hand in the data viewer. The phones' own notice history is local and
+   unaffected.
+3. **`/revokeQueue`** — deleted by hand. Anything missed is harmless anyway: the drain re-reads
+   `/codes` and drops an entry that is no longer revoked rather than broadcasting it.
+4. **`/audit` stays.** It is the record of what was done and to which code, and it survives the
+   codes themselves — `deleteCode` deliberately keeps it. Orphaned entries do not show in the table,
+   which joins on `/codes`.
+5. **`/info`, `/templates` and `/status` are untouched.** They are configuration — office hours,
+   the saved messages staff have built up, the daily wording — not test data.
+
+**`P1AYREVQ` survives because nobody deletes it.** Its note says what it is. It cannot be
+regenerated — no repeated characters, so `generateCode_` will never produce it — so if it does go, it
+has to be hand-written back by selecting `/codes` (never the root) and importing
+`{ "P1AYREVQ": { "issued": <epoch millis> } }`. It is also left off the print sheet, so a batch print
+cannot put it on a slip.
+
+**What the 14 testers will see.** Releasing their codes withdraws each claim, so the next check
+reads it as revoked and raises the banner telling them to ring the helpdesk. They are not stuck —
+Settings → **Enter a new code** takes a fresh slip and keeps their notice history — but tell them
+first, or they will do what the banner says.
+
+**Watch as this repeats.** `/audit` is never cleared, and `listCodes` reads the whole node on every
+console load. A few hundred codes' history is well under 200KB, but after several launch-day cycles
+it is worth checking; the fix is fetching a code's history when its row is expanded.
 
 **Change the office hours** — select `/info` in the Firebase data viewer, then Import JSON with the
 **inner object only** (`docs/info-node.json`). Never import at the root.

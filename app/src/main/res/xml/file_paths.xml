@@ -1,11 +1,23 @@
 <!--
-  Exposes only the cached notice renders, and nothing else the app stores.
+  Exposes only the cached notice attachments, and nothing else the app stores.
 
-  `path` is relative to filesDir and matches NoticeImageStore.IMAGE_DIR, so widening it would hand
-  other apps read access to the Room database sitting alongside it.
+  `path` is relative to filesDir and matches NoticeImageStore's own directory names, so widening
+  either entry would hand other apps read access to the Room database sitting alongside them.
+
+  Two stores, so two entries: renders and pictures in notice_images, downloaded circulars in
+  notice_files. The cache-path duplicate of the second is not optional. It is what
+  NoticeImageStore.PDFS_IN_CACHE switches to, and a FileProvider raises IllegalArgumentException
+  for a file no declared path covers, so flipping that constant without this entry would turn every
+  "open" into a silent failure.
 -->
 <paths>
     <files-path
         name="notice_images"
         path="notice_images/" />
+    <files-path
+        name="notice_files"
+        path="notice_files/" />
+    <cache-path
+        name="notice_files_cache"
+        path="notice_files/" />
 </paths>

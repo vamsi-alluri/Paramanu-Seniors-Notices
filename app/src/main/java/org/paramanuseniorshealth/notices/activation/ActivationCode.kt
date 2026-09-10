@@ -18,6 +18,7 @@ object ActivationCode {
     const val ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
     const val PAYLOAD_LENGTH = 7
     const val LENGTH = PAYLOAD_LENGTH + 1
+    const val GROUP = 4
 
     /**
      * Uppercases, drops separators, and folds the confusable characters onto the digits they are
@@ -67,6 +68,6 @@ object ActivationCode {
     /** Groups a code for display as `XXXX-XXXX`, which is markedly easier to read back aloud. */
     fun format(raw: String): String {
         val code = normalise(raw)
-        return if (code.length == LENGTH) "${code.substring(0, 4)}-${code.substring(4)}" else code
+        return if (code.length >= GROUP) "${code.substring(0, GROUP)}-${code.substring(GROUP)}" else code
     }
 }

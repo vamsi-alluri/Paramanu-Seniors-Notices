@@ -36,6 +36,9 @@
   button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 1px solid #14315c;
            background: #14315c; color: #fff; cursor: pointer; }
   button.ghost { background: #fff; color: #14315c; }
+  /* Irreversible, and sits beside four buttons that are not. */
+  button.ghost.danger { color: #8c1d18; border-color: #e5c3c0; }
+  button.ghost.danger:hover { border-color: #8c1d18; }
   button:disabled { opacity: .5; cursor: default; }
   input, textarea, select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
                     background: #fff; color: #10131a; }
@@ -55,8 +58,17 @@
           font-size: 17px; letter-spacing: .06em; }
   .pill { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; }
   .free { background: #d6e2f5; color: #03152e; }
+  /* Between free and used: a slip exists, but nobody has activated it yet. */
+  .printed { background: #dff0e2; color: #0d2f16; }
   .used { background: #e6e9f0; color: #2a2f3a; }
   .revoked { background: #f9dedc; color: #410e0b; }
+  .hist { background: #f6f8fc; }
+  .hist td { padding: 10px 14px 16px; }
+  .hist ol { margin: 0; padding-left: 20px; }
+  .hist li { padding: 2px 0; }
+  .who { color: #5a6478; }
+  .toggle { font: inherit; font-size: 13px; background: none; border: 0; padding: 0;
+            color: #14315c; cursor: pointer; text-decoration: underline; white-space: nowrap; }
 
   /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
   .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
@@ -73,6 +85,24 @@
     .slip { border: 1px dashed #666; padding: 8mm; text-align: center; }
     .slip .code { font-family: ui-monospace, monospace; font-size: 30pt;
                   letter-spacing: .1em; margin: 6mm 0; }
+
+    /*
+      QR to the Play listing, embedded rather than fetched.
+      https://play.google.com/store/apps/details?id=org.paramanuseniorshealth.notices
+
+      A data URI on purpose: a slip printed from a chart API would come out with an empty box on
+      the day that service is slow or gone, and nobody would notice until the sheets were cut up.
+      The URL never changes, so the image is a constant and belongs in the file.
+
+      15mm across 41 modules is 0.37mm per module -- just above the ~0.33mm floor for reliable
+      scanning, and the smallest that survived decoding with blur and noise added. `pixelated`
+      keeps the module edges square when the printer rescales it; smoothing them costs contrast
+      at exactly the size where contrast is all there is.
+    */
+    .slip .qr { width: 15mm; height: 15mm; margin: 4mm auto 1mm; image-rendering: pixelated;
+                background-size: 100% 100%; background-repeat: no-repeat;
+                background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAewAAAHsAQAAAAA4UaPNAAAChElEQVR42u2dUWoDMQxETS+w97+lbuCSZCPN2IV+BEpl3lJKmvX7MbPakSy7Y35yxQAHBwcH///4yOt6fhOPj3rr/vKajx8b/DU+usDB/x5/Cvu6n4D68JT0/fu6nw778zUYzYO31XzqOSO8vgteOtcxt/jRPPgRms/vLbbHD4PRPPgJmr/K5KyPwJzEefDz/HxKulxN3DE/01j8PHh7zUsp5vcf6jbg/TWvl8X5WRWbfAt4esvMg3f283foLj9TNl7fAjkSzYM3j/Mj16GyShPvMTHEw49aC0Pz4H3jvGav4U9EjAzvJfvAz4O3z2HLur9FXvF/WhorrwNmHryntwmz63tgN7c/hrwRmHnwrt5G47m6d0ts/S5+Hrx3DhvD1qT8lvXbjPI/aB68sZ/3pViV+hr2NfKjefDWmvfU1YJ/Dl46itE8eOe6zRrVlwchV6l0uQrNg7fNYa2R8ppLL1n5eclz8TbgreO8rq5mzN86yta7aB68d90mrCyz9A9ruUaMEDMP3ljzQ/Z67zu+a+1VN56jefDW3ka2hKilqWR22EkIeBvwxnE+w/uU9gO3PdpXKd2VzDx44zi/uh2v2OyeB82Dt9a8yVvbKTWl3U/CQfPgTTW/LMJGmfl9z6CbfGYevKvmTfCXVeyHdxdXCkCcBz8izq+WRlpubGMsfh68dd1mO/eg6pZRB7dqUzFxHrx9DpsGPnw/lHdaLmfdoHnwxt5maZ7f6jbackCcBz8hh/Worq8AbU4oP0+cBz9L8/tOwCrjXLpzlpkHP0HzejSxntRaOW+k+Wfmwdv7+eV0SivvxHZeN5oH71+38SObbGVqKeOjefC+muffz4GDg4Ofi38DeSsbjh7jBEAAAAAASUVORK5CYII="); }
+    .slip .qrhint { font-size: 8pt; color: #333; }
   }
 </style>
 </head>
@@ -99,7 +129,8 @@
       <div class="sub">
         Each code works once. Hand one slip to each person at the counter.
         Codes never contain the letters I, L, O or U.
-        <br>Printing slips covers every unused code, not only the page shown below.
+        <br>Printing covers every code that has not been used or printed yet, not only the page
+        shown below. Printed codes are marked as such, so the next run does not repeat them.
       </div>
 
       <div class="bar">
@@ -107,7 +138,11 @@
         <input type="text" id="note" maxlength="120" placeholder="Note (optional) e.g. printed for 12 Sep counter">
         <button id="make" onclick="makeCodes()">Generate</button>
         <button class="ghost" onclick="refresh()">Refresh</button>
-        <button class="ghost" onclick="window.print()">Print slips</button>
+        <button class="ghost" id="print" onclick="printSlips()">Print <span id="printCount">0</span> slips</button>
+        <label class="sub" style="margin: 0">
+          <input type="checkbox" id="includePrinted" onchange="setIncludePrinted(this.checked)">
+          include already printed
+        </label>
       </div>
 
       <table>
@@ -117,11 +152,12 @@
             <th class="sort" onclick="sortCodes('status')">Status<span class="arrow" id="ac-status"></span></th>
             <th class="sort" onclick="sortCodes('note')">Note<span class="arrow" id="ac-note"></span></th>
             <th class="sort" onclick="sortCodes('issued')">Issued<span class="arrow" id="ac-issued"></span></th>
+            <th class="sort" onclick="sortCodes('lastChange')">Last change<span class="arrow" id="ac-lastChange"></span></th>
             <th></th>
           </tr>
         </thead>
         <tbody id="rows">
-          <tr><td colspan="5">Loading...</td></tr>
+          <tr><td colspan="6">Loading...</td></tr>
         </tbody>
       </table>
 
@@ -297,18 +333,49 @@
   // Newest first, matching the order the server hands them over in.
   var CODE_SORT = { key: 'issued', dir: -1 };
 
-  var CODE_KEYS = ['code', 'status', 'note', 'issued'];
+  var CODE_KEYS = ['code', 'status', 'note', 'issued', 'lastChange'];
+
+  // Which codes have their history open. Keyed by code rather than by row index so an expansion
+  // survives a re-sort and a page turn -- both of which redraw the whole table.
+  var OPEN_HISTORY = {};
+
+  var EVENT_LABEL = { issued: 'Issued', revoked: 'Revoked', restored: 'Restored',
+                      released: 'Released', note: 'Note set', claimed: 'Claimed' };
+
+  /**
+   * One line of a code's history.
+   *
+   * A claim has no email against it: it was written by a phone, not by a person, and is
+   * reconstructed from activatedAt rather than stored. Saying "(device)" is more honest than
+   * leaving the column blank, which reads as missing data.
+   */
+  function auditLine(entry) {
+    var who = entry.by ? escapeHtml(entry.by) : '(device)';
+    var label = EVENT_LABEL[entry.event] || escapeHtml(entry.event);
+    var extra = entry.to ? ' &mdash; &ldquo;' + escapeHtml(entry.to) + '&rdquo;' : '';
+    return label + ' ' + stamp(entry.at) + ' <span class="who">' + who + '</span>' + extra;
+  }
+
+  function toggleHistory(code) {
+    if (OPEN_HISTORY[code]) delete OPEN_HISTORY[code]; else OPEN_HISTORY[code] = true;
+    renderPage();
+  }
 
   function codeValue(row, key) {
-    // Ordered the way the counter thinks about them: usable ones first, dead ones last.
-    if (key === 'status') return row.revoked ? 2 : row.claimed ? 1 : 0;
+    // Ordered the way the counter thinks about them: ready to hand out first, dead ones last.
+    // Unprinted before printed, because "what do I still need to print" is the question this
+    // column gets asked most.
+    if (key === 'status') return row.revoked ? 3 : row.claimed ? 2 : row.printed ? 1 : 0;
     if (key === 'issued') return row.issued || 0;
     if (key === 'note') return row.note || '';
+    // Codes issued before the audit existed have no history and are not backfilled, so they carry
+    // a zero and settle at one end rather than being treated as blank.
+    if (key === 'lastChange') return row.lastChange ? row.lastChange.at : 0;
     return row.code;
   }
 
   function sortCodes(key) {
-    turnSort(CODE_SORT, key, ['issued']);
+    turnSort(CODE_SORT, key, ['issued', 'lastChange']);
     PAGE = 1;  // page 3 of the old order says nothing about the new one
     renderPage();
   }
@@ -328,14 +395,26 @@
     CODES = rows;
     renderPage();
 
-    // Only unclaimed codes are worth printing; the rest already belong to somebody. Every one of
-    // them is printed, not just the page on screen -- a print job cut short by paging would be
-    // noticed only after the slips came out of the printer.
-    document.getElementById('slips').innerHTML = rows.filter(function (r) {
-      return !r.claimed && !r.revoked;
-    }).map(function (r) {
+    // Only codes nobody holds are worth printing; the rest already belong to somebody. Already
+    // printed ones are left out too, or generating fifty more and printing again would reprint the
+    // whole back catalogue -- tick "include already printed" to reprint a lost slip.
+    //
+    // Every matching code is printed, not just the page on screen: a print job cut short by paging
+    // would be noticed only after the slips came out of the printer.
+    // The reserved review code is excluded unconditionally, even with "include already printed"
+    // ticked. It is unused and unprinted, so it would otherwise come out on a slip and be handed
+    // to somebody at the counter -- and once they claim it, a Play reviewer cannot get in.
+    PRINTABLE = rows.filter(function (r) {
+      return !r.claimed && !r.revoked && !r.reserved && (INCLUDE_PRINTED || !r.printed);
+    });
+    document.getElementById('printCount').textContent = PRINTABLE.length;
+    document.getElementById('print').disabled = PRINTABLE.length === 0;
+    document.getElementById('slips').innerHTML = PRINTABLE.map(function (r) {
+      // The QR is secondary and sits below: the code is what the person needs, and someone who
+      // already has the app should never have to work out that the square is not for them.
       return '<div class="slip"><div>Paramanu Seniors Notices</div><div class="code">' + r.formatted +
-             '</div><div>Open the app and type this code.<br>It works once.</div></div>';
+             '</div><div>Open the app and type this code.<br>It works once.</div>' +
+             '<div class="qr"></div><div class="qrhint">No app yet? Scan to install it.</div></div>';
     }).join('');
   }
 
@@ -350,7 +429,7 @@
     var pager = document.getElementById('pager');
 
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="5">No codes yet. Generate some.</td></tr>';
+      body.innerHTML = '<tr><td colspan="6">No codes yet. Generate some.</td></tr>';
       pager.style.display = 'none';
       return;
     }
@@ -370,9 +449,12 @@
       (pages > 1 ? '  (page ' + PAGE + ' of ' + pages + ')' : '');
 
     body.innerHTML = page.map(function (r) {
+      // Printed is a state of an unused code, not a rival to "in use": it says a slip exists on
+      // paper somewhere. Once somebody activates it, that is the more useful thing to show.
       var state = r.revoked ? '<span class="pill revoked">Revoked</span>'
                 : r.claimed ? '<span class="pill used">In use</span>'
-                            : '<span class="pill free">Not used</span>';
+                : r.printed ? '<span class="pill printed">Printed</span>'
+                            : '<span class="pill free">Unused</span>';
 
       var actions = [];
       if (r.revoked) {
@@ -385,10 +467,29 @@
         actions.push('<button class="ghost" onclick="release(\'' + r.code + '\')">Release</button>');
       }
       actions.push('<button class="ghost" onclick="editNote(\'' + r.code + '\')">Note</button>');
+      // Never claimed, so deleting it takes nothing away from anybody who is using the app. The
+      // server checks this too; the button being hidden is not what makes it safe.
+      if (!r.claimed) {
+        actions.push('<button class="ghost danger" onclick="removeCode(\'' + r.code + '\')">Delete</button>');
+      }
 
-      return '<tr><td class="mono">' + r.formatted + '</td><td>' + state +
-             '</td><td>' + escapeHtml(r.note) + '</td><td>' + stamp(r.issued) +
-             '</td><td>' + actions.join(' ') + '</td></tr>';
+      var open = !!OPEN_HISTORY[r.code];
+      var last = r.lastChange
+        ? auditLine(r.lastChange) + ' <button class="toggle" onclick="toggleHistory(\'' + r.code +
+          '\')">' + (open ? 'hide' : 'history') + '</button>'
+        : '<span class="sub">&mdash;</span>';
+
+      var html = '<tr><td class="mono">' + r.formatted + '</td><td>' + state +
+                 '</td><td>' + escapeHtml(r.note) + '</td><td>' + stamp(r.issued) +
+                 '</td><td>' + last +
+                 '</td><td>' + actions.join(' ') + '</td></tr>';
+
+      if (open && r.audit && r.audit.length) {
+        html += '<tr class="hist"><td colspan="6"><ol>' + r.audit.map(function (entry) {
+          return '<li>' + auditLine(entry) + '</li>';
+        }).join('') + '</ol></td></tr>';
+      }
+      return html;
     }).join('');
   }
 
@@ -424,6 +525,64 @@
     google.script.run.withSuccessHandler(render)
       .withFailureHandler(function (e) { show(e.message, true); })
       .setNote(code, next);
+  }
+
+  // The codes currently on the print sheet, and whether already-printed ones are included.
+  var PRINTABLE = [];
+  var INCLUDE_PRINTED = false;
+
+  function setIncludePrinted(on) {
+    INCLUDE_PRINTED = on;
+    render(CODES);
+  }
+
+  /**
+   * Prints the slips, then records which codes went out.
+   *
+   * Marking happens after the dialog closes, not before: a browser cannot say whether paper
+   * actually came out, and marking first would mark a run the user cancelled. So it asks. Saying
+   * no leaves everything unprinted and the same slips come out next time -- which is the right way
+   * round, because an unmarked printed slip only wastes paper whereas a marked unprinted one goes
+   * quietly missing from every future run.
+   */
+  function printSlips() {
+    if (!PRINTABLE.length) return;
+    var codes = PRINTABLE.map(function (r) { return r.code; });
+
+    window.print();
+
+    if (!confirm(
+      'Did the ' + codes.length + ' slips print correctly?\n\n' +
+      'Yes marks them as printed, so the next run does not repeat them.\n' +
+      'No leaves them unprinted and they will come out again next time.'
+    )) return;
+
+    google.script.run.withSuccessHandler(function (rows) {
+      show(codes.length + ' marked as printed.', false);
+      render(rows);
+    }).withFailureHandler(function (e) { show(e.message, true); })
+      .markPrinted(codes);
+  }
+
+  /**
+   * Deletes a code nobody has ever claimed.
+   *
+   * The warning is about the one thing this cannot check: unclaimed is not unprinted. A slip may
+   * already have been handed over, and the holder would be told at the counter that their code was
+   * not accepted, with nothing anywhere to explain why.
+   */
+  function removeCode(code) {
+    if (!confirm(
+      'Delete ' + code + '?\n\n' +
+      'Nobody has used this code, so no phone loses anything.\n\n' +
+      'But if a printed slip for it has already been handed out, that slip stops working and the ' +
+      'person holding it will be told their code was not accepted. This cannot be undone.'
+    )) return;
+    google.script.run.withSuccessHandler(function (rows) {
+      show(code + ' deleted.', false);
+      render(rows);
+    }).withFailureHandler(function (e) { show(e.message, true); })
+      .deleteCode(code);
   }
 
   function release(code) {

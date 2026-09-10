@@ -12,104 +12,229 @@ import java.net.HttpURLConnection
 import java.net.URL
 
 /**
- * Downloads and caches the artwork for a notice.
+ * Downloads and caches everything a notice carries.
  *
- * Two kinds, which are not alternatives:
- *  - **image** ([fetchImage]) is a picture the sender attached, stored downsampled, as in Notifier;
- *  - **pdf** ([fetchPdfRender]) is page one of a notice PDF, rendered here on the device.
+ * Three kinds, which are not alternatives:
+ *  - **image** ([fetchImage]) is a picture the sender attached;
+ *  - **pdf** ([fetchPdfRender] and [fetchPdf]) is a notice circular;
+ *  - **link** ([fetchLinkImage]) is the logo or still for a preview card.
  *
- * A notice can carry both. They are cached under different names so one never overwrites the other,
- * and the download that feeds the tray notification is the same file the in-app row reads later --
- * so the UI performs no network I/O and a notice stays readable offline afterwards.
+ * They are cached under different names so one never overwrites another, and the download that
+ * feeds the tray notification is the same file the in-app row reads later -- so the UI performs no
+ * network I/O and a notice stays readable offline afterwards.
  *
- * The PDF itself is deliberately not kept: it is the largest artefact, it is re-downloadable from
- * the website, and on the phones this app targets storage is usually the scarce resource.
+ * THE PDF, AND WHY IT IS NOW KEPT
+ *   It used to be downloaded to a scratch file, rendered, and deleted, on the reasoning that it was
+ *   the largest artefact and re-downloadable from the website. That was true and still cost the
+ *   user the thing they wanted: there was no PDF on the phone to open, so a notice circular could
+ *   only ever be viewed as a flattened picture of its first page. The render is still made at push
+ *   time, because the tray needs a bitmap within seconds; the PDF itself is fetched by [fetchPdf]
+ *   when the user asks for it, and kept from then on.
  */
 object NoticeImageStore {
 
     private const val TAG = "NoticeImageStore"
     private const val IMAGE_DIR = "notice_images"
-
-    /** Twenty notices' worth of artwork. Each notice may contribute two files, so this is ~40. */
-    private const val KEEP_NEWEST = 40
+    private const val FILE_DIR = "notice_files"
 
     /**
-     * onMessageReceived allows roughly 10-20 seconds before the service may be torn down, and the
-     * entitlement check has already spent part of that. Overrunning costs the whole notification,
-     * not just the picture, so each fetch is capped well inside what remains.
+     * Where downloaded PDFs live.
+     *
+     * `false` puts them in filesDir, where they survive until pruned: a circular opened once is
+     * then available offline for good. `true` puts them in cacheDir, which the OS may reclaim under
+     * storage pressure -- the phone never fills up, but a notice can silently stop opening offline.
+     *
+     * One constant rather than a scattering of directory calls, so the choice is one edit and
+     * cannot be made inconsistently.
+     */
+    private const val PDFS_IN_CACHE = false
+
+    /** Twenty notices' worth of artwork. A notice may contribute three files, so this is ~60. */
+    private const val KEEP_NEWEST = 60
+
+    /**
+     * The PDF budget, in bytes, and deliberately expressed differently from the image one.
+     *
+     * Counting files would let three 2MB circulars sit alongside sixty 40KB thumbnails and call it
+     * balanced. Circulars are the large, rarely-reread artefact; this is about twelve of them.
+     */
+    private const val PDF_BUDGET_BYTES = 24L * 1024 * 1024
+
+    /**
+     * onMessageReceived allows roughly 10-20 seconds before the service may be torn down.
+     *
+     * The entitlement check no longer spends any of it -- verification moved off the message path
+     * and does no network -- but the ceiling stays: a slow attachment must never cost the
+     * notification itself, which is the part that matters.
      */
     private const val TIMEOUT_MS = 8_000L
 
     /**
-     * Notifications reject oversized bitmaps and the list only ever shows a thumbnail or a
-     * screen-width image, so full-resolution photographs are downsampled on decode.
+     * A user waiting on a tap can wait longer than a push handler can.
+     *
+     * [fetchPdf] runs with a visible progress indicator and no service teardown behind it, so a
+     * 2MB circular on a poor connection has room to finish rather than failing at eight seconds
+     * and leaving the user to guess whether pressing again would help.
      */
+    private const val TAP_TIMEOUT_MS = 60_000L
+
+    /** Notifications reject oversized bitmaps and the list shows a thumbnail, so decode small. */
     private const val MAX_DIMENSION = 1024
 
     fun directory(context: Context): File =
         File(context.filesDir, IMAGE_DIR).apply { if (!exists()) mkdirs() }
 
-    /** The sender's own picture. */
-    fun imageFile(context: Context, logId: String): File =
-        File(directory(context), "$logId-img.jpg")
+    /** Where PDFs are kept. See [PDFS_IN_CACHE]. */
+    fun fileDirectory(context: Context): File =
+        File(if (PDFS_IN_CACHE) context.cacheDir else context.filesDir, FILE_DIR)
+            .apply { if (!exists()) mkdirs() }
 
-    /** Page one of the notice PDF, rendered. */
-    fun pdfFile(context: Context, logId: String): File =
-        File(directory(context), "$logId-pdf.jpg")
+    // ------------------------------------------------------------------ naming
+    //
+    // The extension is not decoration. ACTION_VIEW picks the viewing app from the MIME type, and a
+    // share target names the saved file from its extension -- so a PNG stored as `.jpg` reaches the
+    // gallery as a file it may refuse. Because the extension is therefore only known once the
+    // server has answered, lookups scan for the prefix rather than assuming a name.
+
+    private fun stem(logId: String, kind: String) = "$logId-$kind"
+
+    private fun find(dir: File, stem: String): File? =
+        dir.listFiles { file -> file.name.startsWith("$stem.") }?.firstOrNull()
 
     fun cachedImage(context: Context, logId: String?): File? =
-        logId?.let { imageFile(context, it) }?.takeIf { it.exists() }
+        logId?.let { find(directory(context), stem(it, "img")) }
 
     fun cachedPdfRender(context: Context, logId: String?): File? =
-        logId?.let { pdfFile(context, it) }?.takeIf { it.exists() }
+        logId?.let { find(directory(context), stem(it, "pdf")) }
+
+    fun cachedLinkImage(context: Context, logId: String?): File? =
+        logId?.let { find(directory(context), stem(it, "link")) }
+
+    /** The downloaded circular itself, if it has been fetched. */
+    fun cachedPdf(context: Context, logId: String?): File? =
+        logId?.let { find(fileDirectory(context), stem(it, "doc")) }
+
+    // ------------------------------------------------------------------ fetching
 
     /**
-     * Fetches [url] into the cache and returns the decoded bitmap for the tray notification, or
-     * null on any failure -- callers fall back to a text-only notification, never to silence.
+     * Fetches [url] into the cache and returns the decoded bitmap, or null on any failure --
+     * callers fall back to a text-only notification, never to silence.
      */
     suspend fun fetchImage(context: Context, url: String, logId: String): Bitmap? =
-        withTimeoutOrNull(TIMEOUT_MS) {
-            withContext(Dispatchers.IO) {
-                runCatching {
-                    val target = imageFile(context, logId)
-                    download(url, target)
-                    prune(context)
-                    decodeDownsampled(target)
-                }.onFailure { Log.w(TAG, "Image fetch failed for $url", it) }
-                    .getOrNull()
-            }
+        fetchPicture(context, url, logId, "img")
+
+    /** The logo or still for a link preview card. Same path, different name on disk. */
+    suspend fun fetchLinkImage(context: Context, url: String, logId: String): Bitmap? =
+        fetchPicture(context, url, logId, "link")
+
+    private suspend fun fetchPicture(
+        context: Context,
+        url: String,
+        logId: String,
+        kind: String,
+    ): Bitmap? = withTimeoutOrNull(TIMEOUT_MS) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val scratch = File(context.cacheDir, "notice_$logId-$kind.part")
+                val contentType = download(url, scratch)
+
+                // Checked before the file is kept, not after it fails to decode. An ICO favicon
+                // downloads perfectly and then renders as nothing at all, which on a phone looks
+                // like the app losing the picture rather than like a format it cannot read.
+                if (!MimeTypes.isDecodableImage(contentType)) {
+                    scratch.delete()
+                    error("$url is ${MimeTypes.normalise(contentType)}, which cannot be decoded")
+                }
+
+                val target = File(
+                    directory(context),
+                    "${stem(logId, kind)}.${MimeTypes.imageExtension(contentType, url)}",
+                )
+                find(directory(context), stem(logId, kind))?.takeIf { it != target }?.delete()
+                moveInto(scratch, target)
+
+                prune(context)
+                decodeDownsampled(target)
+            }.onFailure { Log.w(TAG, "Image fetch failed for $url", it) }
+                .getOrNull()
         }
+    }
 
     /**
-     * Downloads [pdfUrl], renders its first page, caches the render, and returns a bitmap sized for
-     * the notification tray.
+     * Downloads [pdfUrl], renders its first page, caches the render, and returns the bitmap.
      *
-     * Returns null for anything unreachable, not actually a PDF, or password protected, which
-     * PdfRenderer refuses outright.
+     * The PDF is fetched to a scratch file and deleted afterwards: at push time only the render is
+     * needed, and holding a 2MB download inside the service's budget for a file the user may never
+     * open would be paying the cost early for everyone to benefit nobody. [fetchPdf] keeps it when
+     * they do open it.
+     *
+     * Returns null for anything unreachable, not actually a PDF, or password protected.
      */
     suspend fun fetchPdfRender(context: Context, pdfUrl: String, logId: String): Bitmap? =
         withTimeoutOrNull(TIMEOUT_MS) {
             withContext(Dispatchers.IO) {
-                // Scratch file in cacheDir, not filesDir: if the process dies mid-render the OS is
-                // free to reclaim it, and nothing here is worth keeping.
                 val scratch = File(context.cacheDir, "notice_$logId.pdf")
                 runCatching {
                     download(pdfUrl, scratch)
                     val rendered = PdfPageRenderer.renderFirstPage(scratch)
                         ?: error("Could not render $pdfUrl")
-                    writeJpeg(rendered, pdfFile(context, logId))
+
+                    val target = File(directory(context), "${stem(logId, "pdf")}.jpg")
+                    writeJpeg(rendered, target)
+
+                    // Released before returning, and read back at a smaller size. The render is now
+                    // page-sized so the viewer has something to zoom into -- an A4 page at 1600px is
+                    // about 14MB as ARGB_8888 -- and handing that to the notification path would
+                    // hold it live inside a service that is already the most memory-constrained
+                    // place this app runs. The file on disk is what the viewer opens later.
+                    rendered.recycle()
                     prune(context)
-                    PdfPageRenderer.toNotificationBitmap(rendered)
+                    decodeDownsampled(target)
                 }.onFailure { Log.w(TAG, "Notice PDF failed for $pdfUrl", it) }
                     .also { runCatching { scratch.delete() } }
                     .getOrNull()
             }
         }
 
-    private fun download(url: String, target: File) {
+    /**
+     * Downloads the circular itself and keeps it, for handing to a PDF viewer.
+     *
+     * Returns the cached copy immediately when there is one, so a second tap opens instantly. On
+     * failure returns null and the caller falls back to opening the URL in a browser -- which needs
+     * a connection, but so did this.
+     */
+    suspend fun fetchPdf(context: Context, pdfUrl: String, logId: String): File? {
+        cachedPdf(context, logId)?.takeIf { it.length() > 0 }?.let { return it }
+
+        return withTimeoutOrNull(TAP_TIMEOUT_MS) {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    val target = File(fileDirectory(context), "${stem(logId, "doc")}.pdf")
+                    val scratch = File(context.cacheDir, "notice_$logId-doc.part")
+
+                    // Downloaded to a scratch name and moved into place, so an interrupted download
+                    // cannot leave a truncated file that looks cached and opens to an error.
+                    download(pdfUrl, scratch)
+                    if (!PdfPageRenderer.isReadablePdf(scratch)) {
+                        scratch.delete()
+                        error("$pdfUrl is not a readable PDF")
+                    }
+                    target.delete()
+                    moveInto(scratch, target)
+
+                    prunePdfs(context)
+                    target
+                }.onFailure { Log.w(TAG, "PDF download failed for $pdfUrl", it) }
+                    .getOrNull()
+            }
+        }
+    }
+
+    /** Returns the response's Content-Type, which is the only honest source for the extension. */
+    private fun download(url: String, target: File): String? {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 5_000
-            readTimeout = 5_000
+            readTimeout = 15_000
             instanceFollowRedirects = true
         }
         try {
@@ -119,15 +244,40 @@ object NoticeImageStore {
             connection.inputStream.use { input ->
                 target.outputStream().use { output -> input.copyTo(output) }
             }
+            return connection.contentType
         } finally {
             connection.disconnect()
         }
+    }
+
+    /**
+     * Moves [scratch] onto [target], copying if a rename is refused.
+     *
+     * cacheDir and filesDir sit on the same partition on every Android device this runs on, so the
+     * rename is expected to succeed and the copy is insurance rather than the normal path. It is
+     * here because the failure it guards against is silent: a false from renameTo would otherwise
+     * discard a download that had already completely succeeded.
+     */
+    private fun moveInto(scratch: File, target: File) {
+        if (scratch.renameTo(target)) return
+        scratch.inputStream().use { input ->
+            target.outputStream().use { output -> input.copyTo(output) }
+        }
+        scratch.delete()
     }
 
     private fun writeJpeg(bitmap: Bitmap, target: File) {
         target.outputStream().use { out -> bitmap.compress(Bitmap.CompressFormat.JPEG, 90, out) }
     }
 
+    /**
+     * Decodes [file] at a size fit for the screen.
+     *
+     * It no longer sizes for the notification tray: that is [TrayArtwork]'s job now, and doing it
+     * here meant the in-app viewer was handed a bitmap shrunk to a notification's budget -- which
+     * is why an A4 page could not be zoomed into. This returns something the viewer can use, and
+     * the tray narrows it further.
+     */
     fun decodeDownsampled(file: File): Bitmap? {
         if (!file.exists()) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -137,19 +287,15 @@ object NoticeImageStore {
         while (bounds.outWidth / sample > MAX_DIMENSION || bounds.outHeight / sample > MAX_DIMENSION) {
             sample *= 2
         }
-        val decoded = BitmapFactory.decodeFile(
+        return BitmapFactory.decodeFile(
             file.absolutePath,
             BitmapFactory.Options().apply { inSampleSize = sample },
-        ) ?: return null
-
-        // A notification crosses a Binder transaction capped near 1MB, and ARGB_8888 costs four
-        // bytes a pixel -- so 1024x768 alone is 3MB and throws TransactionTooLargeException, losing
-        // the whole notification rather than just the picture. This is the bug the forked app still
-        // carries; sizing here is what stops it.
-        return PdfPageRenderer.toNotificationBitmap(decoded)
+        )
     }
 
-    /** Keeps the [KEEP_NEWEST] most recently written files and deletes the rest. */
+    // ------------------------------------------------------------------ housekeeping
+
+    /** Keeps the [KEEP_NEWEST] most recently written artwork files and deletes the rest. */
     fun prune(context: Context, keep: Int = KEEP_NEWEST) = prune(directory(context), keep)
 
     /** Directory-level overload, kept free of Context so it is unit-testable on the JVM. */
@@ -160,14 +306,30 @@ object NoticeImageStore {
             .forEach { it.delete() }
     }
 
+    /** Trims stored PDFs to [PDF_BUDGET_BYTES], oldest first. */
+    fun prunePdfs(context: Context, budgetBytes: Long = PDF_BUDGET_BYTES) =
+        prunePdfs(fileDirectory(context), budgetBytes)
+
+    fun prunePdfs(dir: File, budgetBytes: Long = PDF_BUDGET_BYTES) {
+        val files = dir.listFiles()?.sortedByDescending { it.lastModified() } ?: return
+        var used = 0L
+        files.forEach { file ->
+            used += file.length()
+            if (used > budgetBytes) file.delete()
+        }
+    }
+
     fun delete(context: Context, logIds: Collection<String>) {
         logIds.forEach { logId ->
-            runCatching { imageFile(context, logId).delete() }
-            runCatching { pdfFile(context, logId).delete() }
+            listOf("img", "pdf", "link").forEach { kind ->
+                runCatching { find(directory(context), stem(logId, kind))?.delete() }
+            }
+            runCatching { cachedPdf(context, logId)?.delete() }
         }
     }
 
     fun clear(context: Context) {
         directory(context).listFiles()?.forEach { it.delete() }
+        fileDirectory(context).listFiles()?.forEach { it.delete() }
     }
 }

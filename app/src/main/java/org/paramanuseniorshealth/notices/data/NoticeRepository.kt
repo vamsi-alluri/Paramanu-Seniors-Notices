@@ -3,6 +3,7 @@ package org.paramanuseniorshealth.notices.data
 import android.content.Context
 import kotlinx.coroutines.flow.Flow
 import org.paramanuseniorshealth.notices.fcm.NoticeImageStore
+import java.io.File
 
 class NoticeRepository(
     private val dao: NoticeDao,
@@ -26,6 +27,10 @@ class NoticeRepository(
         logId: String?,
         imageUrl: String? = null,
         pdfUrl: String? = null,
+        linkUrl: String? = null,
+        linkTitle: String? = null,
+        linkImage: String? = null,
+        linkSite: String? = null,
     ): Boolean {
         val entity = NoticeEntity(
             logId = logId?.takeIf { it.isNotBlank() },
@@ -34,6 +39,10 @@ class NoticeRepository(
             receivedAt = parseTimestamp(logId),
             imageUrl = imageUrl?.takeIf { it.isNotBlank() },
             pdfUrl = pdfUrl?.takeIf { it.isNotBlank() },
+            linkUrl = linkUrl?.takeIf { it.isNotBlank() },
+            linkTitle = linkTitle?.takeIf { it.isNotBlank() },
+            linkImage = linkImage?.takeIf { it.isNotBlank() },
+            linkSite = linkSite?.takeIf { it.isNotBlank() },
         )
         return dao.insert(entity) != -1L
     }
@@ -55,6 +64,42 @@ class NoticeRepository(
         logId = "local-welcome",
     )
 
+    /**
+     * Writes the entry that says access has ended, mirroring [saveWelcome] at the other end.
+     *
+     * Returns false when one is already stored, which is how a repeated revoke broadcast is stopped
+     * from posting a second notification: the insert is IGNORE on a duplicate `logId`.
+     */
+    suspend fun saveRevoked(title: String, body: String): Boolean = save(
+        title = title,
+        body = body,
+        logId = REVOKED_LOG_ID,
+    )
+
+    /**
+     * Removes the revocation entry when access is restored.
+     *
+     * Without this, the row would sit permanently in a working phone's history saying delivery had
+     * stopped, and -- because the insert ignores a duplicate id -- a later revocation would never
+     * announce itself.
+     */
+    suspend fun clearRevokedNotice() {
+        dao.byLogId(REVOKED_LOG_ID)?.let { clear(listOf(it)) }
+    }
+
+    /**
+     * The circular itself, downloading it if this is the first time it has been asked for.
+     *
+     * Lives here rather than in the view model because it needs a Context and the view model
+     * deliberately holds none. Returns null when there is no PDF, no logId to file it under, or the
+     * download failed -- callers fall back to opening the URL in a browser.
+     */
+    suspend fun pdfFile(notice: NoticeEntity): File? {
+        val url = notice.pdfUrl?.takeIf { it.isNotBlank() } ?: return null
+        val logId = notice.logId ?: return null
+        return NoticeImageStore.fetchPdf(context, url, logId)
+    }
+
     /** Clears history and the cached renders with it, so "clear" leaves nothing on disk. */
     suspend fun clearAll() {
         dao.deleteAll()
@@ -73,6 +118,11 @@ class NoticeRepository(
      * for a device that was switched off overnight. Anything unparseable (a UUID, an ISO string)
      * falls back to arrival time.
      */
+    companion object {
+        /** `local-` keeps it out of the sender's numeric namespace, as with `local-welcome`. */
+        const val REVOKED_LOG_ID = "local-revoked"
+    }
+
     private fun parseTimestamp(logId: String?): Long {
         val now = System.currentTimeMillis()
         val numeric = logId?.trim()?.toLongOrNull() ?: return now

@@ -9,6 +9,9 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import com.google.firebase.messaging.FirebaseMessaging
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
@@ -38,6 +41,61 @@ class ActivationRepository(private val context: Context) {
     /** True once a code has been redeemed on this device, regardless of server state. */
     val isActivated: Boolean get() = storedCode != null && storedUid != null
 
+    /**
+     * True while this device's claim is known to be revoked.
+     *
+     * Persistent, not a one-shot flag: the notice list shows a banner for as long as it is set, and
+     * it is cleared only when the server says the claim stands again -- which is what makes the
+     * console's Restore button work.
+     */
+    val isRevoked: Boolean get() = prefs.getBoolean(KEY_REVOKED, false)
+
+    /**
+     * The same fact as [isRevoked], as a stream, so a screen that is already on display updates the
+     * moment a revoke arrives.
+     *
+     * A revoke is applied by the messaging service, which runs in this process but with no UI
+     * attached. Without this the banner appeared only when something else happened to redraw the
+     * screen -- so the user could sit looking at a list that had silently stopped receiving.
+     */
+    private val _revoked = MutableStateFlow(prefs.getBoolean(KEY_REVOKED, false))
+    val revoked: StateFlow<Boolean> = _revoked.asStateFlow()
+
+    /** When the last definitive answer was obtained. Zero if there has never been one. */
+    val lastVerifiedAt: Long get() = prefs.getLong(KEY_LAST_VERIFIED_AT, 0L)
+
+    /**
+     * The delivery gate: may this notice be shown?
+     *
+     * Answers from the last persisted result, with **no network at all**. This is the whole point
+     * of the split. Calling verify() from onMessageReceived meant a broadcast to four hundred
+     * phones opened ~400 Realtime Database websockets within a few seconds, against a Spark cap of
+     * 100 simultaneous connections; over the cap the connection is refused, the answer comes back
+     * Unknown, and the check silently stopped working during exactly the event it exists for.
+     *
+     * Nothing stored yet, or anything unrecognised, permits the notice -- the same reasoning that
+     * already permits Unknown. A missed closure notice is worse than a revoked device seeing one
+     * more public announcement. See docs/decisions.md.
+     */
+    fun gate(): ActivationState {
+        if (!isActivated) return ActivationState.NotActivated
+        if (isRevoked) return ActivationState.Revoked
+        return when (prefs.getString(KEY_LAST_STATE, null)) {
+            ActivationState.Revoked.name -> ActivationState.Revoked
+            ActivationState.Active.name -> ActivationState.Active
+            else -> ActivationState.Unknown
+        }
+    }
+
+    /** Stores a definitive answer. [ActivationState.Unknown] is not an answer, so it is not stored. */
+    fun recordVerification(state: ActivationState) {
+        if (state == ActivationState.Unknown) return
+        prefs.edit()
+            .putString(KEY_LAST_STATE, state.name)
+            .putLong(KEY_LAST_VERIFIED_AT, System.currentTimeMillis())
+            .apply()
+    }
+
     /** Whether [subscription] is switched on for this phone. */
     fun isSubscribed(subscription: Subscription): Boolean =
         prefs.getBoolean(subscription.preferenceKey, subscription.defaultEnabled)
@@ -59,6 +117,11 @@ class ActivationRepository(private val context: Context) {
         if (!ActivationCode.isValid(rawCode)) return RedeemResult.Mistyped
         val code = ActivationCode.normalise(rawCode)
 
+        // Retyping the code this phone already holds. Answered here rather than by the server: the
+        // rules would refuse it, but only as a generic permission denial, and the user would be
+        // told their code "may already have been used" while holding the slip it is printed on.
+        if (code == storedCode) return RedeemResult.SameCode
+
         return withTimeoutOrNull(NETWORK_TIMEOUT_MS) {
             try {
                 // Reuse the existing anonymous account when there is one: signing in again would
@@ -76,14 +139,30 @@ class ActivationRepository(private val context: Context) {
                     )
                 ).awaitResult()
 
+                // KEY_REVOKED is cleared here on purpose. A revoked device keeps its old code and
+                // UID so a console Restore can bring it back, but the user may instead be handed a
+                // fresh slip -- and without this the new claim would inherit the old one's
+                // revocation and the gate would refuse every notice for a code that is perfectly
+                // good.
                 prefs.edit()
                     .putString(KEY_CODE, code)
                     .putString(KEY_UID, uid)
+                    .putBoolean(KEY_REVOKED, false)
                     .apply()
+                _revoked.value = false
+
+                // A fresh claim is known-good, so record it rather than leaving the gate to answer
+                // Unknown for the first notice.
+                recordVerification(ActivationState.Active)
 
                 // Only the defaults are turned on here. STATUS stays off until the user asks for
                 // it, which is the whole reason it is a separate subscription.
                 syncSubscriptions()
+
+                // Start the daily check now rather than waiting for the next app start: on a phone
+                // that is activated and then left alone, this is the only thing that would ever
+                // notice a revocation whose broadcast was missed.
+                ActivationRefreshWorker.ensurePeriodic(context)
                 RedeemResult.Success
             } catch (e: Exception) {
                 // The rules reject an unknown or already-claimed code as a permission denial, which
@@ -111,7 +190,10 @@ class ActivationRepository(private val context: Context) {
                 // Forces a refresh against the server, which is the only way a deleted or disabled
                 // anonymous user is ever discovered. A cached ID token stays happily valid
                 // otherwise, so `currentUser != null` proves nothing at all.
-                val user = auth.currentUser ?: return@withTimeoutOrNull ActivationState.Revoked
+                val user = auth.currentUser ?: run {
+                    recordVerification(ActivationState.Revoked)
+                    return@withTimeoutOrNull ActivationState.Revoked
+                }
                 user.getIdToken(true).awaitResult()
 
                 val snapshot: DataSnapshot =
@@ -121,7 +203,7 @@ class ActivationRepository(private val context: Context) {
                 val revoked = snapshot.child(FIELD_REVOKED).getValue(Boolean::class.java) == true
                 val issued = snapshot.child(FIELD_ISSUED).exists()
 
-                when {
+                val state = when {
                     revoked -> ActivationState.Revoked
                     // Every code the console prints carries `issued`. A node without it was never
                     // issued by the NGO, so the claim on it is not one we honour -- this catches
@@ -131,9 +213,13 @@ class ActivationRepository(private val context: Context) {
                     claimedBy != uid -> ActivationState.Revoked    // reissued to somebody else
                     else -> ActivationState.Active
                 }
+                // Persisted here so the gate can answer the next notice without a connection.
+                recordVerification(state)
+                state
             } catch (e: FirebaseAuthInvalidUserException) {
                 // Definitive: the anonymous account behind this claim no longer exists.
                 Log.i(TAG, "Anonymous user is gone; treating as revoked", e)
+                recordVerification(ActivationState.Revoked)
                 ActivationState.Revoked
             } catch (e: Exception) {
                 Log.w(TAG, "Verification inconclusive", e)
@@ -165,40 +251,52 @@ class ActivationRepository(private val context: Context) {
     }
 
     /**
-     * Called when verification says the claim is gone: stop delivery and forget the claim.
+     * Stops delivery without surrendering the claim.
      *
-     * Leaves a flag behind. Revocation is usually discovered by the messaging service, with no UI
-     * running -- so without this the user simply finds the code screen next time they open the app,
-     * with their history gone and no explanation. The flag lets whoever opens the app next say what
-     * happened. See [consumeRevokedNotice].
+     * The code and the UID are kept on purpose, and this is the correction of a real bug. Revoking
+     * sets `revoked: true` and leaves `usedBy` in place, and the security rules refuse to write
+     * `usedBy` on a code that already carries one -- so a device that had thrown its code away
+     * could never come back, by any route, and the console's Restore button had nothing left to
+     * restore. Keeping them means a restore is noticed by the next verification and the phone
+     * simply resumes.
+     *
+     * Safe to call repeatedly: a second revoke broadcast for the same code changes nothing.
      */
-    suspend fun clearRevoked() = forgetClaim(announce = true)
+    suspend fun suspendClaim() {
+        unsubscribeAll()
+        prefs.edit()
+            .putBoolean(KEY_REVOKED, true)
+            .putString(KEY_LAST_STATE, ActivationState.Revoked.name)
+            .putLong(KEY_LAST_VERIFIED_AT, System.currentTimeMillis())
+            .apply()
+        _revoked.value = true
+    }
+
+    /** The server says the claim stands again: clear the banner and start receiving once more. */
+    suspend fun resumeClaim() {
+        prefs.edit().putBoolean(KEY_REVOKED, false).apply()
+        _revoked.value = false
+        recordVerification(ActivationState.Active)
+        syncSubscriptions()
+    }
 
     /**
-     * The user chose to reset from Settings. Identical mechanically to [clearRevoked], but it must
-     * not raise the revocation message: they already know why their code is gone, and telling them
-     * their access "has been removed" would read as though something had been done to them.
+     * The user chose to reset from Settings: surrender the claim entirely.
+     *
+     * This is the one path that genuinely forgets, because the user asked for it and is usually
+     * handing the phone on. A revocation deliberately does not do this -- see [suspendClaim].
      */
-    suspend fun resetByUser() = forgetClaim(announce = false)
-
-    private suspend fun forgetClaim(announce: Boolean) {
+    suspend fun resetByUser() {
         unsubscribeAll()
         prefs.edit()
             .remove(KEY_CODE)
             .remove(KEY_UID)
+            .remove(KEY_REVOKED)
+            .remove(KEY_LAST_STATE)
+            .remove(KEY_LAST_VERIFIED_AT)
             .apply { Subscription.entries.forEach { remove(it.preferenceKey) } }
-            .apply {
-                if (announce) putBoolean(KEY_REVOKED_NOTICE, true)
-                else remove(KEY_REVOKED_NOTICE)
-            }
             .apply()
-    }
-
-    /** Returns true once after a revocation, then clears the flag so the message is shown only once. */
-    fun consumeRevokedNotice(): Boolean {
-        if (!prefs.getBoolean(KEY_REVOKED_NOTICE, false)) return false
-        prefs.edit().remove(KEY_REVOKED_NOTICE).apply()
-        return true
+        _revoked.value = false
     }
 
     /** Idempotent and locally persisted by the SDK, so calling it on every launch is cheap. */
@@ -233,7 +331,9 @@ class ActivationRepository(private val context: Context) {
         private const val PREFS = "activation"
         private const val KEY_CODE = "code"
         private const val KEY_UID = "uid"
-        private const val KEY_REVOKED_NOTICE = "revoked_notice_pending"
+        private const val KEY_REVOKED = "revoked"
+        private const val KEY_LAST_STATE = "last_state"
+        private const val KEY_LAST_VERIFIED_AT = "last_verified_at"
 
         private const val CODES = "codes"
         private const val FIELD_USED_BY = "usedBy"

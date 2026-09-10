@@ -66,6 +66,9 @@ dependencies {
     // Coil 3 keeps network fetching in a separate artifact; without it https models fail.
     implementation libs.coil.network.okhttp
 
+    // Verification runs here rather than in onMessageReceived: see docs/decisions.md.
+    implementation libs.androidx.work.runtime.ktx
+
     implementation libs.androidx.room.runtime
     implementation libs.androidx.room.ktx
     ksp libs.androidx.room.compiler

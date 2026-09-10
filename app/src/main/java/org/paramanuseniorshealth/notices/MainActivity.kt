@@ -7,7 +7,17 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Modifier
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -23,10 +33,13 @@ import kotlinx.coroutines.launch
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
 import org.paramanuseniorshealth.notices.ui.ActivationScreen
+import org.paramanuseniorshealth.notices.ui.AttachmentActions
 import org.paramanuseniorshealth.notices.ui.NoticeListScreen
+import org.paramanuseniorshealth.notices.ui.RevokedBanner
 import org.paramanuseniorshealth.notices.ui.NoticeViewModel
 import org.paramanuseniorshealth.notices.ui.NoticeViewerScreen
 import org.paramanuseniorshealth.notices.ui.Screen
+import org.paramanuseniorshealth.notices.ui.ShareText
 import org.paramanuseniorshealth.notices.ui.SettingsScreen
 import org.paramanuseniorshealth.notices.ui.rememberNotificationAccessState
 import org.paramanuseniorshealth.notices.ui.theme.ParamanuNoticesTheme
@@ -105,6 +118,9 @@ private fun NoticesApp(
     val highlightId by viewModel.highlightId.collectAsStateWithLifecycle()
     val officeInfo by viewModel.officeInfo.collectAsStateWithLifecycle()
     val testingUnlocked by viewModel.testingUnlocked.collectAsStateWithLifecycle()
+    val revoked by viewModel.revoked.collectAsStateWithLifecycle()
+    val checking by viewModel.checking.collectAsStateWithLifecycle()
+    val downloadingPdf by viewModel.downloadingPdf.collectAsStateWithLifecycle()
 
     val access = rememberNotificationAccessState()
     val context = LocalContext.current
@@ -129,6 +145,11 @@ private fun NoticesApp(
         }
     }
 
+    // Re-check whenever the app comes forward. Previously the only check was in the view model's
+    // init, which survives a trip through recents -- so a user whose code had been restored had to
+    // know to swipe the app away and reopen it, which nobody knows.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed() }
+
     // The permission prompt is deliberately not raised on the code screen: asking before the user
     // has any reason to expect notices is how a denial happens, and on Android 13+ a denial
     // silently disables the whole app for someone who will not go looking in system settings.
@@ -136,13 +157,59 @@ private fun NoticesApp(
         if (screen is Screen.Notices && !access.isEnabled) access.request()
     }
 
+    // The banner sits above every screen rather than inside the notice list. Being cut off is a
+    // fact about the whole app, and a user who happened to be in Settings or reading an attachment
+    // when the revoke landed would otherwise see nothing at all. It is left off the code screen
+    // itself, where it would be telling somebody mid-typing that the code they are entering is
+    // already dead.
+    val showBanner = revoked && screen !is Screen.Activation
+
+    Column(Modifier.fillMaxSize()) {
+        if (showBanner) {
+            // The window is edge to edge, and this sits above the Scaffold that would otherwise
+            // have handled the status bar, so it takes that inset itself -- and the screen below
+            // consumes it, or every Scaffold would pad for a status bar that is already covered.
+            RevokedBanner(
+                code = viewModel.activationCode,
+                checking = checking,
+                onRecheck = viewModel::recheckActivation,
+                // Already there: the button would go nowhere, and Settings carries its own
+                // Check again alongside the code and the helpdesk number.
+                onOpenSettings = if (screen is Screen.Settings) null
+                                 else ({ viewModel.show(Screen.Settings) }),
+                modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars),
+            )
+        }
+
+        // weight(1f) rather than letting the screens fill: each is a Scaffold asking for the whole
+        // height, which in a plain Column would run off the bottom by exactly the banner's height.
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .then(
+                    if (showBanner) Modifier.consumeWindowInsets(WindowInsets.statusBars)
+                    else Modifier
+                )
+        ) {
     when (val current = screen) {
-        Screen.Activation -> ActivationScreen(
-            onSubmit = viewModel::redeem,
-            busy = redeeming,
-            error = redeemError,
-            onErrorDismissed = viewModel::dismissRedeemError,
-        )
+        Screen.Activation -> {
+            // Back is a way out of this screen only when there is somewhere to go back to. A
+            // device that still holds a code arrived here from Settings, having chosen "Enter a
+            // new code", and must be able to change its mind -- previously back fell through to
+            // the system and closed the app.
+            //
+            // On a fresh install or straight after a reset there is nothing behind this screen, so
+            // no handler is installed and back does what it always did: leaves the app.
+            if (viewModel.activationCode != null) {
+                BackHandler { viewModel.show(Screen.Settings) }
+            }
+            ActivationScreen(
+                onSubmit = viewModel::redeem,
+                busy = redeeming,
+                error = redeemError,
+                onErrorDismissed = viewModel::dismissRedeemError,
+            )
+        }
 
         Screen.Notices -> {
             BackHandler(enabled = selected.isNotEmpty()) { viewModel.clearSelection() }
@@ -156,6 +223,18 @@ private fun NoticesApp(
                 onOpenNotificationSettings = access::request,
                 onToggleExpanded = viewModel::toggleExpanded,
                 onOpenImage = { viewModel.show(Screen.Viewer(it.id)) },
+                downloadingPdf = downloadingPdf,
+                onOpenPdf = { notice ->
+                    // Opening needs a Context, so the attempt is passed in as a lambda and the view
+                    // model keeps none -- the same arrangement as onSendTest above.
+                    viewModel.openPdf(
+                        notice = notice,
+                        open = { file -> AttachmentActions.open(context, file) },
+                        onUnavailable = {
+                            notice.pdfUrl?.let { AttachmentActions.openUrl(context, it) }
+                        },
+                    )
+                },
                 onToggleSelection = viewModel::toggleSelection,
                 onClearSelection = viewModel::clearSelection,
                 onDeleteSelected = viewModel::deleteSelected,
@@ -168,6 +247,8 @@ private fun NoticesApp(
             SettingsScreen(
                 subscriptions = subscriptions,
                 activationCode = viewModel.activationCode,
+                revoked = revoked,
+                checking = checking,
                 testingUnlocked = testingUnlocked,
                 versionName = BuildConfig.VERSION_NAME,
                 onSubscriptionChange = viewModel::setSubscribed,
@@ -189,6 +270,8 @@ private fun NoticesApp(
                     }
                 },
                 onUnlockTesting = viewModel::unlockTesting,
+                onRecheck = viewModel::recheckActivation,
+                onEnterNewCode = viewModel::enterNewCode,
                 onReset = viewModel::reset,
                 onBack = viewModel::backToNotices,
             )
@@ -198,7 +281,13 @@ private fun NoticesApp(
             BackHandler { viewModel.backToNotices() }
             var notice by remember(current.noticeId) { mutableStateOf<NoticeEntity?>(null) }
             LaunchedEffect(current.noticeId) { notice = viewModel.notice(current.noticeId) }
-            NoticeViewerScreen(notice = notice, onBack = viewModel::backToNotices)
+            NoticeViewerScreen(
+                notice = notice,
+                onBack = viewModel::backToNotices,
+                shareText = notice?.let { ShareText.build(listOf(it)) }.orEmpty(),
+            )
+        }
+    }
         }
     }
 }

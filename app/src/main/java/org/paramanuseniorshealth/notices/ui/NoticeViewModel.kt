@@ -110,15 +110,72 @@ class NoticeViewModel(
     private val _messages = MutableSharedFlow<Int>(extraBufferCapacity = 1)
     val messages: SharedFlow<Int> = _messages.asSharedFlow()
 
+    /**
+     * Whether this device's access has been withdrawn.
+     *
+     * Drives a banner across the app rather than a return to the code screen: hiding the history
+     * protected nothing, since any valid slip lifted that gate and it did not have to be theirs,
+     * while it cost the user everything they had already received.
+     *
+     * Taken straight from the repository rather than mirrored here. The change usually originates
+     * in the messaging service with no UI attached, and a local copy only caught up when something
+     * else happened to redraw the screen.
+     */
+    val revoked: StateFlow<Boolean> = activation.revoked
+
+    /** True while "Check again" is in flight, so the button can say so. */
+    private val _checking = MutableStateFlow(false)
+    val checking: StateFlow<Boolean> = _checking.asStateFlow()
+
+    /** When the server was last asked, for the resume throttle. Not persisted: per foreground run. */
+    private var lastCheckedAt = 0L
+
+    /**
+     * Notices whose circular is downloading right now.
+     *
+     * A set rather than a single id because the list is scrollable and nothing stops a user from
+     * tapping two rows. Held here rather than in the composable so it survives the row scrolling
+     * out of view and back -- a download that silently restarted every time the row recomposed
+     * would look like a button that does nothing.
+     */
+    private val _downloadingPdf = MutableStateFlow<Set<Long>>(emptySet())
+    val downloadingPdf: StateFlow<Set<Long>> = _downloadingPdf.asStateFlow()
+
     init {
-        // Revocation is usually discovered by the messaging service while no UI is running. The
-        // flag is consumed here so the explanation appears the next time the app is opened, rather
-        // than the user finding the code screen and their history gone with no reason given.
-        if (activation.consumeRevokedNotice()) {
-            _messages.tryEmit(R.string.toast_access_removed)
-        }
         refreshActivation()
         refreshOfficeInfo()
+    }
+
+    /**
+     * Fetches the circular if needed, then hands it to [open].
+     *
+     * [open] returns false when no app on the phone can display a PDF, and [onUnavailable] is the
+     * caller's escape to the website -- so the tap always leads somewhere, whether the file is
+     * cached, downloadable, or neither.
+     *
+     * Re-entry is guarded on the notice id: a second tap while the first download is in flight is
+     * ignored rather than starting a duplicate.
+     */
+    fun openPdf(
+        notice: NoticeEntity,
+        open: (java.io.File) -> Boolean,
+        onUnavailable: () -> Unit,
+    ) {
+        if (notice.id in _downloadingPdf.value) return
+        _downloadingPdf.value = _downloadingPdf.value + notice.id
+        viewModelScope.launch {
+            try {
+                val file = notices.pdfFile(notice)
+                if (file == null || !open(file)) {
+                    // Either the download failed or nothing can open a PDF. Both end at the
+                    // website, which needs a connection -- but so did getting this far.
+                    _messages.tryEmit(R.string.toast_pdf_opening_online)
+                    onUnavailable()
+                }
+            } finally {
+                _downloadingPdf.value = _downloadingPdf.value - notice.id
+            }
+        }
     }
 
     /** Keeps whatever is cached when the fetch fails, rather than emptying the header. */
@@ -158,27 +215,89 @@ class NoticeViewModel(
     /**
      * Asks the backend whether this install's claim still stands.
      *
-     * Only a definitive [ActivationState.Revoked] sends the user back to the code screen.
-     * [ActivationState.Unknown] -- offline, slow signal -- leaves them where they are, for the same
-     * reason the delivery gate permits it: locking someone out of notices they have already
-     * received because their phone had no signal at launch would be indefensible.
+     * A definitive [ActivationState.Revoked] raises the banner but leaves the user where they are.
+     * [ActivationState.Unknown] -- offline, slow signal -- changes nothing, for the same reason the
+     * delivery gate permits it: locking someone out of notices they have already received because
+     * their phone had no signal at launch would be indefensible.
      */
     fun refreshActivation() {
-        viewModelScope.launch {
-            when (activation.verify()) {
-                ActivationState.Revoked, ActivationState.NotActivated -> {
-                    if (activation.isActivated) {
-                        activation.clearRevoked()
-                        // Emitted before the screen changes, so the explanation is on screen as the
-                        // code gate appears rather than arriving after it.
-                        activation.consumeRevokedNotice()
-                        _messages.tryEmit(R.string.toast_access_removed)
-                    }
-                    _screen.value = Screen.Activation
+        viewModelScope.launch { applyVerification() }
+    }
+
+    /**
+     * Asks the server and applies the answer. Returns it so a caller can report the outcome.
+     *
+     * suspendClaim and resumeClaim publish the change themselves, so there is nothing to mirror
+     * into a local flag here.
+     */
+    private suspend fun applyVerification(): ActivationState {
+        val state = activation.verify()
+        when (state) {
+            ActivationState.Revoked -> activation.suspendClaim()
+
+            ActivationState.Active -> {
+                if (activation.isRevoked) {
+                    activation.resumeClaim()
+                    notices.clearRevokedNotice()
                 }
-                ActivationState.Active, ActivationState.Unknown -> Unit
             }
+
+            // Genuinely no claim on this device: a fresh install, or after a reset.
+            ActivationState.NotActivated -> _screen.value = Screen.Activation
+
+            ActivationState.Unknown -> Unit
         }
+        lastCheckedAt = System.currentTimeMillis()
+        return state
+    }
+
+    /**
+     * Called whenever the app comes to the foreground.
+     *
+     * Without this the only check was in `init`, which runs when the view model is created -- so
+     * bringing the app forward from recents re-checked nothing, and a user whose code had been
+     * restored had to know to swipe the app away and reopen it. Nobody knows that.
+     *
+     * A revoked phone checks every time: its user is the one actively waiting for an answer, and
+     * they may be standing at the counter. An active phone is throttled, because switching between
+     * two apps should not open a database connection each way.
+     */
+    fun onResumed() {
+        val stale = System.currentTimeMillis() - lastCheckedAt >= RESUME_RECHECK_MS
+        if (activation.isRevoked || stale) refreshActivation()
+    }
+
+    /**
+     * The user pressing "Check again" after being told their code was restored.
+     *
+     * Always asks, however recently it last checked -- a throttle here would answer somebody who
+     * has just come off the phone to the helpdesk with silence. Says what happened either way,
+     * because a button that appears to do nothing is worse than no button.
+     */
+    fun recheckActivation() {
+        if (_checking.value) return
+        _checking.value = true
+        viewModelScope.launch {
+            val message = when (applyVerification()) {
+                ActivationState.Active -> R.string.toast_access_restored
+                ActivationState.Revoked -> R.string.toast_still_stopped
+                ActivationState.Unknown -> R.string.toast_check_failed
+                ActivationState.NotActivated -> R.string.toast_still_stopped
+            }
+            _messages.tryEmit(message)
+            _checking.value = false
+        }
+    }
+
+    /**
+     * Opens the code screen without surrendering anything.
+     *
+     * Distinct from [reset], which wipes the notices too. Somebody who has been revoked and given a
+     * fresh slip at the counter should keep everything they have already received -- the new code
+     * is the same person continuing, not a new one starting.
+     */
+    fun enterNewCode() {
+        _screen.value = Screen.Activation
     }
 
     fun redeem(rawCode: String) {
@@ -189,6 +308,10 @@ class NoticeViewModel(
             when (val result = activation.redeem(rawCode)) {
                 RedeemResult.Success -> {
                     _subscriptions.value = activation.subscriptions()
+                    // redeem() clears the revocation itself, so the banner is already down by here.
+                    // The old revocation notice goes too: it says no more alerts will arrive, which
+                    // has just stopped being true.
+                    notices.clearRevokedNotice()
                     // Written before the screen changes so the list is never momentarily empty.
                     notices.saveWelcome(welcomeTitle, welcomeBody)
 
@@ -281,6 +404,15 @@ class NoticeViewModel(
         private const val RESOLVE_ATTEMPTS = 5
         private const val RESOLVE_RETRY_MS = 200L
         private const val HIGHLIGHT_MS = 2_500L
+
+        /**
+         * How stale an answer may be before coming to the foreground re-asks.
+         *
+         * Short, because an app open is a natural moment to check and they are spread out across
+         * users -- unlike a broadcast, which wakes four hundred phones at once and is why the
+         * per-notice check had to move off the message path entirely.
+         */
+        private const val RESUME_RECHECK_MS = 60_000L
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {

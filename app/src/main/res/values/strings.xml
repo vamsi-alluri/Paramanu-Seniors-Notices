@@ -23,6 +23,7 @@
     <string name="activation_where_to_get_code">You can collect a code from the dispensary counter.</string>
     <string name="activation_error_mistyped">That code does not look right. Please check each character and try again.</string>
     <string name="activation_error_not_accepted">That code was not accepted. It may already have been used. Please ask at the counter.</string>
+    <string name="activation_error_same_code">That is the code this phone already had, and it has been stopped. Please ask at the counter for a new one.</string>
     <string name="activation_error_offline">Could not connect. Please check your internet and try again.</string>
 
     <!-- Notice list -->
@@ -34,6 +35,19 @@
     <string name="action_back">Back</string>
     <string name="action_open_pdf">Open the full notice</string>
     <string name="dialog_cancel">Cancel</string>
+
+    <!-- Attachments. "a copy" in Save, because the notice itself stays in the app either way. -->
+    <string name="action_open_with">Open</string>
+    <string name="action_share">Share</string>
+    <string name="action_save">Save a copy</string>
+    <string name="action_share_chooser">Share this notice</string>
+    <string name="attachment_downloading">Getting the notice…</string>
+    <string name="toast_saved">Saved.</string>
+    <string name="toast_save_failed">Could not save that. Try another folder.</string>
+    <string name="toast_pdf_opening_online">Opening it on the website instead.</string>
+
+    <!-- Link preview card -->
+    <string name="link_open">Open link</string>
 
     <!-- Viewer -->
     <string name="viewer_no_image">The notice image is not saved on this phone.</string>
@@ -73,7 +87,30 @@
     <string name="settings_reset_action">Reset</string>
     <string name="settings_reset_confirm_title">Reset this app?</string>
     <string name="settings_reset_confirm_body">Your code and every saved notice will be removed from this phone. This cannot be undone, and you will need a new code from the dispensary counter.</string>
-    <string name="toast_access_removed">Your access has been removed. Please ask at the dispensary counter for a new code.</string>
+    <!--
+      Shown on the notice list, not as a toast, and it stays until access is restored. The old
+      wording said access "has been removed" while the notices sat untouched behind the code screen,
+      which overstated what had happened; these say what is actually true.
+    -->
+    <string name="revoked_banner_title">You will not receive any more alerts.</string>
+    <string name="revoked_banner_body">Your saved notices are still here to read. If you expected this, you can uninstall the app.</string>
+    <string name="revoked_banner_helpdesk">If not, please call the helpdesk and give them your code %1$s.</string>
+    <string name="revoked_banner_action">What to do</string>
+    <!-- Settings, when the code has been revoked. -->
+    <string name="settings_code_revoked">This code has been stopped.</string>
+    <string name="settings_recheck">Has your code been turned back on?</string>
+    <string name="settings_recheck_explainer">If you have spoken to the helpdesk and they have turned your code back on, check here.</string>
+    <string name="settings_recheck_action">Check again</string>
+    <string name="settings_recheck_checking">Checking…</string>
+    <string name="toast_access_restored">Your code is working again. Notices will start arriving.</string>
+    <string name="toast_still_stopped">Your code is still stopped. Please speak to the helpdesk.</string>
+    <string name="toast_check_failed">Could not check just now. Please check your internet and try again.</string>
+
+    <string name="settings_new_code">Enter a new code</string>
+    <string name="settings_new_code_explainer">If the counter has given you a new slip, type it here. Your saved notices are kept.</string>
+    <string name="settings_new_code_action">Enter a new code</string>
+    <string name="revoked_notification_title">You have been removed from the notices list</string>
+    <string name="revoked_notification_body">You will not receive any more alerts. Your saved notices are still in the app.</string>
     <string name="settings_about">Notices are published by Helpdesk, CHSS Beneficiaries Group, Vashi, Navi Mumbai, Maharashtra, India.</string>
     <string name="settings_version">Version %1$s</string>
 
