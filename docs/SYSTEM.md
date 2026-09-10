@@ -452,7 +452,8 @@ the code screen.
 
 0. **Deploy and verify the audit / revocation work.** All of it is written and the Android half is
    covered by unit tests, but none of it has run against Google's infrastructure or on a phone:
-   - ~~Paste `console/Tests.gs`, run `runConsoleTests`~~ — **done, `All 34 passed.`**
+   - Paste `console/Tests.gs`, run `runConsoleTests` — expect `All 44 passed.` (34 when it was
+     first run; the code-generation and printed-state rules added ten more since.)
    - Paste `sender/Revoker.gs`, run `revokerDryRun()` (sends nothing), then
      `revokerInstallTrigger()`. No new Script Properties, and no redeploy needed — a trigger is not
      served by `/exec`.
