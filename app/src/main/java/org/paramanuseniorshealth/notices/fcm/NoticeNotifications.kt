@@ -148,6 +148,20 @@ object NoticeNotifications {
             .notify(logId?.hashCode() ?: System.currentTimeMillis().toInt(), notification)
     }
 
+    /**
+     * Takes a posted notification back out of the tray.
+     *
+     * The id derivation has to match [post] exactly, which is why it lives here rather than at the
+     * call site: a mismatch would leave the notification in place with nothing to say so.
+     *
+     * Needed because a locally-posted notice can stop being true. The revocation one says no more
+     * alerts will arrive; once the code is restored that is wrong, and it sat there until the user
+     * swiped it away -- and tapping it took them to a notice that no longer existed.
+     */
+    fun cancel(context: Context, logId: String) {
+        NotificationManagerCompat.from(context).cancel(logId.hashCode())
+    }
+
     const val EXTRA_LOG_ID = "logId"
     const val EXTRA_TITLE = "title"
     const val EXTRA_BODY = "body"

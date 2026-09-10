@@ -31,6 +31,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import org.paramanuseniorshealth.notices.data.NoticeEntity
+import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
 import org.paramanuseniorshealth.notices.ui.ActivationScreen
 import org.paramanuseniorshealth.notices.ui.AttachmentActions
@@ -89,6 +90,18 @@ class MainActivity : ComponentActivity() {
     private fun persistFromNotificationIntent(intent: Intent?) {
         val extras = intent?.extras ?: return
         val logId = extras.getString(NoticeNotifications.EXTRA_LOG_ID) ?: return
+
+        // Locally-posted notices are never re-persisted from an intent. This fallback exists for
+        // payloads the FCM SDK drew itself, which always come from the sender with a numeric logId
+        // -- a `local-` one cannot arrive that way, so there is nothing here to recover.
+        //
+        // Without this, tapping the revocation notice after the code had been restored wrote the
+        // row straight back into history, undoing the delete that had just removed it.
+        if (logId.startsWith(NoticeRepository.LOCAL_LOG_ID_PREFIX)) {
+            tappedLogId.value = logId
+            return
+        }
+
         val title = extras.getString(NoticeNotifications.EXTRA_TITLE)
             ?: extras.getString("gcm.notification.title")
             ?: return
@@ -263,7 +276,8 @@ private fun NoticesApp(
                                 context = context,
                                 title = testTitle,
                                 body = testBody,
-                                logId = "local-test-" + System.currentTimeMillis(),
+                                logId = NoticeRepository.LOCAL_LOG_ID_PREFIX + "test-" +
+                                        System.currentTimeMillis(),
                             )
                             true
                         }

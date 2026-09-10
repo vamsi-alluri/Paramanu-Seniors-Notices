@@ -3,6 +3,7 @@ package org.paramanuseniorshealth.notices.data
 import android.content.Context
 import kotlinx.coroutines.flow.Flow
 import org.paramanuseniorshealth.notices.fcm.NoticeImageStore
+import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
 import java.io.File
 
 class NoticeRepository(
@@ -61,7 +62,7 @@ class NoticeRepository(
     suspend fun saveWelcome(title: String, body: String): Boolean = save(
         title = title,
         body = body,
-        logId = "local-welcome",
+        logId = WELCOME_LOG_ID,
     )
 
     /**
@@ -85,6 +86,9 @@ class NoticeRepository(
      */
     suspend fun clearRevokedNotice() {
         dao.byLogId(REVOKED_LOG_ID)?.let { clear(listOf(it)) }
+        // The tray copy has to go too. Deleting only the row left the notification sitting there
+        // still saying no more alerts would arrive, after they had started arriving again.
+        NoticeNotifications.cancel(context, REVOKED_LOG_ID)
     }
 
     /**
@@ -104,6 +108,8 @@ class NoticeRepository(
     suspend fun clearAll() {
         dao.deleteAll()
         NoticeImageStore.clear(context)
+        // A reset wipes the history the revocation notice points at, so it must not outlive it.
+        NoticeNotifications.cancel(context, REVOKED_LOG_ID)
     }
 
     suspend fun clear(notices: List<NoticeEntity>) {
@@ -119,8 +125,17 @@ class NoticeRepository(
      * falls back to arrival time.
      */
     companion object {
-        /** `local-` keeps it out of the sender's numeric namespace, as with `local-welcome`. */
-        const val REVOKED_LOG_ID = "local-revoked"
+        /**
+         * Marks a notice this app wrote itself rather than one the sender broadcast.
+         *
+         * The sender's ids are epoch millis, so this can never collide with a real notice. It also
+         * tells the notification-tap fallback in MainActivity what it must not try to recover: a
+         * locally-written notice has no payload behind it to restore from.
+         */
+        const val LOCAL_LOG_ID_PREFIX = "local-"
+
+        const val WELCOME_LOG_ID = LOCAL_LOG_ID_PREFIX + "welcome"
+        const val REVOKED_LOG_ID = LOCAL_LOG_ID_PREFIX + "revoked"
     }
 
     private fun parseTimestamp(logId: String?): Long {
