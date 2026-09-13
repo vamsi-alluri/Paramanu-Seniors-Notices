@@ -20,6 +20,9 @@ keystore
 *.keystore
 keystore.properties
 
+# Firebase service account keys — never commit
+*-firebase-adminsdk-*.json
+
 # Build outputs
 /app/release/
 *.aab
