@@ -124,7 +124,9 @@ private fun NoticesApp(
     val screen by viewModel.screen.collectAsStateWithLifecycle()
     val notices by viewModel.allNotices.collectAsStateWithLifecycle()
     val selected by viewModel.selected.collectAsStateWithLifecycle()
-    val subscriptions by viewModel.subscriptions.collectAsStateWithLifecycle()
+    val dispensary by viewModel.dispensary.collectAsStateWithLifecycle()
+    val topicChoices by viewModel.topicChoices.collectAsStateWithLifecycle()
+    val testingOn by viewModel.testingOn.collectAsStateWithLifecycle()
     val redeeming by viewModel.redeeming.collectAsStateWithLifecycle()
     val redeemError by viewModel.redeemError.collectAsStateWithLifecycle()
     val expandedId by viewModel.expandedId.collectAsStateWithLifecycle()
@@ -211,7 +213,7 @@ private fun NoticesApp(
             // new code", and must be able to change its mind -- previously back fell through to
             // the system and closed the app.
             //
-            // On a fresh install or straight after a reset there is nothing behind this screen, so
+            // On a fresh install there is nothing behind this screen, so
             // no handler is installed and back does what it always did: leaves the app.
             if (viewModel.activationCode != null) {
                 BackHandler { viewModel.show(Screen.Settings) }
@@ -258,13 +260,16 @@ private fun NoticesApp(
         Screen.Settings -> {
             BackHandler { viewModel.backToNotices() }
             SettingsScreen(
-                subscriptions = subscriptions,
+                dispensary = dispensary,
+                topicChoices = topicChoices,
+                testingOn = testingOn,
                 activationCode = viewModel.activationCode,
                 revoked = revoked,
                 checking = checking,
                 testingUnlocked = testingUnlocked,
                 versionName = BuildConfig.VERSION_NAME,
-                onSubscriptionChange = viewModel::setSubscribed,
+                onTopicChange = viewModel::setTopic,
+                onTestingChange = viewModel::setTesting,
                 onSendTest = {
                     // Posted from here rather than the view model: it needs a Context, and the view
                     // model deliberately holds none.
@@ -286,7 +291,6 @@ private fun NoticesApp(
                 onUnlockTesting = viewModel::unlockTesting,
                 onRecheck = viewModel::recheckActivation,
                 onEnterNewCode = viewModel::enterNewCode,
-                onReset = viewModel::reset,
                 onBack = viewModel::backToNotices,
             )
         }

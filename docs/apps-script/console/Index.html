@@ -43,7 +43,16 @@
   input, textarea, select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
                     background: #fff; color: #10131a; }
   input[type=number] { width: 72px; }
-  input[type=text] { min-width: 280px; flex: 1; }
+  input[type=text], input[type=search] { min-width: 280px; flex: 1; }
+
+  /* Draws a line round the three things Generate uses, so the count and note are not read as
+     belonging to Refresh or Print sitting beside them. */
+  .group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; flex: 1;
+           border: 1px solid #c3c9d6; border-radius: 10px; padding: 10px 12px; background: #f8f9fc; }
+
+  /* A filter inside a sortable header. It must not inherit the header's capitals and spacing. */
+  th select.thfilter { display: block; margin-top: 5px; font-size: 12px; padding: 3px 4px;
+                       text-transform: none; letter-spacing: 0; font-weight: normal; }
   input[type=color] { padding: 2px; width: 38px; }
   .wide { width: 100%; box-sizing: border-box; }
 
@@ -62,7 +71,23 @@
   .printed { background: #dff0e2; color: #0d2f16; }
   .used { background: #e6e9f0; color: #2a2f3a; }
   .revoked { background: #f9dedc; color: #410e0b; }
+  /* On hold: stopped and locked until the holder is restored. Amber, so it is not read as Disabled. */
+  .hold { background: #fbe6bd; color: #3f2a00; }
   .hist { background: #f6f8fc; }
+  .hist ol + .sub { margin: 12px 0 4px; }
+  /* Nine columns do not fit a narrow window; the table scrolls on its own rather than the page. */
+  .tablewrap { overflow-x: auto; }
+  .actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 150px; }
+  .actions button { padding: 6px 10px; font-size: 13px; }
+  .locked { color: #5a6478; font-size: 13px; }
+  .gone { color: #5a6478; font-style: italic; }
+
+  dialog { border: 1px solid #c3c9d6; border-radius: 12px; padding: 20px 22px; max-width: 420px;
+           width: calc(100% - 40px); color: #10131a; }
+  dialog::backdrop { background: #10131a66; }
+  dialog label { display: block; font-size: 13px; color: #4a5162; margin: 12px 0 4px; }
+  dialog input[type=text], dialog input[type=tel] { width: 100%; box-sizing: border-box; min-width: 0; }
+  dialog .msg { position: static; margin: 12px 0 0; }
   .hist td { padding: 10px 14px 16px; }
   .hist ol { margin: 0; padding-left: 20px; }
   .hist li { padding: 2px 0; }
@@ -116,7 +141,6 @@
       <a onclick="goTo('codes')">Activation codes</a>
       <a onclick="goTo('messages')">Saved messages</a>
       <a onclick="goTo('banner-section')">Dispensary banner</a>
-      <a onclick="goTo('status')">Daily open and closed</a>
     </div>
   </div>
 
@@ -134,22 +158,43 @@
       </div>
 
       <div class="bar">
-        <input type="number" id="count" value="10" min="1" max="200">
-        <input type="text" id="note" maxlength="120" placeholder="Note (optional) e.g. printed for 12 Sep counter">
-        <button id="make" onclick="makeCodes()">Generate</button>
+        <div class="group" role="group" aria-label="Generate codes">
+          <input type="number" id="count" value="10" min="1" max="200" oninput="labelGenerate()">
+          <input type="text" id="note" maxlength="120" placeholder="Note (optional) e.g. printed for 12 Sep counter">
+          <button id="make" onclick="makeCodes()">Generate 10</button>
+        </div>
+      </div>
+
+      <div class="bar">
         <button class="ghost" onclick="refresh()">Refresh</button>
         <button class="ghost" id="print" onclick="printSlips()">Print <span id="printCount">0</span> slips</button>
         <label class="sub" style="margin: 0">
           <input type="checkbox" id="includePrinted" onchange="setIncludePrinted(this.checked)">
           include already printed
         </label>
+        <span class="sub" id="printOff" style="margin: 0" hidden>
+          Printing is turned off (Script Properties &rarr; PRINTING_ENABLED).
+        </span>
       </div>
 
+      <div class="bar">
+        <input type="search" id="search" oninput="setSearch(this.value)"
+               placeholder="Search by code, name, CHSS number, telephone or note">
+      </div>
+
+      <div class="tablewrap">
       <table>
         <thead>
           <tr>
             <th class="sort" onclick="sortCodes('code')">Code<span class="arrow" id="ac-code"></span></th>
-            <th class="sort" onclick="sortCodes('status')">Status<span class="arrow" id="ac-status"></span></th>
+            <th class="sort" onclick="sortCodes('status')">Status<span class="arrow" id="ac-status"></span>
+              <!-- stopPropagation: choosing a filter must not also re-sort the column. -->
+              <select id="statusFilter" class="thfilter" aria-label="Show only codes with this status"
+                      onclick="event.stopPropagation()" onchange="setStatusFilter(this.value)"></select>
+            </th>
+            <th class="sort" onclick="sortCodes('name')">Name<span class="arrow" id="ac-name"></span></th>
+            <th class="sort" onclick="sortCodes('chss')">CHSS number<span class="arrow" id="ac-chss"></span></th>
+            <th class="sort" onclick="sortCodes('phone')">Telephone<span class="arrow" id="ac-phone"></span></th>
             <th class="sort" onclick="sortCodes('note')">Note<span class="arrow" id="ac-note"></span></th>
             <th class="sort" onclick="sortCodes('issued')">Issued<span class="arrow" id="ac-issued"></span></th>
             <th class="sort" onclick="sortCodes('lastChange')">Last change<span class="arrow" id="ac-lastChange"></span></th>
@@ -157,9 +202,10 @@
           </tr>
         </thead>
         <tbody id="rows">
-          <tr><td colspan="6">Loading...</td></tr>
+          <tr><td colspan="9">Loading...</td></tr>
         </tbody>
       </table>
+      </div>
 
       <div class="bar" id="pager" style="margin: 14px 0 0; display: none">
         <button class="ghost" id="prev" onclick="goPage(PAGE - 1)">Previous</button>
@@ -174,6 +220,24 @@
           </select>
           per page
         </label>
+      </div>
+
+      <div id="removedSection" hidden>
+        <div class="divider"></div>
+        <h2>Removed holders</h2>
+        <div class="sub">
+          Their codes are On hold. Restore holder takes the code off hold and puts it back as it was.
+          After 30 days a removed holder is erased for good and the code goes back to Unused.
+        </div>
+        <div class="tablewrap">
+          <table>
+            <thead>
+              <tr><th>Name</th><th>CHSS number</th><th>Telephone</th><th>Code</th><th>Removed</th>
+                  <th>Erased after</th><th></th></tr>
+            </thead>
+            <tbody id="removedRows"></tbody>
+          </table>
+        </div>
       </div>
     </div>
 
@@ -219,7 +283,8 @@
         Shown at the top of the app, above the notices. Paste straight from Word or Gmail if you
         like: bold, underline, text colour and highlight are kept, everything else is cleaned away.
         Text size is deliberately not kept &mdash; the app uses whatever size the reader has set on
-        their own phone.
+        their own phone. Keep it short: the banner travels inside the message sent to every phone,
+        which has a size limit.
       </div>
 
       <div class="bar">
@@ -251,16 +316,28 @@
                   color:#10131a;font-size:16px;line-height:1.5;max-width:420px"></div>
     </div>
 
-    <div class="card" id="status">
-      <h2>Daily open and closed messages</h2>
-      <div class="sub">
-        The exact wording the two counter QR codes send. Changes take effect on the next scan.
-      </div>
-      <div id="statuses"><span class="sub">Loading...</span></div>
-    </div>
-
   </div>
 </div>
+
+<dialog id="holderDialog" class="noprint">
+  <form onsubmit="return saveHolderForm(event)">
+    <h2 id="holderTitle">Add holder</h2>
+    <label for="hName">Name</label>
+    <input type="text" id="hName" maxlength="80" required autocomplete="off">
+    <label for="hChss">CHSS number</label>
+    <input type="text" id="hChss" maxlength="40" autocomplete="off">
+    <label for="hPhone">Telephone</label>
+    <input type="tel" id="hPhone" maxlength="30" autocomplete="off">
+    <input type="hidden" id="hId">
+    <input type="hidden" id="hCode">
+    <!-- Errors are shown here: the page's own message bar sits behind the dialog's backdrop. -->
+    <div id="hError" class="msg"></div>
+    <div class="bar" style="margin: 18px 0 0">
+      <button type="submit" id="hSave">Save</button>
+      <button type="button" class="ghost" onclick="closeHolderDialog()">Cancel</button>
+    </div>
+  </form>
+</dialog>
 
 <div id="slips"></div>
 
@@ -333,14 +410,99 @@
   // Newest first, matching the order the server hands them over in.
   var CODE_SORT = { key: 'issued', dir: -1 };
 
-  var CODE_KEYS = ['code', 'status', 'note', 'issued', 'lastChange'];
+  var CODE_KEYS = ['code', 'status', 'name', 'chss', 'phone', 'note', 'issued', 'lastChange'];
 
   // Which codes have their history open. Keyed by code rather than by row index so an expansion
   // survives a re-sort and a page turn -- both of which redraw the whole table.
   var OPEN_HISTORY = {};
 
-  var EVENT_LABEL = { issued: 'Issued', revoked: 'Revoked', restored: 'Restored',
-                      released: 'Released', note: 'Note set', claimed: 'Claimed' };
+  // The words staff see for each status, in one place so a rename is a one-line change. The keys are
+  // the page's own and never leave it.
+  var STATUS_ORDER = ['unused', 'printed', 'used', 'disabled', 'hold'];
+  var STATUS_LABEL = { unused: 'Unused', printed: 'Printed', used: 'In use', disabled: 'Disabled', hold: 'On hold' };
+  var STATUS_PILL = { unused: 'free', printed: 'printed', used: 'used', disabled: 'revoked', hold: 'hold' };
+
+  // On hold outranks Disabled. An On hold code is stopped underneath too, and showing Disabled would
+  // invite an Enable that the server refuses.
+  function statusOf(row) {
+    return row.onHold ? 'hold' : row.revoked ? 'disabled' : row.claimed ? 'used' : row.printed ? 'printed' : 'unused';
+  }
+
+  // What the table is narrowed to. Both apply before sorting and paging, and neither touches printing:
+  // the print sheet always covers every eligible code, so a search left in the box cannot quietly
+  // shorten a print run.
+  var SEARCH = '';
+  var STATUS_FILTER = '';
+
+  /**
+   * A typed code reduced to what the database holds: capitals and digits, with the letters people
+   * read as digits folded the way the app folds them. So AXGX-BBBE, axgx bbbe and AXGXBBBE all
+   * match, and so does a 0 typed as an O.
+   */
+  function squashCode(s) {
+    return String(s || '').toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+  }
+
+  function matchesSearch(row, query) {
+    var text = String(query || '').trim().toLowerCase();
+    if (!text) return true;
+    var h = row.holder || {};
+    if ([row.note, h.name, h.chss].join('\n').toLowerCase().indexOf(text) >= 0) return true;
+
+    // A telephone number is matched on its digits alone, so "98765 43210" finds 9876543210. Three
+    // digits at least, or "ward 3" would match every number with a 3 in it.
+    var digits = text.replace(/\D/g, '');
+    if (digits.length >= 3 && String(h.phone || '').replace(/\D/g, '').indexOf(digits) >= 0) return true;
+
+    var code = squashCode(text);
+    return code.length > 0 && row.code.indexOf(code) >= 0;
+  }
+
+  function isShown(row) {
+    return matchesSearch(row, SEARCH) && (!STATUS_FILTER || statusOf(row) === STATUS_FILTER);
+  }
+
+  function setSearch(value) {
+    SEARCH = value;
+    PAGE = 1;  // page 4 of everything says nothing about page 4 of the matches
+    renderPage();
+  }
+
+  function setStatusFilter(value) {
+    STATUS_FILTER = value;
+    PAGE = 1;
+    renderPage();
+  }
+
+  function fillStatusFilter() {
+    var select = document.getElementById('statusFilter');
+    select.innerHTML = '<option value="">All</option>' + STATUS_ORDER.map(function (key) {
+      return '<option value="' + key + '">' + STATUS_LABEL[key] + '</option>';
+    }).join('');
+  }
+
+  /** Keeps the button saying how many it will make, so the number field is hard to overlook. */
+  function labelGenerate() {
+    // Clamped the way createCodes clamps it, so the button never promises a number it will not make.
+    var n = Math.max(1, Math.min(200, parseInt(document.getElementById('count').value, 10) || 1));
+    document.getElementById('make').textContent = 'Generate ' + n;
+  }
+
+  // The stored event names stay as they were written; these are the words the page uses for them.
+  var EVENT_LABEL = { issued: 'Issued', printed: 'Printed', revoked: 'Disabled', restored: 'Enabled',
+                      released: 'Phone unlinked', note: 'Note set', deleted: 'Deleted', claimed: 'Claimed',
+                      'holder-added': 'Holder added', 'holder-edited': 'Holder edited',
+                      'holder-moved-in': 'Holder moved here from', 'holder-moved-out': 'Holder moved to',
+                      'holder-removed': 'Holder removed', 'holder-restored': 'Holder restored',
+                      'holder-purged': 'Removed holder erased' };
+
+  var HOLDER_EVENT_LABEL = { added: 'Added', edited: 'Edited', moved: 'Moved', removed: 'Removed', restored: 'Restored' };
+  var HOLDER_FIELD_LABEL = { name: 'name', chss: 'CHSS number', phone: 'telephone', code: 'code' };
+
+  function formatCode(code) {
+    code = String(code || '');
+    return code.length === 8 ? code.substring(0, 4) + '-' + code.substring(4) : code;
+  }
 
   /**
    * One line of a code's history.
@@ -352,8 +514,26 @@
   function auditLine(entry) {
     var who = entry.by ? escapeHtml(entry.by) : '(device)';
     var label = EVENT_LABEL[entry.event] || escapeHtml(entry.event);
-    var extra = entry.to ? ' &mdash; &ldquo;' + escapeHtml(entry.to) + '&rdquo;' : '';
-    return label + ' ' + stamp(entry.at) + ' <span class="who">' + who + '</span>' + extra;
+    var extra = '';
+    if (String(entry.event).indexOf('holder-moved') === 0) extra = ' ' + escapeHtml(formatCode(entry.to));
+    else if (entry.to) extra = ' &mdash; &ldquo;' + escapeHtml(entry.to) + '&rdquo;';
+    // Named while the holder exists; after the purge the id names nobody, and nothing is shown.
+    if (entry.holderName) extra += ' &mdash; ' + escapeHtml(entry.holderName);
+    return label + extra + ' ' + stamp(entry.at) + ' <span class="who">' + who + '</span>';
+  }
+
+  /** One line of a holder's own history, with what each change was from and to. */
+  function holderLine(entry) {
+    var changes = entry.changes || {};
+    var parts = Object.keys(changes).map(function (field) {
+      var from = changes[field].from, to = changes[field].to;
+      if (field === 'code') { from = formatCode(from); to = formatCode(to); }
+      return escapeHtml(HOLDER_FIELD_LABEL[field] || field) + ' ' +
+             (from ? '&ldquo;' + escapeHtml(from) + '&rdquo; &rarr; ' : '') + '&ldquo;' + escapeHtml(to) + '&rdquo;';
+    });
+    return (HOLDER_EVENT_LABEL[entry.event] || escapeHtml(entry.event)) +
+           (parts.length ? ': ' + parts.join(', ') : '') + ' ' + stamp(entry.at) +
+           ' <span class="who">' + escapeHtml(entry.by) + '</span>';
   }
 
   function toggleHistory(code) {
@@ -365,9 +545,12 @@
     // Ordered the way the counter thinks about them: ready to hand out first, dead ones last.
     // Unprinted before printed, because "what do I still need to print" is the question this
     // column gets asked most.
-    if (key === 'status') return row.revoked ? 3 : row.claimed ? 2 : row.printed ? 1 : 0;
+    if (key === 'status') return row.onHold ? 4 : row.revoked ? 3 : row.claimed ? 2 : row.printed ? 1 : 0;
     if (key === 'issued') return row.issued || 0;
     if (key === 'note') return row.note || '';
+    if (key === 'name') return row.holder ? row.holder.name : '';
+    if (key === 'chss') return row.holder ? row.holder.chss : '';
+    if (key === 'phone') return row.holder ? row.holder.phone : '';
     // Codes issued before the audit existed have no history and are not backfilled, so they carry
     // a zero and settle at one end rather than being treated as blank.
     if (key === 'lastChange') return row.lastChange ? row.lastChange.at : 0;
@@ -391,9 +574,23 @@
     renderPage();
   }
 
-  function render(rows) {
-    CODES = rows;
+  // The last answer from listCodes, so a local change (the print checkbox) can redraw without a trip
+  // to the server.
+  var LAST = null;
+  var PRINTING_ENABLED = true;
+  var REMOVED = [];
+  var REMOVED_BY_CODE = {};
+
+  function render(data) {
+    LAST = data;
+    CODES = data.codes;
+    var rows = CODES;
+    REMOVED = data.removedHolders || [];
+    REMOVED_BY_CODE = {};
+    REMOVED.forEach(function (h) { REMOVED_BY_CODE[h.code] = h; });
+    PRINTING_ENABLED = data.printingEnabled !== false;
     renderPage();
+    renderRemoved();
 
     // Only codes nobody holds are worth printing; the rest already belong to somebody. Already
     // printed ones are left out too, or generating fifty more and printing again would reprint the
@@ -408,7 +605,11 @@
       return !r.claimed && !r.revoked && !r.reserved && (INCLUDE_PRINTED || !r.printed);
     });
     document.getElementById('printCount').textContent = PRINTABLE.length;
-    document.getElementById('print').disabled = PRINTABLE.length === 0;
+    // Switched off in Script Properties: the controls stay visible, so staff can see printing exists
+    // and why it is unavailable, rather than wondering where it went.
+    document.getElementById('print').disabled = !PRINTING_ENABLED || PRINTABLE.length === 0;
+    document.getElementById('includePrinted').disabled = !PRINTING_ENABLED;
+    document.getElementById('printOff').hidden = PRINTING_ENABLED;
     document.getElementById('slips').innerHTML = PRINTABLE.map(function (r) {
       // The QR is secondary and sits below: the code is what the person needs, and someone who
       // already has the app should never have to work out that the square is not for them.
@@ -422,14 +623,16 @@
     markSort('ac-', CODE_KEYS, CODE_SORT);
 
     // A copy: CODES stays in the order the server sent, which is the order the slips print in.
-    var rows = CODES.slice().sort(function (a, b) {
+    var rows = CODES.filter(isShown).sort(function (a, b) {
       return compareValues(codeValue(a, CODE_SORT.key), codeValue(b, CODE_SORT.key), CODE_SORT.dir);
     });
     var body = document.getElementById('rows');
     var pager = document.getElementById('pager');
 
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="6">No codes yet. Generate some.</td></tr>';
+      body.innerHTML = '<tr><td colspan="9">' +
+        (CODES.length ? 'No codes match. Clear the search or set Status back to All.'
+                      : 'No codes yet. Generate some.') + '</td></tr>';
       pager.style.display = 'none';
       return;
     }
@@ -445,33 +648,41 @@
     document.getElementById('prev').disabled = PAGE <= 1;
     document.getElementById('next').disabled = PAGE >= pages;
     document.getElementById('pageInfo').textContent =
-      (from + 1) + '-' + (from + page.length) + ' of ' + rows.length + ' codes' +
+      (from + 1) + '-' + (from + page.length) + ' of ' + rows.length +
+      (rows.length === CODES.length ? ' codes' : ' matching codes (' + CODES.length + ' in all)') +
       (pages > 1 ? '  (page ' + PAGE + ' of ' + pages + ')' : '');
 
     body.innerHTML = page.map(function (r) {
       // Printed is a state of an unused code, not a rival to "in use": it says a slip exists on
       // paper somewhere. Once somebody activates it, that is the more useful thing to show.
-      var state = r.revoked ? '<span class="pill revoked">Revoked</span>'
-                : r.claimed ? '<span class="pill used">In use</span>'
-                : r.printed ? '<span class="pill printed">Printed</span>'
-                            : '<span class="pill free">Unused</span>';
+      var status = statusOf(r);
+      var state = '<span class="pill ' + STATUS_PILL[status] + '">' + STATUS_LABEL[status] + '</span>';
 
+      // What each status offers. The server refuses the same things, so a stale page cannot do what
+      // this hides; the buttons only keep staff from being told no.
+      var h = r.holder;
       var actions = [];
-      if (r.revoked) {
-        actions.push('<button class="ghost" onclick="unrevoke(\'' + r.code + '\')">Restore</button>');
-      } else if (r.claimed) {
-        actions.push('<button class="ghost" onclick="revoke(\'' + r.code + '\')">Revoke</button>');
+      if (r.onHold) {
+        actions.push('<span class="locked">Locked until the holder is restored</span>');
+      } else {
+        if (r.revoked) actions.push(actionButton('Enable', 'enable', r.code));
+        else if (r.claimed) actions.push(actionButton('Disable', 'disable', r.code));
+        if (r.claimed || r.revoked) actions.push(actionButton('Unlink phone', 'unlink', r.code));
+        actions.push(actionButton('Edit note', 'editNote', r.code));
+        if (h) {
+          actions.push(actionButton('Edit holder', 'editHolder', r.code));
+          actions.push(actionButton('Move holder', 'moveHolder', r.code));
+          actions.push(actionButton('Remove holder', 'removeHolder', r.code, true));
+        } else {
+          actions.push(actionButton('Add holder', 'addHolder', r.code));
+        }
+        // No phone and no holder, so deleting it takes nothing away from anybody.
+        if (!r.claimed && !h) actions.push(actionButton('Delete code', 'removeCode', r.code, true));
       }
-      // Only offered for a claimed code: releasing an unclaimed one would do nothing.
-      if (r.claimed || r.revoked) {
-        actions.push('<button class="ghost" onclick="release(\'' + r.code + '\')">Release</button>');
-      }
-      actions.push('<button class="ghost" onclick="editNote(\'' + r.code + '\')">Note</button>');
-      // Never claimed, so deleting it takes nothing away from anybody who is using the app. The
-      // server checks this too; the button being hidden is not what makes it safe.
-      if (!r.claimed) {
-        actions.push('<button class="ghost danger" onclick="removeCode(\'' + r.code + '\')">Delete</button>');
-      }
+
+      // An On hold code has no active holder, but staff looking at it need to know whose it was.
+      var gone = r.onHold ? REMOVED_BY_CODE[r.code] : null;
+      var nameCell = h ? escapeHtml(h.name) : gone ? '<span class="gone">' + escapeHtml(gone.name) + ' (removed)</span>' : '';
 
       var open = !!OPEN_HISTORY[r.code];
       var last = r.lastChange
@@ -480,14 +691,21 @@
         : '<span class="sub">&mdash;</span>';
 
       var html = '<tr><td class="mono">' + r.formatted + '</td><td>' + state +
+                 '</td><td>' + nameCell + '</td><td>' + escapeHtml(h ? h.chss : '') +
+                 '</td><td>' + escapeHtml(h ? h.phone : '') +
                  '</td><td>' + escapeHtml(r.note) + '</td><td>' + stamp(r.issued) +
                  '</td><td>' + last +
-                 '</td><td>' + actions.join(' ') + '</td></tr>';
+                 '</td><td><div class="actions">' + actions.join('') + '</div></td></tr>';
 
-      if (open && r.audit && r.audit.length) {
-        html += '<tr class="hist"><td colspan="6"><ol>' + r.audit.map(function (entry) {
-          return '<li>' + auditLine(entry) + '</li>';
-        }).join('') + '</ol></td></tr>';
+      if (open) {
+        var codeLines = (r.audit || []).map(function (entry) { return '<li>' + auditLine(entry) + '</li>'; }).join('');
+        var holderLines = h && h.history.length
+          ? '<div class="sub">Changes to ' + escapeHtml(h.name) + '</div><ol>' +
+            h.history.map(function (entry) { return '<li>' + holderLine(entry) + '</li>'; }).join('') + '</ol>'
+          : '';
+        if (codeLines || holderLines) {
+          html += '<tr class="hist"><td colspan="9"><ol>' + codeLines + '</ol>' + holderLines + '</td></tr>';
+        }
       }
       return html;
     }).join('');
@@ -533,7 +751,7 @@
 
   function setIncludePrinted(on) {
     INCLUDE_PRINTED = on;
-    render(CODES);
+    if (LAST) render(LAST);
   }
 
   /**
@@ -546,7 +764,7 @@
    * quietly missing from every future run.
    */
   function printSlips() {
-    if (!PRINTABLE.length) return;
+    if (!PRINTING_ENABLED || !PRINTABLE.length) return;
     var codes = PRINTABLE.map(function (r) { return r.code; });
 
     window.print();
@@ -585,32 +803,145 @@
       .deleteCode(code);
   }
 
-  function release(code) {
+  function actionButton(label, handler, code, danger) {
+    return '<button class="ghost' + (danger ? ' danger' : '') + '" onclick="' + handler + '(\'' + code + '\')">' +
+           label + '</button>';
+  }
+
+  /** A server call that redraws on success, with a success message if one is given. */
+  function run(message) {
+    return google.script.run
+      .withSuccessHandler(function (data) { if (message) show(message, false); render(data); })
+      .withFailureHandler(function (e) { show(e.message, true); });
+  }
+
+  function findCode(code) {
+    for (var i = 0; i < CODES.length; i++) if (CODES[i].code === code) return CODES[i];
+    return null;
+  }
+
+  function unlink(code) {
     if (!confirm(
-      'Release ' + code + '?\n\n' +
-      'It becomes available for somebody else to use.\n\n' +
-      'Only do this if the phone that claimed it is gone (uninstalled, replaced, or its data ' +
-      'was cleared). If a working phone still holds this code, releasing it will cut that phone ' +
-      'off at its next check.'
+      'Unlink the phone from ' + formatCode(code) + '?\n\n' +
+      'Do this only when that phone is gone: lost, replaced, the app reinstalled or its data cleared. ' +
+      'The code can then be typed on a new phone. The note and the holder stay.\n\n' +
+      'If a working phone still holds this code, unlinking cuts that phone off at its next check.'
     )) return;
-    google.script.run.withSuccessHandler(function (rows) {
-      show(code + ' released. It can be handed out again.', false);
-      render(rows);
-    }).withFailureHandler(function (e) { show(e.message, true); })
-      .releaseCode(code);
+    run(formatCode(code) + ' unlinked. It can be typed on a new phone.').unlinkPhone(code);
   }
 
-  function revoke(code) {
-    if (!confirm('Revoke ' + code + '? That phone stops receiving notices.')) return;
-    google.script.run.withSuccessHandler(render)
-      .withFailureHandler(function (e) { show(e.message, true); })
-      .revokeCode(code);
+  function disable(code) {
+    if (!confirm('Disable ' + formatCode(code) + '?\n\nThat phone stops receiving notices within about a minute.')) return;
+    run(formatCode(code) + ' disabled.').disableCode(code);
   }
 
-  function unrevoke(code) {
-    google.script.run.withSuccessHandler(render)
-      .withFailureHandler(function (e) { show(e.message, true); })
-      .unrevokeCode(code);
+  function enable(code) {
+    run(formatCode(code) + ' enabled. The phone starts receiving again within about a minute.').enableCode(code);
+  }
+
+  // ---- holders ----
+
+  function openHolderDialog(title, id, code, holder) {
+    document.getElementById('holderTitle').textContent = title;
+    document.getElementById('hId').value = id || '';
+    document.getElementById('hCode').value = code || '';
+    document.getElementById('hName').value = holder ? holder.name : '';
+    document.getElementById('hChss').value = holder ? holder.chss : '';
+    document.getElementById('hPhone').value = holder ? holder.phone : '';
+    document.getElementById('hError').className = 'msg';
+    document.getElementById('holderDialog').showModal();
+    document.getElementById('hName').focus();
+  }
+
+  function closeHolderDialog() {
+    document.getElementById('holderDialog').close();
+  }
+
+  function addHolder(code) {
+    openHolderDialog('Add holder for ' + formatCode(code), '', code, null);
+  }
+
+  function editHolder(code) {
+    var row = findCode(code);
+    if (row && row.holder) openHolderDialog('Edit holder of ' + formatCode(code), row.holder.id, code, row.holder);
+  }
+
+  function saveHolderForm(event) {
+    event.preventDefault();
+    var id = document.getElementById('hId').value;
+    var code = document.getElementById('hCode').value;
+    var save = document.getElementById('hSave');
+    var error = document.getElementById('hError');
+    save.disabled = true;
+
+    var call = google.script.run
+      .withSuccessHandler(function (data) {
+        save.disabled = false;
+        closeHolderDialog();
+        show(id ? 'Holder saved.' : 'Holder added to ' + formatCode(code) + '.', false);
+        render(data);
+      })
+      .withFailureHandler(function (e) {
+        save.disabled = false;
+        error.textContent = e.message;
+        error.className = 'msg err';
+      });
+
+    var name = document.getElementById('hName').value;
+    var chss = document.getElementById('hChss').value;
+    var phone = document.getElementById('hPhone').value;
+    if (id) call.editHolder(id, name, chss, phone);
+    else call.addHolder(code, name, chss, phone);
+    return false;
+  }
+
+  function moveHolder(code) {
+    var row = findCode(code);
+    if (!row || !row.holder) return;
+    var to = prompt(
+      'Move ' + row.holder.name + ' from ' + formatCode(code) + ' to which code?\n\n' +
+      'Type the new code from the slip, for example AXGX-BBBE.', '');
+    if (to === null || !to.trim()) return;
+    run(row.holder.name + ' moved to ' + formatCode(squashCode(to)) + '. ' + formatCode(code) +
+        ' now has no holder.').moveHolder(row.holder.id, to);
+  }
+
+  function removeHolder(code) {
+    var row = findCode(code);
+    if (!row || !row.holder) return;
+    var name = row.holder.name;
+    if (!confirm(
+      'Remove ' + name + ' from ' + formatCode(code) + '?\n\n' +
+      formatCode(code) + ' goes On hold: its phone stops receiving notices, and nothing can be done to ' +
+      'the code until the holder is restored.\n\n' +
+      'You can restore ' + name + ' from Removed holders for 30 days. After that their details are ' +
+      'erased for good and the code goes back to Unused.'
+    )) return;
+    run(name + ' removed. ' + formatCode(code) + ' is On hold.').removeHolder(row.holder.id);
+  }
+
+  function restoreHolder(id) {
+    var holder = null;
+    REMOVED.forEach(function (h) { if (h.id === id) holder = h; });
+    if (!holder) return;
+    if (!confirm(
+      'Restore ' + holder.name + ' to ' + formatCode(holder.code) + '?\n\n' +
+      'The code comes off hold' + (holder.wasDisabled
+        ? ' and stays Disabled, as it was before the holder was removed.'
+        : ', and its phone starts receiving notices again by itself.')
+    )) return;
+    run(holder.name + ' restored to ' + formatCode(holder.code) + '.').restoreHolder(id);
+  }
+
+  function renderRemoved() {
+    document.getElementById('removedSection').hidden = REMOVED.length === 0;
+    document.getElementById('removedRows').innerHTML = REMOVED.map(function (h) {
+      return '<tr><td>' + escapeHtml(h.name) + '</td><td>' + escapeHtml(h.chss) + '</td><td>' + escapeHtml(h.phone) +
+             '</td><td class="mono">' + escapeHtml(formatCode(h.code)) +
+             '</td><td>' + stamp(h.removedAt) + ' <span class="who">' + escapeHtml(h.removedBy) + '</span>' +
+             '</td><td>' + new Date(h.purgeAfter).toLocaleDateString() +
+             '</td><td><button class="ghost" onclick="restoreHolder(\'' + h.id + '\')">Restore holder</button></td></tr>';
+    }).join('');
   }
 
   // ---- saved messages ----
@@ -703,48 +1034,6 @@
     google.script.run.withSuccessHandler(renderTemplates)
       .withFailureHandler(function (e) { show(e.message, true); })
       .listTemplates();
-  }
-
-  // ---- daily status wording ----
-
-  function renderStatuses(rows) {
-    document.getElementById('statuses').innerHTML = rows.map(function (r) {
-      var id = 's-' + r.which;
-      return '<div style="margin-bottom:18px">' +
-        '<div style="font-weight:600;text-transform:capitalize">' + escapeHtml(r.which) +
-        (r.customised ? '' : ' <span class="pill used">shipped default</span>') + '</div>' +
-        '<input type="text" class="wide" id="' + id + '-title" maxlength="120" value="' +
-        escapeHtml(r.title) + '" style="margin-top:6px">' +
-        '<textarea class="wide" id="' + id + '-body" maxlength="900" ' +
-        'style="min-height:70px;margin-top:6px">' + escapeHtml(r.body) + '</textarea>' +
-        '<div class="bar" style="margin-top:8px">' +
-        '<button onclick="saveStatus(\'' + r.which + '\')">Save</button>' +
-        (r.customised ? '<button class="ghost" onclick="resetStatus(\'' + r.which + '\')">Use the default</button>' : '') +
-        '</div></div>';
-    }).join('');
-  }
-
-  function saveStatus(which) {
-    google.script.run
-      .withSuccessHandler(function (rows) { show('Saved. The next scan will send the new wording.', false); renderStatuses(rows); })
-      .withFailureHandler(function (e) { show(e.message, true); })
-      .saveStatusMessage(which,
-        document.getElementById('s-' + which + '-title').value,
-        document.getElementById('s-' + which + '-body').value);
-  }
-
-  function resetStatus(which) {
-    if (!confirm('Go back to the wording shipped with the app?')) return;
-    google.script.run
-      .withSuccessHandler(function (rows) { show('Reset to the default.', false); renderStatuses(rows); })
-      .withFailureHandler(function (e) { show(e.message, true); })
-      .resetStatusMessage(which);
-  }
-
-  function refreshStatuses() {
-    google.script.run.withSuccessHandler(renderStatuses)
-      .withFailureHandler(function (e) { show(e.message, true); })
-      .listStatusMessages();
   }
 
   // ---- dispensary banner ----
@@ -869,7 +1158,7 @@
 
   function saveBannerForm() {
     google.script.run
-      .withSuccessHandler(function (info) { show('Banner saved. It appears in the app the next time it is opened.', false); renderBanner(info); })
+      .withSuccessHandler(function (info) { show('Banner saved. Phones update within about a minute.', false); renderBanner(info); })
       .withFailureHandler(function (e) { show(e.message, true); })
       .saveBanner(sanitiseFragment(document.getElementById('banner').innerHTML));
   }
@@ -894,9 +1183,10 @@
     { childList: true, subtree: true, characterData: true, attributes: true }
   );
 
+  fillStatusFilter();
+  labelGenerate();
   refresh();
   refreshTemplates();
-  refreshStatuses();
   refreshBanner();
 </script>
 </body>

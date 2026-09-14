@@ -3,9 +3,11 @@
 Everything needed to pick this project up cold: how the pieces fit, what is done, what is not, and
 the traps that cost real time to find.
 
-**Status (2026-09-09):** **approved and live in Play closed testing, with 14 testers.** The privacy
-policy rejections are resolved. Source is at `versionCode 8`, `versionName 0.4.0` — the audit trail,
-pushed revocation, printing and attachment release.
+**Status (2026-09-13):** **approved and live in Play closed testing, with 14 testers.** The privacy
+policy rejections are resolved. Source is at `versionCode 9`, `versionName 0.5.0` — dispensaries and
+their topics, the control topic (pushed revoke, resume and banner), sent time in the tray, and Reset
+removed. **Breaking:** it needs the new database shape, rules and scripts (§10, "Move to
+dispensaries"); phones on 0.4.0 stop receiving until they update.
 
 Two things this changed, both of which now matter:
 
@@ -53,8 +55,8 @@ from `docs/privacy-policy.md`. Keep the two pages distinct.
 │                    │      │                      │                    │
 │  generate codes    │      │  compose a notice    │                    │
 │  print slips       │      │  saved-message chips │                    │
-│  revoke / release  │      │  QR: open / closed   │◄──── bit.ly ◄──────┤ (staff scans)
-│  notes per code    │      │  PIN on every send   │                    │
+│  disable / unlink  │      │  RSS poller          │                    │
+│  holders, notes    │      │  PIN on every send   │                    │
 │  saved messages    │      │                      │                    │
 └─────────┬──────────┘      └──────────┬───────────┘                    │
           │ service account            │ service account                │
@@ -62,9 +64,9 @@ from `docs/privacy-policy.md`. Keep the two pages distinct.
     ┌─────────────────────────────────────────────┐                     │
     │  FIREBASE  paramanu-seniors                 │                     │
     │                                             │                     │
-    │  RTDB   /codes  /templates  /sent  /info    │                     │
+    │  RTDB   /codes  /dispensaries  /sent        │                     │
     │  Auth   anonymous only                      │                     │
-    │  FCM    topics notices-v1, status-v1        │                     │
+    │  FCM    notices-v1, control-v1              │                     │
     └───────────────────┬─────────────────────────┘                     │
                         │  data-only, priority high                     │
                         ▼                                               ▼
@@ -89,9 +91,10 @@ Kotlin, Compose, Room, no DI framework (hand-rolled container in `NoticesApplica
 activation/  ActivationCode        Crockford Base32 + check character (pure, tested)
              ActivationState       NotActivated | Active | Revoked | Unknown
              ActivationRepository  redeem, verify, subscribe, forget
-             Subscription          NOTICES / STATUS: topic + channel + default
+             Dispensary            the topics the code's dispensary offers (pure, tested)
 data/        NoticeEntity/Dao/Repository/NoticesDatabase   Room v2
-             InfoRepository        /info, cached in SharedPreferences
+             DispensaryRepository  /dispensaries/{id}: topics and banner in one read, cached
+             InfoRepository        the banner, cached; also applies pushed banners
 fcm/         NoticeMessagingService  the delivery gate
              NoticeImageStore        download, downsample, prune
              PdfPageRenderer         PDF page 1 → letterboxed bitmap (pure geometry, tested)
@@ -108,23 +111,40 @@ at a counter by someone in their eighties.
 
 ### 2.2 Console (Apps Script) — `docs/apps-script/console/`
 
-Generates codes, prints cut-out slips, revokes, restores, releases, per-code notes, the office-hours
-banner, and the saved messages the sender offers. The codes table sorts on every column, pages
-locally, and shows each code's last change with its full history.
+Generates codes, prints cut-out slips, disables, enables and unlinks phones, per-code notes, holders
+(name, CHSS number, telephone), the office-hours banner, and the saved messages the sender offers.
+The codes table sorts on every column, pages locally, and shows each code's last change with its
+full history.
 
-Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `ALLOWED_EDITORS`. `Tests.gs` covers the
-pure helpers only.
+Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `ALLOWED_EDITORS`, and optionally
+`PRINTING_ENABLED` (`false` disables the Print controls; the Printed status is still derived and
+shown). `Tests.gs` covers the pure helpers only. `purgeInstallTrigger()` installs the 30-day holder
+purge; `purgeDryRun()` lists what it would erase.
 
-Revoke writes `/revokeQueue/{CODE}`; the sender's trigger broadcasts it. Restore and Release both
-delete any pending entry, so a revoke cannot fire for a code that is live again or back in the pool.
-If that trigger is not installed, Revoke still works — it is recorded in `/codes` and `/audit`, and
-phones act on it at their next daily check. Only the speed depends on it.
+**Names on the page are not the stored names.** Staff see Disable, Enable and Unlink phone; `/codes`
+still carries `revoked`, the audit still records `revoked`, `restored` and `released`, and the push
+is still `revoke` / `resume`. Only words changed, so the app and the rules did not have to.
+
+**Statuses:** Unused, Printed, In use, Disabled, **On hold**. On hold means the holder was removed:
+the code is stopped (`revoked: true`, so to the phone it is simply revoked) and the console refuses
+every action on it until the holder is restored. Restore puts the code back as it was, Disabled
+included. The purge erases a holder 30–60 days after removal and returns the code to Unused.
+
+Disable, Enable, removing or restoring a holder, and banner changes write `/controlQueue`; the
+sender's trigger broadcasts them on `control-v1` (§2.3). Unlink phone, Delete code and the purge
+clear anything pending, so nothing fires at the next phone to type the code. If that trigger is not installed, all three still work — they are recorded in the
+database, and phones catch up at their next daily check or app open. Only the speed depends on it.
+
+The codes table has a search box (a code with or without its dash, a name, CHSS number, telephone
+digits, or note text) and a Status filter in the column header. Neither affects printing, which always covers every eligible code.
 
 ### 2.3 Sender (Apps Script) — `docs/apps-script/sender/`
 
-`Code.gs`, `Index.html` (compose), `Status.html` (QR confirmation), `Poller.gs` (RSS trigger),
-`Tests.gs`. Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `PROJECT_ID`, `STAFF_PIN`,
-`ALLOWED_EDITORS`, optionally `REQUIRE_STAFF_PIN` and `ALERTS_FEED_URL`.
+`Code.gs`, `Index.html` (compose), `Poller.gs` (RSS trigger),
+`Control.gs` (control queue trigger), `Tests.gs`. Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `PROJECT_ID`, `STAFF_PIN`,
+`ALLOWED_EDITORS`, `DISPENSARY_ID`, optionally `REQUIRE_STAFF_PIN` and `ALERTS_FEED_URL`. Notices,
+from the compose page and the poller alike, go to the dispensary's first topic by `order` — read from
+`/dispensaries/{DISPENSARY_ID}/topics` at send time. There is no topic picker and no status route.
 
 Deployed **Execute as: User accessing** / **Anyone with a Google account** — *not* "Anyone with the
 link", which this document claimed until the QR path was retired. `requireEditor_()` refuses an
@@ -132,10 +152,12 @@ address outside `ALLOWED_EDITORS`, and returns the caller's email so every send 
 
 **There is no `doPost`.** The sender exposes no POST surface at all; `/exec` answers `doGet` only.
 
-`Revoker.gs` broadcasts revocations for the console on a **one-minute trigger**: it reads
-`/revokeQueue`, re-reads each code to confirm it is still revoked, calls `pushRevoke_`, and deletes
-the entry only after FCM accepts it. Install with `revokerInstallTrigger()`; inspect with
-`revokerDryRun()`, which sends nothing.
+`Control.gs` broadcasts for the console on a **one-minute trigger**: it reads `/controlQueue`,
+re-reads the code or the dispensary's banner to confirm the request still applies, calls `pushControl_`, and clears
+the entry only after FCM accepts it — and only if the
+console has not replaced it in the meantime. Install with `controlInstallTrigger()`, which also
+removes the old `revokerRun` trigger; inspect with `controlDryRun()`, which sends nothing. It replaced
+`Revoker.gs`, which must be deleted from the project.
 
 An earlier design had the console POST here with the staff member's OAuth token. It returns HTTP 401
 on every request — `ScriptApp.getOAuthToken()` cannot authorize a call into another project's web
@@ -156,30 +178,44 @@ Every claim in the policy was checked against the code, not asserted. If the app
 anything -- the aggregate topic counters discussed for a later release included -- the policy and
 the Play Data Safety form both need revisiting.
 
-### 2.5 bit.ly QR links — RETIRED, pending removal
+### 2.5 Dispensaries
 
-`bit.ly/dispensary-closed` → `<sender>/exec?status=closed`, and an equivalent for `open`.
+Every code belongs to one dispensary: the console writes `/codes/{CODE}/dispensary` from its
+`DISPENSARY_ID` Script Property when the slip is generated. The dispensary's record at
+`/dispensaries/{id}` holds its `name`, the `topics` it offers, and its banner under `info`. There is
+one today, **BARC Vashi Dispensary** (`barc-vashi`), seeded from `docs/dispensary-barc-vashi.json`.
 
-The short link is indirection that makes the QR reprintable: if the deployment id changes, repoint
-the bit.ly rather than reprinting the poster. **The QR carries no authority** — scanning only opens
-a confirmation page; sending needs the PIN.
+The phone reads the code's dispensary during verification and the record on activation, on coming
+to the foreground and at the daily check — never from the message path. **Settings → What you
+receive** is drawn from the record's topics, so a dispensary can offer a new topic, or retire one,
+without an app release; the phone remembers what it subscribed to and unsubscribes what is no longer
+offered. Notification channels are one per importance (`notices_default` high, `notices_low` low,
+created on first use), not one per topic, so data can never add entries to Android's settings.
 
-**The NGO no longer wants the QR.** Daily status goes out through the sender's saved-message
-buttons instead. The code is still present and callable — `doGet(?status=)`, `sendStatus`,
-`Status.html` — and removing it is separate work that has not been done, so this section stays until
-it is.
+A second dispensary is a new record and a new console and sender deployment with its own
+`DISPENSARY_ID`. The phone side needs nothing. This is what the offering controls, not what a phone
+could technically receive: FCM topics cannot be locked down, the same cooperative model as revoke.
+
+The daily open and closed messages, the QR route that sent them and `status-v1` are **gone**, with no
+fallback. Phones still on an older build keep a dangling `status-v1` subscription that nothing sends
+to.
 
 ---
 
 ## 3. Data model (RTDB)
 
 ```
-/codes/{CODE}       issued, usedBy, activatedAt, revoked, note
-/audit/{CODE}/{id}  at, by, event, to                  (console only; phones cannot read it)
-/revokeQueue/{CODE} at, by                             (console writes, sender's trigger drains)
+/codes/{CODE}       issued, usedBy, activatedAt, revoked, note, dispensary
+/audit/{CODE}/{id}  at, by, event, to, holder          (console only; phones cannot read it)
+/holders/{id}       code, name, chss, phone, createdAt, createdBy,
+                    removedAt, removedBy, wasDisabled   (console only; erased by the purge)
+/holders/{id}/history/{id}  at, by, event, changes {field: {from, to}}
+/controlQueue/code_{CODE}  type, code, at, by          (console writes, sender's trigger drains)
+/controlQueue/banner       at, by
 /templates/{id}     label, title, body, updated       (console-managed, app cannot read)
-/sent/{logId}       title, body, category, sentAt, sentBy, fcmName, error
-/info               heading, lines                     (app reads; "lines" is ONE newline string)
+/sent/{logId}       title, body, topic, dispensary, sentAt, sentBy, fcmName, error
+/dispensaries/{id}  name, topics/{key}: topic, label, explainer, defaultOn, importance, order
+/dispensaries/{id}/info  heading, lines, html, htmlUpdated   (app reads; "lines" is ONE newline string)
 ```
 
 `/audit` is append-only and deliberately **not** part of `/codes`. A new field on `/codes/{CODE}`
@@ -187,21 +223,28 @@ needs its own `.validate` rule or the `$other: false` catch-all refuses the app'
 every unclaimed slip — which is what adding `note` did once (§6a). Keeping the history in a separate
 node means it needs no rules change at all.
 
-`event` is one of `issued`, `printed`, `revoked`, `restored`, `released`, `note`, `deleted`. An
-eighth, `claimed`, is **synthesised** by the console from `activatedAt` rather than stored: the
+`event` is one of `issued`, `printed`, `revoked`, `restored`, `released`, `note`, `deleted`, or a
+holder event: `holder-added`, `holder-edited`, `holder-moved-in`, `holder-moved-out`,
+`holder-removed`, `holder-restored`, `holder-purged`. Holder events carry only the holder's id (and
+for a move, the other code in `to`) — never a name or number, because `/audit` is never erased and
+the purge has to be able to remove a person. One more, `claimed`, is **synthesised** by the console from `activatedAt` rather than stored: the
 phone cannot write to `/audit` and must not be able to. Codes issued before this existed are not
 backfilled, so they read as never printed.
 
 The audit is also where the **printed** state lives, as `codeIsPrinted_` replaying the timeline —
-`printed` sets it, `released` clears it. Deriving it costs nothing (the timeline is already built
+`printed` sets it, `holder-purged` clears it. Unlink phone does **not** clear it: the slip still
+belongs to the holder, who is usually the one on the new phone. **On hold** is derived the same way
+by `codeIsOnHold_`: `holder-removed` sets it, `holder-restored` and `holder-purged` clear it. Deriving it costs nothing (the timeline is already built
 for the table) and avoids a new field on `/codes`.
 
 A `deleted` code keeps its `/audit` node after `/codes` is gone, so nothing lists it any more but
 the history remains for anyone who looks the code up directly.
 
 Rules (`database.rules.json`): deny by default. `/codes/$code` is readable and claim-writable by an
-authenticated user; `/codes` itself is **not** readable, so codes cannot be enumerated. `/info` is
-readable. `/templates` and `/sent` are invisible to phones.
+authenticated user; `/codes` itself is **not** readable, so codes cannot be enumerated. `/dispensaries/{id}` is
+readable. `/templates`, `/sent`, `/audit`, `/controlQueue` and `/holders` are invisible to phones —
+which is why holder details live in `/holders` and never on `/codes/{CODE}`, which any signed-in
+phone holding the code can read.
 
 ---
 
@@ -210,7 +253,7 @@ readable. `/templates` and `/sent` are invisible to phones.
 ```json
 { "message": { "topic": "notices-v1", "android": { "priority": "high" },
   "data": { "logId": "1788248869397", "title": "...", "body": "...",
-            "category": "NOTICES", "imageUrl": "...", "pdfUrl": "..." } } }
+            "topic": "notices-v1", "imageUrl": "...", "pdfUrl": "..." } } }
 ```
 
 - **Never include a `notification` block.** See quirk 5.1.
@@ -259,7 +302,7 @@ recovery procedure, including recovering a device's UID with
 ### 5.7 Losing local storage orphans a claim
 The phone stores the code and anonymous UID locally and they are its only proof of ownership.
 Uninstall, data clear or a new phone strands the code as "in use" with nobody able to claim it —
-hence **Release** in the console. Releasing a code a working phone still holds cuts that phone off.
+hence **Unlink phone** in the console. Unlinking a code a working phone still holds cuts that phone off.
 
 ### 5.8 `currentUser != null` proves nothing
 A cached ID token stays valid after the anonymous user is deleted. Only
@@ -318,13 +361,25 @@ problem that is already fixed.
 - **`Unknown` entitlement permits delivery.** Only a definitive `Revoked` suppresses a notice.
   Failing closed would mean someone in their eighties misses a closure notice because of a weak
   signal — worse than a revoked device seeing one more public announcement.
-- **Revocation is pushed, and cooperative.** The console asks the sender to broadcast a data-only
-  `{"type":"revoke","code":…}`; the holding device applies it on receipt, within seconds. It remains
-  cooperative — the payload reaches the device and the app declines to act — and it is still **not
-  access control**. Every notice is public anyway. A daily verification catches any phone that was
-  switched off when the broadcast went out.
+- **Revocation and restore are both pushed, and cooperative.** The console queues a data-only
+  `{"type":"revoke"|"resume","code":…,"at":…}` for `control-v1`; the holding device applies it on
+  receipt, within about a minute. A revoked phone leaves every notice topic but keeps `control-v1`,
+  which is what lets a resume reach it. `at` orders them: FCM does not promise order, and a phone
+  ignores a stamp no newer than the last one it applied. It remains cooperative — the payload reaches
+  every device and only the holder acts — and it is still **not access control**. Every notice is
+  public anyway. A daily verification catches any phone that was switched off when it went out.
+- **The banner is pushed with its html inside the message**, not as a prompt to fetch it: four
+  hundred phones fetching at once is §5.14 again. That caps a banner at 3500 UTF-8 bytes, enforced in
+  the console. The push names its dispensary and a phone applies only its own. A phone also rereads
+  the dispensary when it comes to the foreground, for the one that was off when the push went out. A
+  revoked phone ignores banner pushes.
+- **What a phone can receive comes from its code's dispensary** (§2.5), not from the app build. Every
+  notice carries `topic`; a notice on a topic the dispensary does not offer, or the user has switched
+  off, is dropped.
+- **Tray notifications show when a notice was sent** (`setWhen` from `logId`), not when the phone
+  posted it, so a phone that came online late shows the same time as everyone else's.
 - **Revocation suspends the claim; it does not surrender it.** The code and anonymous UID are kept,
-  so a console **Restore** brings the device back on its own. Discarding them stranded the user
+  so a console **Enable** brings the device back on its own. Discarding them stranded the user
   permanently: the rules refuse to write `usedBy` on a code that already carries one, so the same
   slip could never be retyped and Restore had nothing to restore.
 - **A revoked user keeps their notices**, behind a banner saying no more will arrive and to call the
@@ -333,9 +388,8 @@ problem that is already fixed.
 - **The PIN is a second factor, not the only one.** Every entry point calls `requireEditor_()`
   first, and the web apps are deployed "Anyone with a Google account" against an `ALLOWED_EDITORS`
   allowlist. `REQUIRE_STAFF_PIN=false` drops the PIN and relies on the allowlist alone.
-- **The console has no FCM credentials and is not given any.** It asks the sender to broadcast a
-  revoke over HTTPS, forwarding the staff member's own OAuth token so the sender checks the same
-  allowlist. Issuing codes and reaching 400 phones stay separate jobs (§2.3).
+- **The console has no FCM credentials and is not given any.** It writes `/controlQueue` and the
+  sender's trigger broadcasts. Issuing codes and reaching 400 phones stay separate jobs (§2.3).
 - **The PIN is never stored in the browser.** Typed per send, on purpose.
 - **Dynamic colour is off.** It derives the palette from the wallpaper; contrast is not negotiable
   for this audience.
@@ -398,7 +452,7 @@ starts growing on the code node.
 ## 7. UI
 
 ```
-Activation (PIN gate)  ── first launch and after reset only
+Activation (PIN gate)  ── first launch, or a revoked user entering a new code
         │  code redeemed
         ▼
 Notice list  ── office-hours header (links tappable) + notice cards
@@ -407,10 +461,9 @@ Notice list  ── office-hours header (links tappable) + notice cards
         │           tap artwork     → full-screen zoomable viewer
         │           cog, top right  → only when nothing is selected
         ▼
-Settings  ── What you receive (Notices / Daily open and closed / Testing when unlocked)
+Settings  ── What you receive (the dispensary's topics / Testing when unlocked)
             Check notifications (posts a local test)
             Your code
-            Reset this app
             Contact: address, tappable phone and email, website, privacy policy
             Version (seven taps unlocks Testing)
 ```
@@ -426,16 +479,17 @@ the code screen.
 - Android app, forked from `Notifier`, renamed and rebuilt around activation + subscriptions.
 - Activation via RTDB security rules as the validator — no backend, project stays on Spark.
 - Attachments (image + PDF), inline expansion, tap-to-highlight, link detection.
-- Office-hours header from `/info`, cached offline, links tappable.
-- Three subscriptions/topics/channels: NOTICES (high), STATUS (low), TESTING (low, lazily
+- Office-hours header from `/dispensaries/{id}/info`, cached offline, links tappable, pushed live.
+- Topics offered per dispensary from the database; channels per importance; TESTING (low, lazily
   created, hidden behind seven taps on the version number).
 - Welcome notice written locally on activation, so the list is never empty.
 - "Check notifications" button, contact section, privacy policy link.
 - Analytics and `AD_ID` removed; six permissions in the release manifest.
-- Console: codes, slips, notes, revoke, restore, release, saved messages, sortable paged table,
-  per-code audit history.
-- Sender: compose with live notification preview, saved-message chips, PIN, QR status pair,
-  `sentBy` attribution, and the revoke endpoint the console calls.
+- Console: codes, slips, notes, disable, enable, unlink phone, holders with their own history, On
+  hold, the 30-day purge, search and a status filter, saved messages, sortable paged table, per-code
+  audit history.
+- Sender: compose with live notification preview, saved-message chips, PIN, `sentBy` attribution,
+  sends to the dispensary's topic, and the control queue drain the console relies on.
 - Pushed revocation applied on receipt; entitlement verification moved off the message path into
   WorkManager; a revoked device keeps its notices behind a banner and recovers on Restore.
 - 67 Android unit tests. Apps Script tests run from the editor (`runAllTests` in the sender,
@@ -454,19 +508,26 @@ the code screen.
    covered by unit tests, but none of it has run against Google's infrastructure or on a phone:
    - Paste `console/Tests.gs`, run `runConsoleTests` — expect `All 44 passed.` (34 when it was
      first run; the code-generation and printed-state rules added ten more since.)
-   - Paste `sender/Revoker.gs`, run `revokerDryRun()` (sends nothing), then
-     `revokerInstallTrigger()`. No new Script Properties, and no redeploy needed — a trigger is not
-     served by `/exec`.
+   - Paste `sender/Control.gs` and delete `Revoker.gs` from the project; run `controlDryRun()`
+     (sends nothing), then `controlInstallTrigger()`. No new Script Properties, and no redeploy for
+     the trigger — it is not served by `/exec` — but save `Code.gs` too, since the trigger calls it.
    - Sender: run `runAllTests`. Redeploy only if `Code.gs` changed; `doPost` has been removed, so
      the web app now answers `doGet` alone.
-   - Revoke a test code and watch `/revokeQueue`: the entry should appear and be gone within a
-     minute. Then revoke another and Restore it immediately — no revoke should be broadcast at all.
+   - Revoke a test code and watch `/controlQueue`: the entry should appear and be gone within a
+     minute. Then revoke another and Restore it immediately — one resume should go out, no revoke.
+     Save the banner with the app open on a phone and watch the header change within a minute.
    - Issue two codes, then revoke / restore / release / re-note them and check the history renders
      in order with the right email on each.
-   - On a phone: activate, revoke from the console, confirm the tray notification arrives within
-     seconds, the banner appears above the office hours with the dashed code, the old notices are
-     still listed, and a notice sent while revoked does not appear. Then Restore and confirm
-     delivery resumes and the banner and its history row both disappear.
+   - On a phone: activate, Disable from the console, confirm the tray notification arrives within
+     a minute, the banner appears above the office hours with the dashed code, the old notices are
+     still listed, and a notice sent while disabled does not appear. Then Enable and confirm
+     delivery resumes within a minute, without opening the app, and the banner and its history row
+     both disappear.
+   - Add a holder to that code, Remove it: the code shows On hold, every button is gone, and the
+     phone stops. Restore it from Removed holders: the code comes back as it was. Repeat with the
+     code Disabled first, and confirm Restore leaves it Disabled.
+   - Move a holder to a fresh code: the old code shows no holder and, once its phone is unlinked,
+     offers Delete code.
    - Confirm a *fresh* code can still be claimed. Nothing here touches `/codes` or the rules, but
      activation is what this project has broken before and it costs one slip to be sure.
 
@@ -484,42 +545,31 @@ the code screen.
    its `note` is for. It has no repeated characters, so the generator cannot recreate it — it is
    hand-written or it is gone.
 6. **Written authorisation from the NGO** before `BARC` appears in listing text.
-7. **Real office hours** in `/info` — currently placeholders.
+7. **Real office hours** in `/dispensaries/barc-vashi/info` — currently placeholders.
 8. **Restrict console access** to named people; Script Properties are readable by any editor, so
    the editor list *is* the list of people who can send.
 9. **Separate Google account** for the console.
 
-**Agreed but not built — dynamic topics and counters**
+**Agreed but not built — aggregate topic counters**
 
-The brainstorm settled that there is **no entitlement layer**: every code is equal, and the user
-alone chooses what to receive. That is what the code already does, so nothing was needed. What is
-*not* built is making topics data-driven (a `/topics` config, a Settings screen rendered from it,
-labels fetched rather than compiled in). Until that lands, adding a topic needs an app release.
-`Subscription` is still an enum: NOTICES, STATUS, TESTING.
-
-Also agreed and not built: the aggregate topic counters. See section 6a for why both should land on
-Firestore rather than RTDB if they are built.
+Topics are now data-driven per dispensary (§2.5). Still agreed and not built: the aggregate topic
+counters. See section 6a on where they should live if they are built.
 
 **Design decisions still open**
 
-10. **Multiple dispensaries.** The daily status is one global topic saying "the dispensary is open",
-   which is ambiguous once there is more than one, and the QR encodes no site. Either per-site
-   topics (correct, but topics are effectively permanent once phones subscribe) or one topic with
-   the site named in the text and `?status=closed&site=…` in the QR. **Settle before production.**
-11. **STATUS uptake.** Off by default and daily; realistically nobody finds the setting. The fix is
-   to offer it at the counter when the slip is handed over.
+10. ~~**Multiple dispensaries.**~~ **Settled** — topics per dispensary, decided by the code (§2.5).
+11. ~~**STATUS uptake.**~~ **Gone** — the daily status was removed.
 12. **Three-screen idea** (Notifications / Notices / Home). Notes: the site has **no RSS feed**, so
    a feed reader has nothing to read; a WebView "Home" risks Play's minimum-functionality policy;
    and "Notifications" vs "Notices" is not a distinction a user can act on.
 
 **Smaller**
 
-13. Verify `Subscription.STATUS` really defaults to off — it appeared **on** in Settings on a fresh
-    activation and was never confirmed as a manual toggle.
-14. Confirm whether the two STATUS-titled notices in history arrived via the QR path; if they did
-    while STATUS was off, the delivery gate has a hole.
+13. ~~STATUS default~~ — gone with the daily status.
+14. ~~STATUS-titled notices via the QR~~ — gone with the daily status.
 15. Dark-mode logo treatment (the transparent PNG helps, but the mark still assumes a light ground).
-16. `/info` editor in the console — currently hand-edited in the Firebase console.
+16. The banner's plain `heading` and `lines` are still hand-edited in the data viewer; only the rich
+    banner has a console editor. A dispensary editor waits for a second dispensary.
 17. Sender cannot yet attach an image or PDF; text only.
 18. Wrap each Apps Script test in its own try/catch so one failure does not abort the suite.
 
@@ -544,8 +594,12 @@ scanning, and the smallest size that still decoded with blur and noise added.
 
 **Printed** is a fourth state alongside Unused, In use and Revoked, and it is derived from the audit
 rather than stored on `/codes` — a new sibling field there would break the app's claim write (§6a).
-A **Release** clears it: the code returns to the pool for somebody new, who needs a fresh slip.
-Tick "include already printed" to reprint a lost one.
+Unlink phone does not clear it — the slip is still with its holder — and only the purge does, when
+the code goes back to Unused for somebody new. Tick "include already printed" to reprint a lost one.
+
+**Printing can be switched off** with the `PRINTING_ENABLED` Script Property set to `false`. The
+Print button and the checkbox stay visible but disabled, with a line saying why; statuses are
+unaffected.
 
 Generated payloads always contain **at least two different characters that each appear more than
 once** — `SCCM-7VV7`, `0V0J-RYRJ`, `AEE5-D1D6` — so staff have something to hold on to when reading
@@ -564,29 +618,48 @@ risk.
 
 **Send a notice** — sender → pick a saved message or write one → check the preview → PIN → Send.
 
-**Daily status** — scan the counter QR → confirm → PIN. A repeat within 10 minutes is refused.
+**Remove codes generated by mistake** — console → Delete code, offered only on a code with no phone
+and no holder that is not On hold. `deleteCode` refuses anything else regardless of what the page
+shows: deleting a code with a phone would cut that phone off at its next check with no explanation,
+since a missing node reads as a withdrawn claim. Use Disable for that instead, which is deliberate
+and reversible.
 
-**Remove codes generated by mistake** — console → Delete, offered only on a code nobody has ever
-claimed. `deleteCode` refuses a claimed one regardless of what the page shows: deleting it would cut
-that phone off at its next check with no explanation, since a missing node reads as a withdrawn
-claim. Use Revoke for that instead, which is deliberate and reversible.
+**Record who a code was given to** — console → Add holder on the row: name (required), CHSS number,
+telephone. The CHSS number is kept exactly as typed; a ten-digit telephone number loses spaces and a
+leading +91 or 0. Edit holder changes them, and every change is in the row's history under
+"Changes to …", with what it was before.
+
+**Someone is given a new code** — Move holder on their old code, and type the new one. The old code
+is left with no holder. If a phone is still on it, Unlink phone; it then offers Delete code.
+
+**Someone stops using the service** — Remove holder. The code goes On hold: its phone stops within a
+minute and every action on the code is locked. A mistake is undone from **Removed holders**, below
+the codes table, with Restore holder — for 30 days. Restore puts the code back exactly as it was,
+including Disabled if it was.
+
+**The purge** — `purgeInstallTrigger()` once, from the editor. Every 30 days it erases holders
+removed at least 30 days earlier: the `/holders` record goes, the code is unlinked and un-stopped
+and goes back to Unused, Printed is cleared, and the note stays. `purgeDryRun()` lists what is due
+and changes nothing.
 
 **Unclaimed is not unprinted.** A slip for the deleted code may already be in somebody's pocket, and
 they will be told at the counter that their code was not accepted. The `/audit` entry is kept when
 the code is deleted — it is then the only record the code ever existed, and the only way to answer
 "why did this slip stop working".
 
-**Cut a phone off** — console → Revoke. The phone applies it within seconds of the push, keeps its
+**Cut a phone off** — console → Disable. The phone applies it within seconds of the push, keeps its
 notices behind a banner telling the user to call the helpdesk with their code, and stops receiving.
 The code stays claimed by that device and cannot be handed to anyone else.
 
-**Let somebody back in** — console → Restore, on the *same* code. The phone resumes on its own: at
-once if the app is opened, otherwise within a day. Do not issue a fresh slip for this; a revoked
+**Let somebody back in** — console → Enable, on the *same* code. The phone resumes on its own
+within about a minute, pushed over `control-v1`; a phone that was switched off catches up when the
+app is opened, or within a day. Do not issue a fresh slip for this; a revoked
 code is not consumed, and the user keeps their history. For a phone that is genuinely gone —
-uninstalled, replaced, data cleared — use Release instead, which returns the code to the pool.
+uninstalled, replaced, data cleared — use Unlink phone instead, and the same code can be typed on
+the new phone.
 
 **Read a code's history** — console → the Last change column, then `history` on the row. Every
-issue, revoke, restore, release and note change, with who did it and when.
+issue, disable, enable, unlink, note and holder change, with who did it and when.
 
 **Clear the slate for the production launch** — there is no test environment by choice; production
 *is* the environment, and the only isolation is `TEST_TOPIC` for the Apps Script suite. So launch
@@ -595,19 +668,20 @@ day means clearing the testing data out of the live database.
 Done from the console and the data viewer, **not** by importing anything. Nothing here goes near the
 root, so quirk 5.6 never comes into it:
 
-1. **Codes** — staff delete each unused or released code from the console. Every code is named in
-   its `note`, so this is read-and-decide, not a sweep. A tester's *claimed* code has to be
-   **Released first** — `deleteCode` refuses a claimed code, because deleting one would cut that
-   phone off with no explanation — and once released it is unclaimed and deletable.
+1. **Codes** — staff delete each unused or unlinked code from the console. Every code is named in
+   its `note`, so this is read-and-decide, not a sweep. A tester's code has to lose its phone and
+   its holder first — **Unlink phone**, and **Move holder** or **Remove holder** — because
+   `deleteCode` refuses a code with either. A removed holder leaves the code On hold until the purge;
+   for launch day, delete the `/holders` records by hand instead and Unlink the phone.
 2. **`/sent`** — deleted by hand in the data viewer. The phones' own notice history is local and
    unaffected.
-3. **`/revokeQueue`** — deleted by hand. Anything missed is harmless anyway: the drain re-reads
-   `/codes` and drops an entry that is no longer revoked rather than broadcasting it.
+3. **`/controlQueue`** — deleted by hand. Anything missed is harmless anyway: the drain re-reads
+   `/codes` and drops an entry that no longer applies rather than broadcasting it.
 4. **`/audit` stays.** It is the record of what was done and to which code, and it survives the
    codes themselves — `deleteCode` deliberately keeps it. Orphaned entries do not show in the table,
    which joins on `/codes`.
-5. **`/info`, `/templates` and `/status` are untouched.** They are configuration — office hours,
-   the saved messages staff have built up, the daily wording — not test data.
+5. **`/dispensaries` and `/templates` are untouched.** They are configuration — the dispensary, its
+   topics and office hours, and the saved messages staff have built up — not test data.
 
 **`P1AYREVQ` survives because nobody deletes it.** Its note says what it is. It cannot be
 regenerated — no repeated characters, so `generateCode_` will never produce it — so if it does go, it
@@ -615,7 +689,7 @@ has to be hand-written back by selecting `/codes` (never the root) and importing
 `{ "P1AYREVQ": { "issued": <epoch millis> } }`. It is also left off the print sheet, so a batch print
 cannot put it on a slip.
 
-**What the 14 testers will see.** Releasing their codes withdraws each claim, so the next check
+**What the 14 testers will see.** Unlinking their codes withdraws each claim, so the next check
 reads it as revoked and raises the banner telling them to ring the helpdesk. They are not stuck —
 Settings → **Enter a new code** takes a fresh slip and keeps their notice history — but tell them
 first, or they will do what the banner says.
@@ -624,8 +698,28 @@ first, or they will do what the banner says.
 console load. A few hundred codes' history is well under 200KB, but after several launch-day cycles
 it is worth checking; the fix is fetching a code's history when its row is expanded.
 
-**Change the office hours** — select `/info` in the Firebase data viewer, then Import JSON with the
-**inner object only** (`docs/info-node.json`). Never import at the root.
+**Change the office hours** — the rich banner from the console. The plain `heading` and `lines`:
+select `/dispensaries/barc-vashi/info` in the Firebase data viewer and edit them there. Never import
+at the root.
+
+**Move to dispensaries (once, before shipping the build that needs it)** — this is a breaking change
+with no fallback; phones on the old build stop receiving until they update.
+
+1. In the data viewer, create `/dispensaries/barc-vashi`, **select that node** (never the root) and
+   Import JSON `docs/dispensary-barc-vashi.json`. Its placeholder `info` is fine; step 3 replaces it.
+2. Console project: set `DISPENSARY_ID = barc-vashi` in Script Properties, and paste the new
+   `Code.gs`, `Index.html` and `Tests.gs`.
+3. From the console editor, with nobody using the console: run `migrateToDispensariesDryRun()` and
+   read the log, then `migrateToDispensaries()`. It copies the live `/info` into
+   `/dispensaries/barc-vashi/info` and gives every code `dispensary: "barc-vashi"` through a
+   one-field-per-code update that leaves claims untouched. A second run changes nothing.
+4. Deploy `database.rules.json`: it opens `/dispensaries/{id}` to signed-in users, protects the new
+   field, and drops the `/info` rule.
+5. Delete `/info` and `/status` in the data viewer.
+6. Deploy the console as a new version. Sender project: set `DISPENSARY_ID = barc-vashi`, paste the
+   new scripts, delete `Status.html` and `Revoker.gs`, run `controlInstallTrigger()`, and deploy a new
+   version.
+7. Ship the app build. Then delete the migration section from the console's `Code.gs`.
 
 **Deploy rules** — `firebase deploy --only database`, or paste `database.rules.json` into the Rules
 tab. Rules-only; it does not touch data.

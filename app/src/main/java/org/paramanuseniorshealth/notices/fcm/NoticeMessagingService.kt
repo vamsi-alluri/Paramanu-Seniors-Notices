@@ -6,8 +6,9 @@ import com.google.firebase.messaging.RemoteMessage
 import kotlinx.coroutines.runBlocking
 import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.activation.ActivationRefreshWorker
+import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.activation.ActivationState
-import org.paramanuseniorshealth.notices.activation.Subscription
+import org.paramanuseniorshealth.notices.activation.Importance
 
 class NoticeMessagingService : FirebaseMessagingService() {
 
@@ -21,22 +22,20 @@ class NoticeMessagingService : FirebaseMessagingService() {
     override fun onMessageReceived(message: RemoteMessage) {
         val data = message.data
 
-        // Checked before anything else, because a revoke carries no title and the notice path
-        // below would drop it as malformed. It is a topic broadcast, so this arrives on every
-        // subscribed phone and only the holder of that code acts on it.
-        RevokeMessage.codeIn(data)?.let { revokedCode ->
-            runBlocking {
-                val app = applicationContext as NoticesApplication
-                if (app.activationRepository.storedCode == revokedCode) {
-                    Log.i(TAG, "Revoke received for this device")
-                    app.activationRepository.suspendClaim()
-                    app.announceRevocation()
-                }
-            }
+        // Checked before anything else, because a control message carries no title and the notice
+        // path below would drop it as malformed.
+        ControlMessage.parse(data)?.let { control ->
+            runBlocking { applyControl(applicationContext as NoticesApplication, control) }
             return
         }
 
         val title = data["title"] ?: message.notification?.title ?: return
+        // Which topic a notice came on decides whether it is wanted and how loudly it arrives. Every
+        // notice the sender builds carries it.
+        val topic = data["topic"]?.takeIf { it.isNotBlank() } ?: run {
+            Log.i(TAG, "Dropped a notice with no topic")
+            return
+        }
         val body = data["body"] ?: message.notification?.body.orEmpty()
         val logId = data["logId"]
         val imageUrl = data["imageUrl"]?.takeIf { it.isNotBlank() }
@@ -47,7 +46,6 @@ class NoticeMessagingService : FirebaseMessagingService() {
         val linkTitle = data["linkTitle"]?.takeIf { it.isNotBlank() }
         val linkImage = data["linkImageUrl"]?.takeIf { it.isNotBlank() }
         val linkSite = data["linkSite"]?.takeIf { it.isNotBlank() }
-        val subscription = Subscription.fromCategory(data["category"])
 
         // onMessageReceived already runs off the main thread and the service is held alive for the
         // duration of this call, so blocking here guarantees the work lands before teardown.
@@ -56,13 +54,17 @@ class NoticeMessagingService : FirebaseMessagingService() {
 
             if (!isEntitled(app)) return@runBlocking
 
-            // A second check behind the topic subscription. Unsubscribing is not instant -- FCM can
-            // keep delivering for a short while afterwards -- so without this a user who has just
-            // switched the daily status off still gets the next one, and reasonably concludes the
-            // switch does not work.
-            if (!app.activationRepository.isSubscribed(subscription)) {
-                Log.i(TAG, "Dropped a ${'$'}{subscription.name} message: not subscribed")
+            if (!app.activationRepository.wantsTopic(topic)) {
+                Log.i(TAG, "Dropped a notice on '$topic': not offered, or switched off")
                 return@runBlocking
+            }
+
+            val channel = if (topic == ActivationRepository.TESTING_TOPIC) {
+                NoticeChannel.TESTING
+            } else {
+                NoticeChannel.forImportance(
+                    app.dispensaryRepository.current?.topic(topic)?.importance ?: Importance.HIGH
+                )
             }
 
             // Saved before anything is fetched: a slow or dead URL must never cost a history entry.
@@ -110,8 +112,51 @@ class NoticeMessagingService : FirebaseMessagingService() {
                     body = body,
                     logId = logId,
                     image = picture,
-                    subscription = subscription,
+                    channel = channel,
                 )
+            }
+        }
+    }
+
+    /**
+     * Acts on a revoke, a resume or a banner change.
+     *
+     * Revoke and resume are topic broadcasts, so every phone on the control topic receives every one
+     * and only the holder of that code acts on it. Each is stamped with when staff acted, and a stamp
+     * no newer than the last one applied is ignored: FCM does not promise order, and a Disable
+     * delivered after the Enable that followed it would otherwise leave the phone off.
+     *
+     * A resume needs no server check. The drain in the sender re-reads the code before sending one
+     * and drops it unless the code stands, and the daily verification still corrects a phone that
+     * somehow got it wrong.
+     */
+    private suspend fun applyControl(app: NoticesApplication, control: ControlMessage) {
+        val activation = app.activationRepository
+        when (control) {
+            is ControlMessage.Revoke -> {
+                if (activation.storedCode != control.code) return
+                if (!activation.acceptControl(control.at)) return
+                Log.i(TAG, "Revoke received for this device")
+                activation.suspendClaim()
+                app.announceRevocation()
+            }
+
+            is ControlMessage.Resume -> {
+                if (activation.storedCode != control.code) return
+                if (!activation.acceptControl(control.at)) return
+                if (!activation.isRevoked) return
+                Log.i(TAG, "Resume received for this device")
+                activation.resumeClaim()
+                app.repository.clearRevokedNotice()
+            }
+
+            // Every dispensary's banner goes out on the one control topic, so a phone keeps only its
+            // own. A revoked phone receives nothing, the banner included; it catches up when it
+            // resumes and next comes to the foreground.
+            is ControlMessage.Banner -> {
+                if (control.dispensary != activation.dispensaryId) return
+                if (!activation.isActivated || activation.isRevoked) return
+                app.infoRepository.applyPushed(control.html, control.at)
             }
         }
     }

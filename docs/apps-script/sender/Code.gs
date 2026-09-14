@@ -18,7 +18,8 @@
  *       DATABASE_URL         = https://paramanu-seniors-default-rtdb.asia-southeast1.firebasedatabase.app
  *       ALLOWED_EDITORS      = <comma-separated Google account emails permitted to use this>
  *       PROJECT_ID           = paramanu-seniors
- *       STAFF_PIN            = <at least six digits; required for EVERY send, not just the QR>
+ *       DISPENSARY_ID        = barc-vashi   (whose topics notices go to; see dispensaryTopic_)
+ *       STAFF_PIN            = <at least six digits; required for every send>
  *       REQUIRE_STAFF_PIN    = 'false' to drop the PIN and rely on the Google allowlist alone
  *                              (optional; anything else, or absent, means the PIN is required)
  *  3. Deploy -> Web app.
@@ -29,13 +30,26 @@
  * Libraries and nothing to break when that library changes.
  */
 
-var SCRIPT_VERSION = '2026-09-01-sender';
+var SCRIPT_VERSION = '2026-09-13-sender';
 
-/** Must match Subscription.NOTICES.topic in the Android app. */
-var TOPIC = 'notices-v1';
+/**
+ * Must match ActivationRepository.CONTROL_TOPIC. Revoke, resume and banner changes.
+ *
+ * Every activated phone holds it, revoked included, and nobody can switch it off -- which is the
+ * point: a revoked phone is exactly the one that needs to hear a resume, and a user who has turned
+ * notices off still has to receive a revoke.
+ */
+var CONTROL_TOPIC = 'control-v1';
 
-/** Must match Subscription.STATUS.topic. Separate topic, so unsubscribing genuinely stops these. */
-var STATUS_TOPIC = 'status-v1';
+/**
+ * The most a banner may weigh, in UTF-8 bytes, to travel inside a control message.
+ *
+ * FCM refuses a data payload over 4096 bytes, keys included. The banner's html is by far the largest
+ * value, and this leaves room for the rest. Bytes rather than characters: a banner in Marathi or
+ * Hindi costs three bytes a character, so a character count would pass a banner FCM then rejects.
+ * Must match BANNER_MAX_BYTES in the console.
+ */
+var BANNER_MAX_BYTES = 3500;
 
 /**
  * Set by the test suite to divert sends to a scratch topic. Null in normal operation.
@@ -45,9 +59,6 @@ var STATUS_TOPIC = 'status-v1';
  * is the one part of the request that carries no risk of being wrong in an interesting way.
  */
 var TOPIC_OVERRIDE = null;
-
-/** A repeat of the same status inside this window is treated as a mis-scan and refused. */
-var DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
 
 /**
  * Guessing budget before the PIN is refused for everyone for LOCKOUT_SECONDS.
@@ -63,8 +74,7 @@ var DUPLICATE_WINDOW_MS = 10 * 60 * 1000;
  * redeploy is the step most easily forgotten, since /exec keeps serving the old version silently.
  *
  * Defaults to ON. Turning it off is defensible now that every send also requires an allowlisted
- * Google account; it is least defensible for the QR path, where the counter phone is permanently
- * signed in and sitting where anyone can pick it up.
+ * Google account; it is least defensible on a shared computer that stays signed in.
  */
 function requiresPin() {
   var value = PropertiesService.getScriptProperties().getProperty('REQUIRE_STAFF_PIN');
@@ -249,10 +259,48 @@ function checkPin_(pin) {
   cache.remove('pin_failures');
 }
 
-function sendNotice(title, body, category, pin) {
+// ---------------------------------------------------------------- Dispensary
+
+/** The dispensary this sender sends for. Its record at /dispensaries/{id} lists what it offers. */
+function dispensaryId_() {
+  return property_('DISPENSARY_ID');
+}
+
+/**
+ * The topic a notice goes to: the dispensary's first, by `order`. Pure, so it can be tested.
+ *
+ * There is no picker on the compose page. A dispensary with one topic -- every dispensary today --
+ * needs none, and one that offers several will get a page designed for it rather than a picker
+ * bolted onto this one. An entry without a topic name is skipped; ties on order go by key, so the
+ * answer never depends on the order the database happens to return.
+ */
+function noticeTopic_(topics) {
+  var best = null;
+  for (var key in topics) {
+    if (!topics.hasOwnProperty(key)) continue;
+    var entry = topics[key] || {};
+    if (!entry.topic) continue;
+    var order = typeof entry.order === 'number' ? entry.order : Infinity;
+    if (!best || order < best.order || (order === best.order && key < best.key)) {
+      best = { key: key, order: order, topic: String(entry.topic) };
+    }
+  }
+  return best ? best.topic : null;
+}
+
+/** Reads the dispensary's topics and returns the one notices go to. Throws if it offers none. */
+function dispensaryTopic_() {
+  var id = dispensaryId_();
+  var topic = noticeTopic_(firebase_('get', '/dispensaries/' + encodeURIComponent(id) + '/topics.json') || {});
+  if (!topic) {
+    throw new Error('Dispensary ' + id + ' offers no topics, so there is nowhere to send. Check /dispensaries/' + id + '/topics.');
+  }
+  return topic;
+}
+
+function sendNotice(title, body, pin) {
   var by = requireEditor_();
-  // Every path that reaches FCM checks the PIN, not just the QR one. The compose page is the more
-  // dangerous of the two: it sends arbitrary text rather than one of two fixed messages.
+  // The compose page sends arbitrary text to every phone, so it is the path that needs the PIN.
   checkPin_(pin);
 
   title = (title || '').toString().trim();
@@ -262,20 +310,19 @@ function sendNotice(title, body, category, pin) {
   if (title.length > 120) throw new Error('Title is too long (' + title.length + '); keep it under 120 characters.');
   if (body.length > 900) throw new Error('Body is too long (' + body.length + '); keep it under 900 characters.');
 
-  category = (category === 'STATUS') ? 'STATUS' : 'NOTICES';
-
+  var topic = dispensaryTopic_();
   var logId = nextLogId_();
   var sentAt = new Date().toISOString();
 
-  firebase_('put', '/sent/' + logId + '.json', { title: title, body: body, category: category, sentAt: sentAt, sentBy: by, scriptVersion: SCRIPT_VERSION });
+  firebase_('put', '/sent/' + logId + '.json', { title: title, body: body, topic: topic, dispensary: dispensaryId_(), sentAt: sentAt, sentBy: by, scriptVersion: SCRIPT_VERSION });
 
   // Data-only. A `notification` block here would make the FCM SDK draw the tray notification
   // itself while the app is backgrounded: onMessageReceived would never run, the entitlement check
   // would be skipped, and nothing would be written to the phone's history.
-  // The app maps this onto a Subscription: it chooses the notification channel, and it is
-  // checked again on the phone so a user who has just switched the daily status off does not
-  // receive one more while FCM catches up with the unsubscribe.
-  var message = { message: { topic: TOPIC_OVERRIDE || (category === 'STATUS' ? STATUS_TOPIC : TOPIC), android: { priority: 'high' }, data: { logId: logId, title: title, body: body, category: category } } };
+  //
+  // `topic` travels in the data as well as the envelope: the phone checks it against what its
+  // dispensary offers and what the user has switched on, and picks the notification channel from it.
+  var message = { message: { topic: TOPIC_OVERRIDE || topic, android: { priority: 'high' }, data: { logId: logId, title: title, body: body, topic: topic } } };
 
   var response = UrlFetchApp.fetch( 'https://fcm.googleapis.com/v1/projects/' + property_('PROJECT_ID') + '/messages:send', { method: 'post', contentType: 'application/json', headers: { Authorization: 'Bearer ' + accessToken_() }, payload: JSON.stringify(message), muteHttpExceptions: true } );
 
@@ -285,7 +332,7 @@ function sendNotice(title, body, category, pin) {
   }
 
   firebase_('patch', '/sent/' + logId + '.json', { fcmName: JSON.parse(response.getContentText()).name || '' });
-  return { logId: logId, sentAt: sentAt, title: title, category: category };
+  return { logId: logId, sentAt: sentAt, title: title, topic: topic };
 }
 
 /** The last [limit] notices sent, newest first. */
@@ -300,150 +347,88 @@ function listSent(limit) {
   var rows = [];
   for (var logId in all) {
     if (!all.hasOwnProperty(logId)) continue;
-    rows.push({ logId: logId, title: all[logId].title || '', body: all[logId].body || '', category: all[logId].category || 'NOTICES', sentAt: all[logId].sentAt || '', sentBy: all[logId].sentBy || '', failed: !!all[logId].error });
+    rows.push({ logId: logId, title: all[logId].title || '', body: all[logId].body || '', topic: all[logId].topic || '', sentAt: all[logId].sentAt || '', sentBy: all[logId].sentBy || '', failed: !!all[logId].error });
   }
   rows.sort(function (a, b) { return Number(b.logId) - Number(a.logId); });
   return rows;
 }
 
-// ---------------------------------------------------------------- Daily status (QR codes)
+// ---------------------------------------------------------------- Control messages
 
 /**
- * The two QR codes at the counter encode:
+ * UTF-8 length of [s] in bytes. Pure, so the banner limit can be tested.
  *
- *   <web app url>?status=open
- *   <web app url>?status=closed
- *
- * Scanning one opens a confirmation page. It does NOT send. Sending happens only when a member of
- * staff types the PIN and presses the button, and that is a google.script.run call, never a GET.
- *
- * This matters more than it looks. A URL that sends on being fetched is fired by anything that
- * follows links to build a preview -- WhatsApp, Gmail, Slack, a browser preloading the omnibox
- * suggestion -- so the notice would go to four hundred people with no human involved. And a QR on
- * a wall is public: anyone in the queue can photograph it and broadcast from home, forever, with
- * no way to revoke the picture. The PIN is what makes a photographed QR worthless.
+ * Counted by hand rather than through Utilities.newBlob so the test suite can check it without a
+ * service call, and so it matches the console's copy exactly.
  */
-/** The wording shipped with the script. Used when the database has nothing for this status. */
-function defaultStatusMessage_(which) {
-  var fallback = defaultStatusMessage_(which);
-  if (!fallback) return null;
-
-  try {
-    var stored = firebase_('get', '/status/' + which + '.json');
-    if (stored && stored.title) {
-      return { title: String(stored.title), body: String(stored.body || '') };
-    }
-  } catch (e) {
-    Logger.log('Status wording lookup failed, using the shipped default: %s', e.message);
+function utf8Length_(s) {
+  s = String(s === undefined || s === null ? '' : s);
+  var bytes = 0;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) { bytes += 4; i++; }
+    else bytes += 3;
   }
-  return fallback;
+  return bytes;
 }
 
 /**
- * The wording for a status message, as edited in the console.
+ * The FCM request for one control message. Pure, so the envelope can be tested without sending.
  *
- * Stored at /status/{open,closed}. The lookup is wrapped because this runs on the QR path: a member
- * of staff standing at a counter with a queue must not be blocked by a database hiccup, so an
- * unreachable read falls back to the shipped wording rather than failing the send.
+ * Data-only and deliberately without title or body: these show the user nothing. A notification
+ * block here would be drawn by the SDK and onMessageReceived would never run, so a revoke would be
+ * displayed and never applied. Every value is a string, as FCM v1 requires; empty values are kept,
+ * because an empty banner html is how a removal is said.
  */
-function statusMessage_(which) {
-  // Defensive normalisation. The value has already crossed a template and a browser by the time it
-  // gets here, and a stray pair of quote characters once made this return null for a perfectly good
-  // 'closed' -- an error that read like a bug in the QR rather than in the plumbing.
-  which = String(which || '').trim().replace(/^["']|["']$/g, '').toLowerCase();
-
-  if (which === 'open') {
-    return { title: 'The dispensary is open today', body: 'Normal OPD timings.' };
-  }
-  if (which === 'closed') {
-    return { title: 'The dispensary is closed now', body: 'It will reopen at the usual time.' };
-  }
-  return null;
-}
-
-/**
- * Sends one of the two status messages, after checking the PIN.
- *
- * Goes to the `status-v1` topic and is tagged `category: STATUS`, so it reaches only the phones
- * that asked for the daily status and lands on the quiet channel. Notices are untouched.
- */
-function sendStatus(which, pin) {
-  // Attribution is not needed here: the actual write happens in sendNotice below, which records
-  // the caller itself. This call stays because it refuses a non-editor before the duplicate scan.
-  requireEditor_();
-  checkPin_(pin);
-
-  var message = statusMessage_(which);
-  if (!message) {
-    throw new Error('Unknown status "' + which + '". Expected open or closed.');
-  }
-
-  // A second scan a minute later is far more likely to be a mis-scan than a real change, and a
-  // duplicate to four hundred phones is not recoverable.
-  var recent = listSent(5);
-  for (var i = 0; i < recent.length; i++) {
-    if (recent[i].title === message.title && Date.now() - Number(recent[i].logId) < DUPLICATE_WINDOW_MS) {
-      throw new Error('That was already sent a few minutes ago. Nothing has been sent again.');
+function controlRequest_(topic, data) {
+  var strings = {};
+  for (var key in data) {
+    if (data.hasOwnProperty(key) && data[key] !== undefined && data[key] !== null) {
+      strings[key] = String(data[key]);
     }
   }
-
-  return sendNotice(message.title, message.body, 'STATUS', pin);
+  return { message: { topic: topic, android: { priority: 'high' }, data: strings } };
 }
 
-// ---------------------------------------------------------------- Revocation
-
 /**
- * Broadcasts a revocation so the holder stops delivery within seconds rather than waiting for its
- * next scheduled verification.
+ * Broadcasts one control message: a revoke, a resume or a banner change.
  *
- * This is a broadcast, not per-device addressing. onNewToken is deliberately not overridden in the
- * app and everything here is topic-addressed, so every subscribed phone receives this and tests
- * the code against its own. That publishes the revoked code to all of them, which is harmless -- a
- * code carrying revoked = true is useless to whoever reads it -- but it is what is being sent.
+ * A broadcast, not per-device addressing. onNewToken is deliberately not overridden in the app and
+ * everything here is topic-addressed, so every phone receives a revoke or resume and tests the code
+ * against its own. That publishes the code to all of them, which is harmless -- it says only that
+ * the code was stopped or started -- but it is what is being sent.
  *
- * It cannot be authoritative. FCM is best-effort, and a phone that is switched off past the
- * message TTL never sees it, which is why the periodic verification on the device stays as the
- * safety net. See docs/decisions.md.
+ * It cannot be authoritative. FCM is best-effort, and a phone switched off past the message TTL
+ * never sees it, which is why the periodic verification on the device stays as the safety net. See
+ * docs/decisions.md.
+ *
+ * Throws when FCM refuses. The caller leaves the entry queued and retries; a message that did go
+ * out and is sent again is harmless, because the phone ignores a stamp it has already applied.
  */
-function pushRevoke_(code) {
-  var message = { message: {
-    topic: TOPIC_OVERRIDE || TOPIC,
-    android: { priority: 'high' },
-    // Data-only and deliberately empty of title and body: this shows the user nothing, it only
-    // invalidates. A notification block here would be drawn by the SDK and onMessageReceived
-    // would never run, so the revoke would be displayed and never applied.
-    data: { type: 'revoke', code: String(code) }
-  } };
-
+function pushControl_(data) {
+  var topic = TOPIC_OVERRIDE || CONTROL_TOPIC;
   var response = UrlFetchApp.fetch(
     'https://fcm.googleapis.com/v1/projects/' + property_('PROJECT_ID') + '/messages:send',
     { method: 'post', contentType: 'application/json',
       headers: { Authorization: 'Bearer ' + accessToken_() },
-      payload: JSON.stringify(message), muteHttpExceptions: true });
+      payload: JSON.stringify(controlRequest_(topic, data)), muteHttpExceptions: true });
 
   if (response.getResponseCode() >= 300) {
-    throw new Error('FCM refused the revoke: ' + response.getContentText());
+    throw new Error('FCM refused the ' + data.type + ': ' + response.getContentText());
   }
   return JSON.parse(response.getContentText()).name || '';
 }
 
 // ---------------------------------------------------------------- Web app
 
-function doGet(e) {
+function doGet() {
   try {
     requireEditor_();
   } catch (err) {
     return refusalPage_(err.message);
   }
-  var status = e && e.parameter ? e.parameter.status : null;
-
-  if (status === 'open' || status === 'closed') {
-    var template = HtmlService.createTemplateFromFile('Status');
-    template.status = status;
-    template.message = statusMessage_(status);
-    return template.evaluate().setTitle('Paramanu Seniors Notices - ' + status).addMetaTag('viewport', 'width=device-width, initial-scale=1');
-  }
-
   return HtmlService.createTemplateFromFile('Index').evaluate().setTitle('Paramanu Seniors Notices - Send').addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 

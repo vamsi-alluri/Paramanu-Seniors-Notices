@@ -8,8 +8,8 @@
     <!-- Notifications -->
     <string name="notification_channel_name">Notices</string>
     <string name="notification_channel_description">Dispensary hours, closures and notices</string>
-    <string name="notification_channel_status_name">Daily open and closed</string>
-    <string name="notification_channel_status_description">The routine morning and evening status. Silent by default.</string>
+    <string name="notification_channel_low_name">Quiet notices</string>
+    <string name="notification_channel_low_description">Routine messages that arrive without a sound.</string>
     <string name="notification_channel_testing_name">Testing</string>
     <string name="notification_channel_testing_description">Messages used to check delivery on this phone. Only appears if testing is switched on.</string>
     <string name="permission_banner_title">Notifications are off</string>
@@ -55,10 +55,8 @@
     <!-- Settings -->
     <string name="settings_title">Settings</string>
     <string name="settings_subscriptions">What you receive</string>
-    <string name="settings_receive_notices">Notices</string>
-    <string name="settings_receive_notices_explainer">Closures, timing changes and circulars. Sent only when there is something to tell you.</string>
-    <string name="settings_receive_status">Daily open and closed</string>
-    <string name="settings_receive_status_explainer">A quiet message each morning and evening saying whether the dispensary is open. Arrives without a sound.</string>
+    <string name="settings_subscriptions_from">From %1$s</string>
+    <string name="settings_topics_unavailable">The list of what you can receive will appear once this phone has been online.</string>
     <string name="settings_receive_testing">Testing messages</string>
     <string name="settings_receive_testing_explainer">For checking delivery on this phone. Leave off unless you have been asked to turn it on.</string>
 
@@ -82,11 +80,6 @@
     <string name="settings_privacy_url">https://paramanuseniorshealth.org/privacy-policy-app/</string>
     <string name="settings_website_url">https://paramanuseniorshealth.org/</string>
     <string name="settings_your_code">Your code</string>
-    <string name="settings_reset">Reset this app</string>
-    <string name="settings_reset_explainer">Removes your code and all saved notices from this phone. You will need a new code from the counter.</string>
-    <string name="settings_reset_action">Reset</string>
-    <string name="settings_reset_confirm_title">Reset this app?</string>
-    <string name="settings_reset_confirm_body">Your code and every saved notice will be removed from this phone. This cannot be undone, and you will need a new code from the dispensary counter.</string>
     <!--
       Shown on the notice list, not as a toast, and it stays until access is restored. The old
       wording said access "has been removed" while the notices sat untouched behind the code screen,

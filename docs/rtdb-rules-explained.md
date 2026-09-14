@@ -89,7 +89,7 @@ The console's **Import JSON** is a *replace*, not a merge, at whatever path is s
 at the root therefore deletes `/codes`, `/templates` and `/sent` along with everything else --
 including the `usedBy` claims that installed phones depend on. This has already happened once.
 
-**To change one subtree, select that node first.** Click into `/info` in the data viewer, then
+**To change one subtree, select that node first.** Click into `/dispensaries/barc-vashi/info` in the data viewer, then
 Import JSON with only the inner object:
 
 ```json

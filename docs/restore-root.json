@@ -2,44 +2,70 @@
   "codes": {
     "P1AYREVQ": {
       "issued": 1788239736597,
-      "note": "play-review"
+      "note": "play-review",
+      "dispensary": "barc-vashi"
     },
     "Y4EJ65B1": {
       "issued": 1788250388929,
       "usedBy": "fqEViqYtLbNPONhrBVXiiuj4Mdj2",
       "activatedAt": 1788250388929,
-      "note": "restored after accidental root import"
+      "note": "restored after accidental root import",
+      "dispensary": "barc-vashi"
     },
     "THHVWEHJ": {
-      "issued": 1788239736597
+      "issued": 1788239736597,
+      "dispensary": "barc-vashi"
     },
     "MQCAMGPC": {
-      "issued": 1788239736597
+      "issued": 1788239736597,
+      "dispensary": "barc-vashi"
     },
     "NQX18XAT": {
-      "issued": 1788239736597
+      "issued": 1788239736597,
+      "dispensary": "barc-vashi"
     },
     "XE29ND28": {
-      "issued": 1788239736597
+      "issued": 1788239736597,
+      "dispensary": "barc-vashi"
     },
     "AP4R172Z": {
-      "issued": 1788239736597
+      "issued": 1788239736597,
+      "dispensary": "barc-vashi"
     },
     "7B23AFX6": {
-      "issued": 1788239736597
+      "issued": 1788239736597,
+      "dispensary": "barc-vashi"
     },
     "GR9G36QF": {
-      "issued": 1788239736597
+      "issued": 1788239736597,
+      "dispensary": "barc-vashi"
     },
     "16MN3D3F": {
-      "issued": 1788239736597
+      "issued": 1788239736597,
+      "dispensary": "barc-vashi"
     },
     "QSPP3X8R": {
-      "issued": 1788239736597
+      "issued": 1788239736597,
+      "dispensary": "barc-vashi"
     }
   },
-  "info": {
-    "heading": "Dispensary timings",
-    "lines": "OPD: 9.00 am to 1.00 pm, Monday to Saturday\nEvening OPD: 4.00 pm to 6.00 pm, Monday to Friday\nPharmacy: 9.00 am to 5.00 pm\nClosed on Sundays and public holidays\nBARC Hospital casualty: 2558 2112 / 2559 8100"
+  "dispensaries": {
+    "barc-vashi": {
+      "name": "BARC Vashi Dispensary",
+      "topics": {
+        "notices": {
+          "topic": "notices-v1",
+          "label": "Notices",
+          "explainer": "Closures, timing changes and circulars. Sent only when there is something to tell you.",
+          "defaultOn": true,
+          "importance": "high",
+          "order": 1
+        }
+      },
+      "info": {
+        "heading": "Dispensary timings",
+        "lines": "OPD: 9.00 am to 1.00 pm, Monday to Saturday\nEvening OPD: 4.00 pm to 6.00 pm, Monday to Friday\nPharmacy: 9.00 am to 5.00 pm\nClosed on Sundays and public holidays\nBARC Hospital casualty: 2558 2112 / 2559 8100"
+      }
+    }
   }
 }

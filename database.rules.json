@@ -2,9 +2,11 @@
   "rules": {
     ".read": false,
     ".write": false,
-    "info": {
-      ".read": "auth != null",
-      ".write": false
+    "dispensaries": {
+      "$dispensary": {
+        ".read": "auth != null",
+        ".write": false
+      }
     },
     "codes": {
       "$code": {
@@ -24,6 +26,9 @@
           ".validate": "data.exists() && newData.val() === data.val()"
         },
         "note": {
+          ".validate": "newData.val() === data.val()"
+        },
+        "dispensary": {
           ".validate": "newData.val() === data.val()"
         },
         "$other": {

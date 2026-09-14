@@ -13,10 +13,7 @@
  *  - The PIN failure counter is exercised and then cleared, because leaving it set would lock the
  *    real PIN out for fifteen minutes.
  *  - The REQUIRE_STAFF_PIN property is flipped and put back. Left on 'false' it would silently
- *    drop the PIN from every send, including the QR path, and nothing would look wrong.
- *  - /status is emptied, rewritten and restored. Left holding a test string, the next real QR scan
- *    would send that string to every phone. If the restore itself fails the log says so; check
- *    /status by hand before the next scan.
+ *    drop the PIN from every send, and nothing would look wrong.
  *  - Sends go to TEST_TOPIC, a topic no phone subscribes to. The credentials, the payload and the
  *    FCM response are all real; only the audience is empty.
  *
@@ -51,15 +48,15 @@ function t_throws_(name, fn, expect) {
 
 // ---------------------------------------------------------------- pure logic
 
-function t_statusMessage_() {
-  t_eq_('statusMessage_ open', statusMessage_('open').title, 'The dispensary is open today');
-  t_eq_('statusMessage_ closed', statusMessage_('closed').title, 'The dispensary is closed now');
-  // The bug that broke the QR: the value arrived carrying its quote characters.
-  t_ok_('statusMessage_ tolerates quotes', statusMessage_('"closed"') !== null);
-  t_ok_('statusMessage_ tolerates whitespace', statusMessage_('  open ') !== null);
-  t_ok_('statusMessage_ tolerates case', statusMessage_('CLOSED') !== null);
-  t_ok_('statusMessage_ rejects unknown', statusMessage_('ajar') === null);
-  t_ok_('statusMessage_ rejects empty', statusMessage_('') === null);
+/** Which of a dispensary's topics a notice goes to. Pure: no database. */
+function t_noticeTopic_() {
+  t_eq_('the only topic is the one', noticeTopic_({ notices: { topic: 'notices-v1', order: 1 } }), 'notices-v1');
+  t_eq_('the lowest order wins', noticeTopic_({ b: { topic: 'b-v1', order: 2 }, a: { topic: 'a-v1', order: 1 } }), 'a-v1');
+  t_eq_('an entry without an order goes last', noticeTopic_({ a: { topic: 'a-v1' }, b: { topic: 'b-v1', order: 9 } }), 'b-v1');
+  // Ties go by key, so the answer never depends on the order the database returns entries in.
+  t_eq_('a tie goes by key', noticeTopic_({ z: { topic: 'z-v1', order: 1 }, a: { topic: 'a-v1', order: 1 } }), 'a-v1');
+  t_eq_('an entry without a topic name is skipped', noticeTopic_({ a: { order: 0 }, b: { topic: 'b-v1', order: 5 } }), 'b-v1');
+  t_ok_('no topics at all is null', noticeTopic_({}) === null);
 }
 
 function t_property_() {
@@ -79,7 +76,8 @@ function t_accessToken_() {
   var first = accessToken_();
   t_ok_('accessToken_ returns a token', typeof first === 'string' && first.length > 20);
   var second = accessToken_();
-  t_eq_('accessToken_ caches', second, first);
+  // Compared, never printed: t_eq_ writes the value into the log, and this value is a live credential.
+  t_ok_('accessToken_ caches', second === first, 'same token returned');
 }
 
 function t_firebase_() {
@@ -177,7 +175,7 @@ function t_checkPin_() {
  * The PIN switch.
  *
  * Saves and restores REQUIRE_STAFF_PIN in a finally block. Leaving it on 'false' after a failed run
- * would silently drop the PIN from every send, including the QR path, and nothing would look wrong.
+ * would silently drop the PIN from every send, and nothing would look wrong.
  */
 function t_pinSwitch_() {
   var props = PropertiesService.getScriptProperties();
@@ -215,79 +213,29 @@ function t_pinSwitch_() {
   }
 }
 
-/**
- * The editable open/closed wording.
- *
- * Writes to /status directly rather than through the console, which lives in the other project.
- * The original contents are saved and put back in a finally block: leaving a test string there
- * would mean the next real QR scan sends it to every phone.
- */
-function t_statusWording_() {
-  var original = null;
-  try {
-    original = firebase_('get', '/status.json');
-  } catch (e) {
-    t_ok_('status wording: could read /status', false, e.message);
-    return;
-  }
-
-  try {
-    // With nothing stored, the shipped wording is what goes out.
-    firebase_('delete', '/status.json');
-    t_eq_('statusMessage_ falls back to the shipped title', statusMessage_('open').title, defaultStatusMessage_('open').title);
-    t_eq_('statusMessage_ falls back to the shipped body', statusMessage_('closed').body, defaultStatusMessage_('closed').body);
-
-    // Once edited in the console, the new wording is what goes out -- with no redeploy.
-    firebase_('put', '/status/open.json', { title: '[selftest] open title', body: '[selftest] open body', updated: Date.now() });
-    t_eq_('statusMessage_ prefers the stored title', statusMessage_('open').title, '[selftest] open title');
-    t_eq_('statusMessage_ prefers the stored body', statusMessage_('open').body, '[selftest] open body');
-
-    // The normalisation that fixed the quoted-value bug must still apply on the stored path.
-    t_eq_('stored wording survives a quoted argument', statusMessage_('"open"').title, '[selftest] open title');
-    t_eq_('stored wording survives casing and spacing', statusMessage_('  OPEN ').title, '[selftest] open title');
-
-    // Editing one must not disturb the other.
-    t_eq_('the other status is untouched', statusMessage_('closed').title, defaultStatusMessage_('closed').title);
-
-    // A half-written node -- body but no title -- must not produce a titleless notification.
-    firebase_('put', '/status/closed.json', { body: 'orphan body with no title' });
-    t_eq_('a node without a title falls back', statusMessage_('closed').title, defaultStatusMessage_('closed').title);
-
-    // An empty body is a legitimate choice, not a reason to fall back.
-    firebase_('put', '/status/open.json', { title: '[selftest] title only', body: '' });
-    t_eq_('an empty stored body is respected', statusMessage_('open').body, '');
-
-    t_ok_('unknown statuses are still rejected', statusMessage_('ajar') === null);
-  } finally {
-    try {
-      firebase_('delete', '/status.json');
-      if (original) firebase_('put', '/status.json', original);
-    } catch (e) {
-      Logger.log('WARNING: could not restore /status -- check it by hand: %s', e.message);
-    }
-  }
-}
-
 // ---------------------------------------------------------------- sending
 
 function t_sendNotice_(created) {
   var pin = property_('STAFF_PIN');
 
-  t_throws_('sendNotice refuses a wrong PIN', function () { sendNotice('x', 'y', 'NOTICES', 'wrong'); }, 'not correct');
+  t_throws_('sendNotice refuses a wrong PIN', function () { sendNotice('x', 'y', 'wrong'); }, 'not correct');
   CacheService.getScriptCache().remove('pin_failures');
 
-  t_throws_('sendNotice requires a title', function () { sendNotice('', 'body', 'NOTICES', pin); }, 'title is required');
+  t_throws_('sendNotice requires a title', function () { sendNotice('', 'body', pin); }, 'title is required');
 
   var longTitle = new Array(200).join('x');
-  t_throws_('sendNotice caps the title', function () { sendNotice(longTitle, '', 'NOTICES', pin); }, 'too long');
+  t_throws_('sendNotice caps the title', function () { sendNotice(longTitle, '', pin); }, 'too long');
 
-  var result = sendNotice('[selftest] notice', 'Sent by runAllTests. Ignore.', 'NOTICES', pin);
+  var result = sendNotice('[selftest] notice', 'Sent by runAllTests. Ignore.', pin);
   created.push(result.logId);
   t_ok_('sendNotice returns a logId', /^[0-9]+$/.test(result.logId), result.logId);
-  t_eq_('sendNotice tags the category', result.category, 'NOTICES');
+  // Against the real record, so a typo in /dispensaries fails here rather than at the next real send.
+  t_eq_('sendNotice goes to the dispensary topic', result.topic, dispensaryTopic_());
 
   var stored = firebase_('get', '/sent/' + result.logId + '.json');
   t_ok_('sendNotice records the send', stored && stored.title === '[selftest] notice');
+  t_eq_('sendNotice records the topic', stored.topic, result.topic);
+  t_eq_('sendNotice records the dispensary', stored.dispensary, dispensaryId_());
   t_ok_('sendNotice records no error', !stored.error, stored.error || '');
   t_ok_('sendNotice captured the FCM name', !!stored.fcmName, stored.fcmName || 'missing');
 
@@ -297,97 +245,124 @@ function t_sendNotice_(created) {
   t_eq_('sentBy is the caller', stored.sentBy, requireEditor_());
 }
 
-function t_sendStatus_(created) {
-  var pin = property_('STAFF_PIN');
-
-  t_throws_('sendStatus refuses a wrong PIN', function () { sendStatus('open', 'wrong'); }, 'not correct');
-  CacheService.getScriptCache().remove('pin_failures');
-
-  t_throws_('sendStatus rejects an unknown status', function () { sendStatus('ajar', pin); }, 'Unknown status');
-
-  var result = sendStatus('open', pin);
-  created.push(result.logId);
-  t_eq_('sendStatus sends as STATUS', result.category, 'STATUS');
-  t_eq_('sendStatus uses the fixed title', result.title, 'The dispensary is open today');
-
-  // The mis-scan guard: the same status again within the window must be refused.
-  t_throws_('sendStatus refuses an immediate repeat', function () { sendStatus('open', pin); }, 'already sent');
-}
-
 // ---------------------------------------------------------------- routing
 
 function t_doGet_() {
-  var open = doGet({ parameter: { status: 'open' } });
-  t_ok_('doGet serves the Status page for open', !!open && typeof open.getContent === 'function');
-  t_ok_('doGet open page has a PIN field', open.getContent().indexOf('Staff PIN') > 0);
-  t_ok_('doGet open page carries the status', open.getContent().indexOf('data-status="open"') > 0);
-
-  var closed = doGet({ parameter: { status: 'closed' } });
-  t_ok_('doGet closed page carries the status', closed.getContent().indexOf('data-status="closed"') > 0);
-
-  var main = doGet({ parameter: {} });
-  t_ok_('doGet serves the compose page by default', main.getContent().indexOf('Send a notice') > 0);
-
-  var bare = doGet(null);
-  t_ok_('doGet survives no event object', !!bare);
+  t_ok_('doGet serves the compose page', doGet().getContent().indexOf('Send a notice') > 0);
+  // The daily open and closed route is gone. A bookmarked ?status= link opens the compose page.
+  t_ok_('doGet ignores a leftover status link',
+    doGet({ parameter: { status: 'open' } }).getContent().indexOf('Send a notice') > 0);
 }
 
-function t_pushRevoke_() {
-  // TOPIC_OVERRIDE is already TEST_TOPIC for the whole suite, so this reaches no real phone.
-  var name = pushRevoke_('ZZZZZZZZ');
-  t_ok_('pushRevoke_ returns an FCM name', String(name).indexOf('projects/') === 0, String(name));
+// ---------------------------------------------------------------- control messages
+
+function t_utf8Length_() {
+  t_eq_('utf8Length_ ascii', utf8Length_('Closed Friday'), 13);
+  t_eq_('utf8Length_ empty', utf8Length_(''), 0);
+  t_eq_('utf8Length_ null is zero', utf8Length_(null), 0);
+  // The case this exists for: a character count passes a Marathi banner that FCM then refuses.
+  t_eq_('utf8Length_ devanagari is three bytes a character', utf8Length_('बंद'), 9);
+  t_eq_('utf8Length_ emoji is four bytes', utf8Length_('🙏'), 4);
 }
 
-function t_revokerIsValidCode_() {
-  t_ok_('accepts a well-formed code', revokerIsValidCode_('A1B2C3D4'));
-  t_ok_('refuses a dashed code', !revokerIsValidCode_('A1B2-C3D4'));
-  t_ok_('refuses lowercase', !revokerIsValidCode_('a1b2c3d4'));
-  t_ok_('refuses the wrong length', !revokerIsValidCode_('A1B2C3D'));
-  t_ok_('refuses nothing at all', !revokerIsValidCode_(''));
-  t_ok_('refuses undefined', !revokerIsValidCode_(undefined));
+function t_controlRequest_() {
+  var request = controlRequest_('control-v1', { type: 'banner', html: '', at: 123 });
+  t_eq_('control request goes to the topic', request.message.topic, 'control-v1');
+  t_eq_('control request is high priority', request.message.android.priority, 'high');
+  t_ok_('control request has no notification block', !request.message.notification);
+  t_ok_('control values are strings', typeof request.message.data.at === 'string');
+  // Empty is how a removed banner is said, so it must survive the envelope.
+  t_eq_('an empty html is kept', request.message.data.html, '');
+  t_ok_('a null value is omitted',
+    !('code' in controlRequest_('x', { type: 'revoke', code: null }).message.data));
+}
+
+/** The decision the drain makes for each entry. Pure: no database, no FCM. */
+function t_controlDecide_() {
+  var held = { issued: 1, usedBy: 'uid' };
+  var revoked = { issued: 1, usedBy: 'uid', revoked: true };
+  var revoke = { type: 'revoke', code: 'A1B2C3D4', at: 50, by: 'a@x.org' };
+  var resume = { type: 'resume', code: 'A1B2C3D4', at: 60, by: 'a@x.org' };
+
+  t_eq_('a revoke for a revoked code is sent', controlDecide_('code_A1B2C3D4', revoke, revoked, null).send.type, 'revoke');
+  t_eq_('the revoke carries its stamp', controlDecide_('code_A1B2C3D4', revoke, revoked, null).send.at, 50);
+  t_ok_('a revoke for a restored code is dropped', !!controlDecide_('code_A1B2C3D4', revoke, held, null).drop);
+  t_ok_('a revoke for a deleted code is dropped', !!controlDecide_('code_A1B2C3D4', revoke, null, null).drop);
+
+  t_eq_('a resume for a held, live code is sent', controlDecide_('code_A1B2C3D4', resume, held, null).send.type, 'resume');
+  t_ok_('a resume for a code revoked again is dropped', !!controlDecide_('code_A1B2C3D4', resume, revoked, null).drop);
+  t_ok_('a resume for a code nobody holds is dropped', !!controlDecide_('code_A1B2C3D4', resume, { issued: 1 }, null).drop);
+
+  t_ok_('a malformed key is dropped', !!controlDecide_('code_a1b2', revoke, revoked, null).drop);
+  t_ok_('an unknown type is dropped', !!controlDecide_('code_A1B2C3D4', { type: 'ping', at: 1 }, revoked, null).drop);
+  t_ok_('an unstamped entry is dropped', !!controlDecide_('code_A1B2C3D4', { type: 'revoke' }, revoked, null).drop);
+
+  var banner = controlDecide_('banner_barc-vashi', { at: 70 }, null, { html: '<b>Closed</b>', htmlUpdated: 80 });
+  t_eq_('a banner sends what the dispensary holds now', banner.send.html, '<b>Closed</b>');
+  t_eq_('a banner says whose it is', banner.send.dispensary, 'barc-vashi');
+  t_eq_('a banner is stamped with the save', banner.send.at, 80);
+  t_eq_('a removed banner is sent as empty html',
+    controlDecide_('banner_barc-vashi', { at: 90 }, null, { htmlUpdated: 90 }).send.html, '');
+  t_ok_('an oversized banner is dropped rather than retried forever',
+    !!controlDecide_('banner_barc-vashi', { at: 1 }, null, { html: new Array(BANNER_MAX_BYTES + 2).join('x'), htmlUpdated: 1 }).drop);
+  t_ok_('a banner key that names no dispensary is dropped',
+    !!controlDecide_('banner', { at: 1 }, null, { htmlUpdated: 1 }).drop);
+}
+
+function t_pushControl_() {
+  // TOPIC_OVERRIDE is TEST_TOPIC for the whole suite, so this reaches no real phone.
+  var name = pushControl_({ type: 'revoke', code: 'ZZZZZZZZ', at: Date.now() });
+  t_ok_('pushControl_ returns an FCM name', String(name).indexOf('projects/') === 0, String(name));
 }
 
 /**
  * Drains a seeded queue against TEST_TOPIC.
  *
- * Uses a code under /codes that this test creates and removes, because the drain re-reads the code
+ * Uses codes under /codes that this test creates and removes, because the drain re-reads each code
  * before broadcasting -- that re-read is the guard that stops a stale revoke cutting off whoever
  * claims a released code next, so a test that bypassed it would be testing nothing.
+ *
+ * Like the drain itself, this broadcasts anything genuinely queued at the moment it runs -- to
+ * TEST_TOPIC, where no phone hears it -- and clears it. Run it when nobody is using the console.
  */
-function t_revokerDrain_() {
-  var live = 'ZZZZZZZZ';     // revoked: should be broadcast and cleared
-  var stale = 'YYYYYYYY';    // not revoked: should be dropped without sending
-  var junk = 'not-a-code';   // malformed key: should be discarded
+function t_controlDrain_() {
+  var live = 'ZZZZZZZZ';       // disabled: should be broadcast and cleared
+  var stale = 'YYYYYYYY';      // enabled since: should be dropped without sending
+  var junk = 'code_not-a-code';
+  var now = Date.now();
 
   try {
-    firebase_('put', '/codes/' + live + '.json', { issued: Date.now(), revoked: true });
-    firebase_('put', '/codes/' + stale + '.json', { issued: Date.now() });
-    firebase_('put', '/revokeQueue/' + live + '.json', { at: Date.now(), by: 'test@example.org' });
-    firebase_('put', '/revokeQueue/' + stale + '.json', { at: Date.now(), by: 'test@example.org' });
-    firebase_('put', '/revokeQueue/' + junk + '.json', { at: Date.now(), by: 'test@example.org' });
+    firebase_('put', '/codes/' + live + '.json', { issued: now, usedBy: 'uid-selftest', revoked: true });
+    firebase_('put', '/codes/' + stale + '.json', { issued: now, usedBy: 'uid-selftest' });
+    firebase_('put', '/controlQueue/code_' + live + '.json', { type: 'revoke', code: live, at: now, by: 'test@example.org' });
+    firebase_('put', '/controlQueue/code_' + stale + '.json', { type: 'revoke', code: stale, at: now, by: 'test@example.org' });
+    firebase_('put', '/controlQueue/' + junk + '.json', { type: 'revoke', at: now, by: 'test@example.org' });
 
-    var result = revokerDrain_();
+    var result = controlDrain_();
 
-    t_eq_('drain broadcasts the revoked one', result.pushed, 1);
-    t_eq_('drain skips the stale and the malformed', result.skipped, 2);
+    t_eq_('drain broadcasts the disabled one', result.pushed, 1);
+    t_eq_('drain skips the enabled and the malformed', result.skipped, 2);
     t_eq_('drain reports no failures', result.failed, 0);
 
-    t_ok_('the broadcast entry is cleared',
-      firebase_('get', '/revokeQueue/' + live + '.json') === null);
-    t_ok_('a code no longer revoked is dropped without sending',
-      firebase_('get', '/revokeQueue/' + stale + '.json') === null);
-    t_ok_('a malformed key is discarded',
-      firebase_('get', '/revokeQueue/' + junk + '.json') === null);
+    t_ok_('a broadcast entry is cleared', firebase_('get', '/controlQueue/code_' + live + '.json') === null);
+    t_ok_('an enabled code is dropped without sending', firebase_('get', '/controlQueue/code_' + stale + '.json') === null);
+    t_ok_('a malformed key is discarded', firebase_('get', '/controlQueue/' + junk + '.json') === null);
+
+    // The guard that keeps a restore queued while its revoke was being sent: an entry replaced
+    // since it was read must be left for the next run.
+    firebase_('put', '/controlQueue/code_' + live + '.json', { type: 'resume', code: live, at: now + 5, by: 'test@example.org' });
+    controlClear_({ key: 'code_' + live, path: '/controlQueue/code_' + live, entry: { at: now } });
+    t_ok_('an entry replaced mid-send is not cleared', firebase_('get', '/controlQueue/code_' + live + '.json') !== null);
+    firebase_('delete', '/controlQueue/code_' + live + '.json');
 
     // An empty queue must cost nothing and report nothing.
-    var empty = revokerDrain_();
-    t_eq_('an empty queue pushes nothing', empty.pushed, 0);
+    t_eq_('an empty queue pushes nothing', controlDrain_().pushed, 0);
   } finally {
-    firebase_('delete', '/codes/' + live + '.json');
-    firebase_('delete', '/codes/' + stale + '.json');
-    firebase_('delete', '/revokeQueue/' + live + '.json');
-    firebase_('delete', '/revokeQueue/' + stale + '.json');
-    firebase_('delete', '/revokeQueue/' + junk + '.json');
+    [live, stale].forEach(function (code) {
+      firebase_('delete', '/codes/' + code + '.json');
+      firebase_('delete', '/controlQueue/code_' + code + '.json');
+    });
+    firebase_('delete', '/controlQueue/' + junk + '.json');
   }
 }
 
@@ -409,7 +384,7 @@ function runAllTests() {
   }
 
   try {
-    t_statusMessage_();
+    t_noticeTopic_();
     t_property_();
     t_databaseUrl_();
     t_accessToken_();
@@ -420,12 +395,12 @@ function runAllTests() {
     t_requireEditor_();
     t_checkPin_();
     t_pinSwitch_();
-    t_statusWording_();
     t_sendNotice_(created);
-    t_sendStatus_(created);
-    t_pushRevoke_();
-    t_revokerIsValidCode_();
-    t_revokerDrain_();
+    t_utf8Length_();
+    t_controlRequest_();
+    t_controlDecide_();
+    t_pushControl_();
+    t_controlDrain_();
     t_doGet_();
     t_testConnection_();
   } catch (e) {
@@ -434,8 +409,7 @@ function runAllTests() {
     TOPIC_OVERRIDE = previousOverride;
     CacheService.getScriptCache().remove('pin_failures');
 
-    // Sent rows are removed so the duplicate guard does not refuse a genuine status message later
-    // today, and so the console's "recently sent" list is not full of test traffic.
+    // Sent rows are removed so the sender's "recently sent" list is not full of test traffic.
     for (var i = 0; i < created.length; i++) {
       try { firebase_('delete', '/sent/' + created[i] + '.json'); } catch (e2) { /* best effort */ }
     }

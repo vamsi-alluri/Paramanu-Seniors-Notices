@@ -19,8 +19,9 @@ import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.activation.ActivationState
+import org.paramanuseniorshealth.notices.activation.Dispensary
 import org.paramanuseniorshealth.notices.activation.RedeemResult
-import org.paramanuseniorshealth.notices.activation.Subscription
+import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.InfoRepository
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
@@ -30,7 +31,7 @@ import org.paramanuseniorshealth.notices.data.OfficeInfo
  *  destinations do not justify a navigation dependency, and the code screen is a gate rather
  *  than a place you can navigate back to. */
 sealed interface Screen {
-    /** The code ("PIN") gate. Reachable only on a fresh install or after a reset. */
+    /** The code ("PIN") gate. Reached on a fresh install, or by a revoked user entering a new code. */
     data object Activation : Screen
     data object Notices : Screen
     data object Settings : Screen
@@ -40,7 +41,8 @@ sealed interface Screen {
 class NoticeViewModel(
     private val notices: NoticeRepository,
     private val activation: ActivationRepository,
-    private val info: InfoRepository,
+    private val dispensaries: DispensaryRepository,
+    info: InfoRepository,
     private val welcomeTitle: String,
     private val welcomeBody: String,
 ) : ViewModel() {
@@ -61,8 +63,15 @@ class NoticeViewModel(
     )
     val screen: StateFlow<Screen> = _screen.asStateFlow()
 
-    private val _subscriptions = MutableStateFlow(activation.subscriptions())
-    val subscriptions: StateFlow<Map<Subscription, Boolean>> = _subscriptions.asStateFlow()
+    /** The dispensary and the topics it offers, straight from the repository. */
+    val dispensary: StateFlow<Dispensary?> = dispensaries.dispensary
+
+    /** Each offered topic's switch, keyed by topic name. */
+    private val _topicChoices = MutableStateFlow(activation.topicChoices())
+    val topicChoices: StateFlow<Map<String, Boolean>> = _topicChoices.asStateFlow()
+
+    private val _testingOn = MutableStateFlow(activation.testingOn)
+    val testingOn: StateFlow<Boolean> = _testingOn.asStateFlow()
 
     private val _redeeming = MutableStateFlow(false)
     val redeeming: StateFlow<Boolean> = _redeeming.asStateFlow()
@@ -92,14 +101,17 @@ class NoticeViewModel(
      * Whether the hidden testing switch is visible.
      *
      * Not persisted: it is unlocked per visit to Settings, so a phone handed to somebody else does
-     * not show it. The subscription itself is persisted, so a device already opted in keeps
-     * receiving test messages and its row stays visible.
+     * not show it. The choice itself is persisted, so a device already opted in keeps receiving test
+     * messages and its row stays visible.
      */
-    private val _testingUnlocked = MutableStateFlow(activation.isSubscribed(Subscription.TESTING))
+    private val _testingUnlocked = MutableStateFlow(activation.testingOn)
     val testingUnlocked: StateFlow<Boolean> = _testingUnlocked.asStateFlow()
 
-    private val _officeInfo = MutableStateFlow(info.cached)
-    val officeInfo: StateFlow<OfficeInfo?> = _officeInfo.asStateFlow()
+    /**
+     * The banner, straight from the repository rather than mirrored here, for the same reason as
+     * [revoked]: a pushed change is applied by the messaging service with no UI attached.
+     */
+    val officeInfo: StateFlow<OfficeInfo?> = info.info
 
     /**
      * One-shot messages for the UI to surface as a toast.
@@ -143,7 +155,6 @@ class NoticeViewModel(
 
     init {
         refreshActivation()
-        refreshOfficeInfo()
     }
 
     /**
@@ -178,11 +189,6 @@ class NoticeViewModel(
         }
     }
 
-    /** Keeps whatever is cached when the fetch fails, rather than emptying the header. */
-    fun refreshOfficeInfo() {
-        viewModelScope.launch { info.refresh()?.let { _officeInfo.value = it } }
-    }
-
     fun toggleExpanded(id: Long) {
         _expandedId.value = if (_expandedId.value == id) null else id
     }
@@ -213,7 +219,8 @@ class NoticeViewModel(
     }
 
     /**
-     * Asks the backend whether this install's claim still stands.
+     * Asks the backend whether this install's claim still stands, and then what its dispensary
+     * offers.
      *
      * A definitive [ActivationState.Revoked] raises the banner but leaves the user where they are.
      * [ActivationState.Unknown] -- offline, slow signal -- changes nothing, for the same reason the
@@ -240,9 +247,12 @@ class NoticeViewModel(
                     activation.resumeClaim()
                     notices.clearRevokedNotice()
                 }
+                // Only for a claim that stands: a revoked phone receives nothing, the banner and the
+                // topic list included.
+                loadDispensary()
             }
 
-            // Genuinely no claim on this device: a fresh install, or after a reset.
+            // Genuinely no claim on this device: a fresh install.
             ActivationState.NotActivated -> _screen.value = Screen.Activation
 
             ActivationState.Unknown -> Unit
@@ -252,11 +262,23 @@ class NoticeViewModel(
     }
 
     /**
+     * Reads the dispensary -- its topics and its banner in one go -- and brings the subscriptions
+     * into line with it. Keeps whatever is cached when the read fails.
+     */
+    private suspend fun loadDispensary() {
+        val id = activation.dispensaryId ?: return
+        dispensaries.refresh(id)
+        activation.syncSubscriptions()
+        _topicChoices.value = activation.topicChoices()
+    }
+
+    /**
      * Called whenever the app comes to the foreground.
      *
      * Without this the only check was in `init`, which runs when the view model is created -- so
      * bringing the app forward from recents re-checked nothing, and a user whose code had been
-     * restored had to know to swipe the app away and reopen it. Nobody knows that.
+     * restored had to know to swipe the app away and reopen it. Nobody knows that. The same was true
+     * of the banner, which a phone left in recents kept for days.
      *
      * A revoked phone checks every time: its user is the one actively waiting for an answer, and
      * they may be standing at the counter. An active phone is throttled, because switching between
@@ -292,9 +314,9 @@ class NoticeViewModel(
     /**
      * Opens the code screen without surrendering anything.
      *
-     * Distinct from [reset], which wipes the notices too. Somebody who has been revoked and given a
-     * fresh slip at the counter should keep everything they have already received -- the new code
-     * is the same person continuing, not a new one starting.
+     * Nothing is wiped. Somebody who has been revoked and given a fresh slip at the counter should
+     * keep everything they have already received -- the new code is the same person continuing, not
+     * a new one starting.
      */
     fun enterNewCode() {
         _screen.value = Screen.Activation
@@ -307,21 +329,16 @@ class NoticeViewModel(
         viewModelScope.launch {
             when (val result = activation.redeem(rawCode)) {
                 RedeemResult.Success -> {
-                    _subscriptions.value = activation.subscriptions()
+                    // redeem() has already read the dispensary -- its topics and its banner -- and
+                    // subscribed to the defaults, so Settings and the header are ready.
+                    _topicChoices.value = activation.topicChoices()
                     // redeem() clears the revocation itself, so the banner is already down by here.
                     // The old revocation notice goes too: it says no more alerts will arrive, which
                     // has just stopped being true.
                     notices.clearRevokedNotice()
                     // Written before the screen changes so the list is never momentarily empty.
                     notices.saveWelcome(welcomeTitle, welcomeBody)
-
-                    // Fetch the banner again now that there is an account.
-                    //
-                    // The attempt in init ran before anybody had signed in, and /info requires
-                    // auth != null, so on a fresh install it was refused. Without this the header
-                    // stays blank until the app is next opened -- which is the first thing a new
-                    // user sees, and looks like the app half-working.
-                    refreshOfficeInfo()
+                    lastCheckedAt = System.currentTimeMillis()
 
                     _screen.value = Screen.Notices
                 }
@@ -363,25 +380,16 @@ class NoticeViewModel(
         _messages.tryEmit(R.string.toast_testing_unlocked)
     }
 
-    fun setSubscribed(subscription: Subscription, enabled: Boolean) {
+    fun setTopic(topic: String, enabled: Boolean) {
         // Optimistic: the switch moves at once and the network call follows. FCM subscription can
         // take a moment, and a toggle that visibly lags gets pressed twice.
-        _subscriptions.value = _subscriptions.value + (subscription to enabled)
-        viewModelScope.launch { activation.setSubscribed(subscription, enabled) }
+        _topicChoices.value = _topicChoices.value + (topic to enabled)
+        viewModelScope.launch { activation.setTopic(topic, enabled) }
     }
 
-    /**
-     * Surrenders the claim and returns to the code screen. The stored notices are cleared with it:
-     * leaving one person's notice history on a phone that is being handed to somebody else is the
-     * kind of surprise this app should not produce.
-     */
-    fun reset() {
-        viewModelScope.launch {
-            activation.resetByUser()
-            notices.clearAll()
-            _selected.value = emptySet()
-            _screen.value = Screen.Activation
-        }
+    fun setTesting(enabled: Boolean) {
+        _testingOn.value = enabled
+        viewModelScope.launch { activation.setTesting(enabled) }
     }
 
     fun toggleSelection(id: Long) {
@@ -421,6 +429,7 @@ class NoticeViewModel(
                 NoticeViewModel(
                     notices = app.repository,
                     activation = app.activationRepository,
+                    dispensaries = app.dispensaryRepository,
                     info = app.infoRepository,
                     // Resolved here rather than in the view model so the strings stay localisable
                     // and the view model keeps no Context.
