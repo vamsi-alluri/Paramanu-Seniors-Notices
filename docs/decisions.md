@@ -2,6 +2,107 @@
 
 Standing decisions and the questions that prompted them. Newest first.
 
+## What a phone can receive comes from its code's dispensary
+
+**Question.** "What you receive" was compiled into the app as Notices and Daily open and closed. The
+daily status is no longer wanted, and the NGO may one day run more than one dispensary. How does the
+list become configuration rather than a redesign?
+
+**Decision.**
+
+- A dispensary record at `/dispensaries/{id}` holds its `name`, its `topics` (topic name, label,
+  explainer, `defaultOn`, `importance`, `order`) and its banner under `info`. Today there is one:
+  **BARC Vashi Dispensary**, `barc-vashi`.
+- Each code carries `dispensary`, written by the console from its `DISPENSARY_ID` Script Property.
+  The phone reads it during verification and draws Settings from that dispensary's topics.
+- Notices carry `topic`. The phone drops one its dispensary does not offer or its user has switched
+  off, and takes the channel from the topic's importance. Channels are one per importance, never per
+  topic, so data cannot add entries to Android's notification settings.
+- The sender sends to the dispensary's first topic by `order`. There is no picker: a dispensary that
+  offers several gets its own page and deployment, which is less work than retrofitting this one.
+- Banner pushes name their dispensary; a phone applies only its own. The banner moved from `/info` to
+  `/dispensaries/{id}/info`.
+- Daily open and closed, its QR route, `Status.html`, `/status` and `status-v1` are removed entirely.
+
+**Consequence.** A breaking change, accepted during closed testing: phones on the old build stop
+receiving until they update, and keep a dangling `status-v1` subscription that nothing sends to. The
+migration is a handful of data-viewer steps (SYSTEM.md §10). It stays on Realtime Database: the reason
+§6a gave for Firestore was a topics map growing on each code, and this adds one fixed string instead.
+
+## Holders live apart from codes, and On hold is derived
+
+**Question.** Staff need the name, CHSS number and telephone number of the person each code was given
+to — and one of them could not find a code again after releasing it. Where do those details go, what
+happens to them when someone leaves, and how do the buttons stop being confused with each other?
+
+**Finding.**
+
+- `/codes/{CODE}` is readable by any signed-in phone that knows the code, and a new field there needs a
+  rules change or the app's claim write fails. Neither is acceptable for a person's details.
+- `/audit` is never erased, so a name written into it could never be removed.
+- "Revoke" and "Restore" sat next to each other, and "Restore" was about to mean undoing a removed
+  holder too. "Release" suggested the person or the note was affected, when only the phone was.
+- A CHSS card may be shared across a family — public sources do not settle it — so the number cannot
+  be an identifier.
+
+**Decision.**
+
+- Holders live at `/holders/{id}`, which no rule opens to phones, keyed by their own id so a person
+  keeps their record when moved to a new code. One active holder per code. Each holder has its own
+  history with before-and-after values; `/audit` records only the holder's id.
+- Names: **Disable / Enable** for the phone, **Unlink phone** for a gone phone, **Add / Edit / Move /
+  Remove holder** and **Restore holder**, **Delete code**. Stored field and event names are unchanged.
+- **Remove holder** is a soft delete and puts the code **On hold**: stopped (`revoked: true`) and
+  refused every action. Restore puts the code back as it was, Disabled included (kept as
+  `wasDisabled`). On hold is derived from the audit, like Printed, so `/codes` and the rules are
+  untouched.
+- A trigger every 30 days erases holders removed at least 30 days earlier and returns their codes to
+  Unused.
+- Unlink phone no longer clears Printed; the slip stays with its holder.
+- A code with a holder, a phone, or On hold cannot be deleted. Move the holder first.
+- The CHSS number is free text, searchable, not unique. Every allowed editor sees every field.
+- Printing is optional, switched by the `PRINTING_ENABLED` Script Property.
+
+**Consequence.** A person's details can genuinely be erased, and the history still says what
+happened to the code. Removing a holder by mistake costs a click to undo for 30 days. Launch-day
+clean-up has to deal with holders as well as codes (SYSTEM.md §10).
+
+## Revoke, resume and the banner share one control topic
+
+**Question.** A banner edited in the console did not reach a phone for days: the app read `/info`
+only when its view model was created, and a phone left in recents never recreated it. Revoke already
+rode on `notices-v1`. Where do banner updates go, and how does a restore reach a revoked phone
+without waiting a day?
+
+**Finding.** Three separate problems with one shape.
+
+- Revoke on `notices-v1` never reaches a user who has switched notices off, and a revoked phone has
+  left that topic, so nothing pushed can ever tell it to come back.
+- A push that merely says "the banner changed" makes four hundred phones fetch `/info` together —
+  SYSTEM.md §5.14 again.
+- FCM does not promise order, so any pushed pair of opposite instructions can arrive reversed.
+
+**Decision.** One topic, `control-v1`, for everything that manages the app rather than informs the
+user, told apart by `type`. A phone holds it for as long as it holds a claim, revoked included, and
+it never appears in Settings. A revoked phone leaves every notice topic and ignores banner pushes,
+but still acts on a resume for its own code.
+
+Every control message carries `at`, the time staff acted, and a phone ignores one no newer than the
+last it applied. The banner's html travels inside the message, capped at 3500 UTF-8 bytes to fit
+FCM's 4096-byte payload. The console queues all three in `/controlQueue`; `Control.gs` replaces
+`Revoker.gs` and drains it.
+
+Considered and rejected: a server or function app between the database and the phones. At this
+scale — and at the ~8k ceiling if every dispensary adopted the app — the phone path needs no logic the
+security rules do not already enforce, and FCM is already the buffer. The pain of several Apps
+Scripts is on the staff side, which is where a function app would go if it is ever built.
+
+**Consequence.** A restore lands within about a minute instead of a day. The daily verification
+stays as the safety net for a phone that was off. Phones on 0.4.0 do not listen on `control-v1` and
+are deliberately not catered for: closed testing has fourteen testers, who are updated by hand. A
+banner over the limit is refused at save, with the byte count, instead of silently failing to reach
+phones.
+
 ## The console queues a revoke; a trigger in the sender drains it
 
 **Question.** The decision below — the console POSTs to the sender's web app, forwarding the staff

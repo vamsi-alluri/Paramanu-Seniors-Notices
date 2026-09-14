@@ -5,7 +5,8 @@ symptoms that look like app bugs, so it is written down rather than assumed.
 
 ## The message
 
-FCM HTTP v1, to the topic named by `ActivationRepository.TOPIC` (currently **`notices-v1`**).
+FCM HTTP v1, to the dispensary's notice topic: its first entry by `order` under
+`/dispensaries/{DISPENSARY_ID}/topics` (for BARC Vashi, **`notices-v1`**).
 
 ```json
 {
@@ -13,7 +14,8 @@ FCM HTTP v1, to the topic named by `ActivationRepository.TOPIC` (currently **`no
     "topic": "notices-v1",
     "android": { "priority": "high" },
     "data": {
-      "logId":  "b3f1c2a4-...",
+      "logId":  "1788248869397",
+      "topic":  "notices-v1",
       "title":  "Dispensary closed on Thursday 28 August",
       "body":   "OPD will reopen at 9 am on Friday.",
       "pdfUrl": "https://paramanuseniorshealth.org/notices/2026-08-28.pdf"
@@ -40,6 +42,11 @@ deferred in Doze, which for "closed tomorrow" defeats the point.
 the image is never allowed to be the whole message, because an A4 page in a notification is roughly
 four-point text to a reader in their eighties.
 
+**`topic` is mandatory, and must repeat the envelope's topic.** The app drops a notice without it.
+It checks the value against what the phone's dispensary offers and what the user has switched on, and
+takes the notification channel from that topic's `importance`. The envelope alone cannot do this: the
+app is never told which topic a message arrived on.
+
 **`logId` must be unique per notice, and should be epoch millis.** It is two things at once: the
 idempotency key (Room holds a UNIQUE index on it and silently ignores a repeat, which is what makes
 FCM's at-least-once delivery safe) and the notice's timestamp, so a phone that was switched off
@@ -59,7 +66,7 @@ cannot fetch or render costs only the picture — the notice still arrives as te
 The console writes a node per printed slip:
 
 ```
-/codes/{CODE} = { "issued": 1756600000000 }
+/codes/{CODE} = { "issued": 1756600000000, "dispensary": "barc-vashi" }
 ```
 
 `CODE` is 8 characters of Crockford Base32 — alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ`, which
@@ -70,10 +77,10 @@ mistyped before it ever reaches the network.
 The app claims a code by writing `usedBy` and `activatedAt` itself. The console must not write
 those.
 
-**To cut a device off:** set `/codes/{CODE}/revoked = true`. The app discovers this on the next
-notice and returns to the code screen. Note this is cooperative — the payload still reaches the
-device and the app declines to display it. Adequate because every notice is public anyway; not
-access control.
+**To cut a device off:** set `/codes/{CODE}/revoked = true`. The console does this and queues a
+revoke (below); a phone that misses the push discovers it at its daily check. Note this is
+cooperative — the payload still reaches the device and the app declines to display it. Adequate
+because every notice is public anyway; not access control.
 
 **Reserve one code that is never handed out at the counter** and put it in the Play Console's *App
 access* section. Without it a reviewer opens the app, meets the code screen, and rejects the
@@ -88,36 +95,55 @@ editor executes HEAD and therefore cannot detect a stale deployment — it will 
 you which code is live.
 
 
-## The revoke envelope
+## Control messages
 
-A second kind of message, sent by `pushRevoke_` when the console revokes a code:
+A second kind of message, sent by `pushControl_`, that manages the app rather than informing its
+user. All go to **`control-v1`**, which every activated phone holds — revoked included — and which
+never appears in Settings.
 
 ```json
-{ "message": { "topic": "notices-v1", "android": { "priority": "high" },
-  "data": { "type": "revoke", "code": "A1B2C3D4" } } }
+{ "message": { "topic": "control-v1", "android": { "priority": "high" },
+  "data": { "type": "revoke", "code": "A1B2C3D4", "at": "1789338553684" } } }
 ```
 
-No `title`, no `body`, and — as ever — no `notification` block. It shows the user nothing; it only
-invalidates. The app checks for `type` before it looks for a title, because a payload with no title
-is otherwise dropped as malformed.
+| `type`   | Other keys          | The phone                                                          |
+|----------|---------------------|--------------------------------------------------------------------|
+| `revoke` | `code`, `at`        | holding `code`: leaves the notice topics, keeps `control-v1`, shows the banner |
+| `resume` | `code`, `at`        | holding `code` and revoked: rejoins the notice topics, clears the banner |
+| `banner` | `dispensary`, `html`, `at` | of that dispensary, not revoked: replaces the cached banner; `html: ""` means removed |
 
-This is a **broadcast**, not per-device addressing: the app is addressed only by topic, so every
-subscribed phone receives every revoke and compares the code with its own. That publishes the
-revoked code to all of them, which is harmless — a code carrying `revoked: true` is useless to
-whoever reads it — but it is worth knowing that it is what goes out.
+No `title`, no `body`, and — as ever — no `notification` block. They show the user nothing. The app
+checks for `type` before it looks for a title, because a payload with no title is otherwise dropped
+as malformed. An unknown `type` is ignored, so new ones can be added without breaking older phones.
 
-It is **not authoritative**. FCM is best-effort and a phone switched off past the message TTL never
-sees it, so the device's own periodic verification remains the safety net. See `docs/decisions.md`.
+**`at` is epoch millis of the staff action**, as a string. FCM does not promise order, so a phone
+ignores a revoke or resume stamped no newer than the last one it applied, and a banner stamped no
+newer than the one it holds. Without it, a Disable and Enable seconds apart could land reversed and
+leave the phone off. A message without `at` is ignored.
 
-The console cannot send this itself, and has no HTTP route into the sender either — an OAuth-token
+**The banner's html travels inside the message** rather than prompting phones to fetch it,
+which would open four hundred database connections at once (SYSTEM.md §5.14). FCM refuses a data
+payload over 4096 bytes, so the console refuses a banner over **3500 UTF-8 bytes**, and the drain
+drops one that somehow exceeds it rather than retrying it forever.
+
+These are **broadcasts**, not per-device addressing: every phone receives every revoke and resume
+and compares the code with its own. That publishes the code to all of them, which is harmless, but
+it is what goes out.
+
+They are **not authoritative**. FCM is best-effort and a phone switched off past the message TTL
+never sees them, so the device's own periodic verification remains the safety net, and a phone
+rereads its dispensary when it comes to the foreground. See `docs/decisions.md`.
+
+The console cannot send these itself, and has no HTTP route into the sender either — an OAuth-token
 call returns 401, because `ScriptApp.getOAuthToken()` cannot authorize a call into another project's
-web app. Instead the console writes `/revokeQueue/{CODE}` and `Revoker.gs` drains it on a one-minute
-trigger, re-reading the code first so a revocation that has since been undone is dropped rather than
-broadcast.
+web app. Instead the console writes `/controlQueue/code_{CODE}` or `/controlQueue/banner_{DISPENSARY}`,
+and `Control.gs` drains them on a one-minute trigger, re-reading the code or the dispensary's banner
+first so a request
+that no longer applies is dropped rather than broadcast.
 
-Delivery is at-least-once: the queue entry is deleted only once FCM has accepted the message. A
-device receiving the same revoke twice is harmless — applying it is idempotent, and the announcement
-is guarded by the `local-revoked` row id.
+Delivery is at-least-once: a queue entry is cleared only once FCM has accepted the message, and only
+if the console has not replaced it in the meantime. A device receiving the same message twice applies
+it once.
 
 ## Who can send
 

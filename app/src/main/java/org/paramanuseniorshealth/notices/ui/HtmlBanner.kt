@@ -1,7 +1,8 @@
 package org.paramanuseniorshealth.notices.ui
 
 /**
- * Cleans the banner HTML the console stores at `/info/html` before it is parsed for display.
+ * Cleans the banner HTML the console stores at `/dispensaries/{id}/info/html` before it is parsed for
+ * display.
  *
  * The console sanitises on save, so this is the second line rather than the first. It exists
  * because the phone must never depend on the console having behaved: a banner written before the

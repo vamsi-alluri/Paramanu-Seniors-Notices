@@ -16,7 +16,8 @@
  *   `poller`. The only names it reuses from Code.gs are the shared plumbing it deliberately does
  *   not duplicate:
  *
- *     property_()      accessToken_()     firebase_()     nextLogId_()     TOPIC     TOPIC_OVERRIDE
+ *     property_()   accessToken_()   firebase_()   nextLogId_()   dispensaryId_()   dispensaryTopic_()
+ *     TOPIC_OVERRIDE
  *
  *   If you rename any of those in Code.gs, this file has to follow.
  *
@@ -45,7 +46,7 @@
  * half-way.
  */
 
-var POLLER_VERSION = '2026-09-08-poller';
+var POLLER_VERSION = '2026-09-13-poller';
 
 var POLLER_DEFAULT_FEED_URL = 'https://parmanuseniorhealth-github-io.vercel.app/alerts/index.xml';
 
@@ -211,13 +212,16 @@ function pollerDeliver_(title, body, extras) {
   if (title.length > 120) throw new Error('Title is too long (' + title.length + '); keep it under 120 characters.');
   if (body.length > 900) throw new Error('Body is too long (' + body.length + '); keep it under 900 characters.');
 
+  // The same topic a notice composed by hand goes to: the dispensary's first.
+  var topic = dispensaryTopic_();
   var logId = nextLogId_();
   var sentAt = new Date().toISOString();
 
   var record = {
     title: title,
     body: body,
-    category: 'NOTICES',
+    topic: topic,
+    dispensary: dispensaryId_(),
     sentAt: sentAt,
     source: 'poller',
     // Not the trigger owner's email. Session.getActiveUser() happens to return the owner under an
@@ -234,14 +238,14 @@ function pollerDeliver_(title, body, extras) {
   // Data-only, exactly as the sender does it. A notification block here would make the FCM SDK draw
   // the tray notification itself while the app is backgrounded: onMessageReceived would never run,
   // the entitlement check would be skipped, and nothing would be written to the phone's history.
-  var data = { logId: logId, title: title, body: body, category: 'NOTICES' };
+  var data = { logId: logId, title: title, body: body, topic: topic };
   for (var extra in extras) {
     if (extras.hasOwnProperty(extra)) data[extra] = String(extras[extra]);
   }
 
   var message = {
     message: {
-      topic: TOPIC_OVERRIDE || TOPIC,
+      topic: TOPIC_OVERRIDE || topic,
       android: { priority: 'high' },
       data: data
     }
@@ -270,8 +274,7 @@ function pollerDeliver_(title, body, extras) {
 /**
  * Sends one parsed feed item as a notice.
  *
- * Category is always NOTICES. The status topic is for the two dispensary messages, driven by a
- * person at a counter; nothing published on the website belongs on it.
+ * Goes to the dispensary's notice topic, exactly as a notice composed by hand does.
  */
 function pollerSendAlert_(item) {
   if (!item.title) throw new Error('Feed item has no title: ' + item.guid);
@@ -798,7 +801,7 @@ function testPollerEndToEnd() {
   if (items.length === 0) throw new Error('Feed has no items to test with.');
 
   var newest = items[items.length - 1];
-  TOPIC_OVERRIDE = 'notices-v1';
+  TOPIC_OVERRIDE = dispensaryTopic_();
   try {
     var result = pollerSendAlert_(newest);
     Logger.log('Sent "%s" to %s. logId=%s pdfUrl=%s imageUrl=%s',

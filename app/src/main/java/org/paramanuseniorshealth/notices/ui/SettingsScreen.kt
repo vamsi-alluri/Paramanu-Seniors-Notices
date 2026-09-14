@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -27,7 +26,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -40,29 +38,30 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.activation.ActivationCode
-import org.paramanuseniorshealth.notices.activation.Subscription
+import org.paramanuseniorshealth.notices.activation.Dispensary
 
 private const val TESTING_UNLOCK_TAPS = 7
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    subscriptions: Map<Subscription, Boolean>,
+    dispensary: Dispensary?,
+    topicChoices: Map<String, Boolean>,
+    testingOn: Boolean,
     activationCode: String?,
     revoked: Boolean,
     checking: Boolean,
     testingUnlocked: Boolean,
     versionName: String,
-    onSubscriptionChange: (Subscription, Boolean) -> Unit,
+    onTopicChange: (String, Boolean) -> Unit,
+    onTestingChange: (Boolean) -> Unit,
     onSendTest: () -> Unit,
     onUnlockTesting: () -> Unit,
     onRecheck: () -> Unit,
     onEnterNewCode: () -> Unit,
-    onReset: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var confirmingReset by remember { mutableStateOf(false) }
     val context = LocalContext.current
 
     // Deliberately awkward, because it is not for users. Nobody taps a version number seven times
@@ -98,41 +97,39 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.titleLarge,
             )
 
-            // One row per subscription rather than a single on/off, because these differ in kind:
-            // notices are occasional and important, the daily status is frequent and routine, and
-            // wanting one without the other is an entirely reasonable position.
-            Subscription.entries.filter { it.isPublic || testingUnlocked }.forEach { subscription ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = stringResource(
-                                when (subscription) {
-                                    Subscription.NOTICES -> R.string.settings_receive_notices
-                                    Subscription.STATUS -> R.string.settings_receive_status
-                                    Subscription.TESTING -> R.string.settings_receive_testing
-                                }
-                            ),
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(
-                            text = stringResource(
-                                when (subscription) {
-                                    Subscription.NOTICES -> R.string.settings_receive_notices_explainer
-                                    Subscription.STATUS -> R.string.settings_receive_status_explainer
-                                    Subscription.TESTING -> R.string.settings_receive_testing_explainer
-                                }
-                            ),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
-                    }
-                    Switch(
-                        checked = subscriptions[subscription] ?: subscription.defaultEnabled,
-                        onCheckedChange = { onSubscriptionChange(subscription, it) },
-                    )
-                }
+            dispensary?.name?.takeIf { it.isNotBlank() }?.let { name ->
+                Text(
+                    text = stringResource(R.string.settings_subscriptions_from, name),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+
+            // One row per topic the code's dispensary offers, drawn from its record in the database
+            // rather than compiled in, so a dispensary can offer something new without an app
+            // release. Nothing to show means the list has never been read -- the phone has not been
+            // online since the code was entered.
+            val topics = dispensary?.topics.orEmpty()
+            if (topics.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.settings_topics_unavailable),
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            topics.forEach { topic ->
+                TopicRow(
+                    label = topic.label,
+                    explainer = topic.explainer,
+                    checked = topicChoices[topic.topic] ?: topic.defaultOn,
+                    onCheckedChange = { onTopicChange(topic.topic, it) },
+                )
+            }
+            if (testingUnlocked) {
+                TopicRow(
+                    label = stringResource(R.string.settings_receive_testing),
+                    explainer = stringResource(R.string.settings_receive_testing_explainer),
+                    checked = testingOn,
+                    onCheckedChange = onTestingChange,
+                )
             }
 
             HorizontalDivider()
@@ -233,26 +230,6 @@ fun SettingsScreen(
                 HorizontalDivider()
             }
 
-            Column {
-                Text(
-                    text = stringResource(R.string.settings_reset),
-                    style = MaterialTheme.typography.titleLarge,
-                )
-                Text(
-                    text = stringResource(R.string.settings_reset_explainer),
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                TextButton(onClick = { confirmingReset = true }) {
-                    Text(
-                        text = stringResource(R.string.settings_reset_action),
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                }
-            }
-
-            HorizontalDivider()
-
             ContactSection(context)
 
             HorizontalDivider()
@@ -270,30 +247,6 @@ fun SettingsScreen(
                 },
             )
         }
-    }
-
-    if (confirmingReset) {
-        AlertDialog(
-            onDismissRequest = { confirmingReset = false },
-            title = { Text(stringResource(R.string.settings_reset_confirm_title)) },
-            text = { Text(stringResource(R.string.settings_reset_confirm_body)) },
-            confirmButton = {
-                TextButton(onClick = {
-                    confirmingReset = false
-                    onReset()
-                }) {
-                    Text(
-                        text = stringResource(R.string.settings_reset_action),
-                        color = MaterialTheme.colorScheme.error,
-                    )
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmingReset = false }) {
-                    Text(stringResource(R.string.dialog_cancel))
-                }
-            },
-        )
     }
 }
 
@@ -358,6 +311,22 @@ private fun ContactLink(text: String, onClick: () -> Unit) {
             .padding(top = 8.dp)
             .clickable(onClick = onClick),
     )
+}
+
+@Composable
+private fun TopicRow(label: String, explainer: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(text = label, style = MaterialTheme.typography.titleMedium)
+            if (explainer.isNotBlank()) {
+                Text(text = explainer, style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
 }
 
 /** Swallows the case where no app can handle the intent, rather than crashing on a tap. */

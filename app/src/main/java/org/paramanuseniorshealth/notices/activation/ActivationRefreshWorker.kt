@@ -37,8 +37,7 @@ class ActivationRefreshWorker(
         val app = applicationContext as NoticesApplication
         val activation = app.activationRepository
 
-        // A device that has reset has nothing to check, and the periodic request outlives the
-        // claim that scheduled it.
+        // A device with no claim has nothing to check.
         if (!activation.isActivated) return Result.success()
 
         return try {
@@ -50,8 +49,8 @@ class ActivationRefreshWorker(
                 }
 
                 ActivationState.Active -> {
-                    // This branch is the only thing that ever notices a *restore*. A revoked device
-                    // has unsubscribed from every topic, so no broadcast can reach it, and the
+                    // A pushed resume on the control topic normally gets here first. This is the
+                    // fallback for a phone that was switched off when that went out -- and the
                     // person it belongs to may never open the app again.
                     if (activation.isRevoked) {
                         activation.resumeClaim()
@@ -59,6 +58,11 @@ class ActivationRefreshWorker(
                     } else {
                         activation.recordVerification(ActivationState.Active)
                     }
+                    // What the dispensary offers, over the connection this check has already opened.
+                    // A phone that is never opened would otherwise keep a topic that has been
+                    // withdrawn, or never hear about a new one.
+                    activation.dispensaryId?.let { app.dispensaryRepository.refresh(it) }
+                    activation.syncSubscriptions()
                     Result.success()
                 }
 

@@ -39,7 +39,7 @@ import org.paramanuseniorshealth.notices.activation.ActivationCode
 import org.paramanuseniorshealth.notices.activation.RedeemResult
 
 /**
- * The code gate, shown only on a fresh install and after a reset.
+ * The code gate, shown on a fresh install and when a revoked user chooses to enter a new code.
  *
  * Every choice here is aimed at someone in their eighties typing eight characters off a paper slip:
  * a monospace field at 28sp so no character is ambiguous, capitals forced so the keyboard never

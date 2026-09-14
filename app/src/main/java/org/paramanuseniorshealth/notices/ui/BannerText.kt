@@ -24,7 +24,7 @@ import androidx.core.text.HtmlCompat
 private const val URL_TAG = "banner-url"
 
 /**
- * Renders the dispensary banner from the HTML stored at `/info/html`.
+ * Renders the dispensary banner from the HTML stored at `/dispensaries/{id}/info/html`.
  *
  * The markup arrives already whitelisted -- by the console page on paste, by the console server on
  * save, and by [HtmlBanner] again here on the way in, because the phone must never depend on either

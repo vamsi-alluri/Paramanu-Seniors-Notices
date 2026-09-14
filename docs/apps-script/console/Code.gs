@@ -13,22 +13,26 @@
  *        SERVICE_ACCOUNT_JSON  = <the entire JSON file contents>
  *        DATABASE_URL          = https://paramanu-seniors-default-rtdb.asia-southeast1.firebasedatabase.app
  *        ALLOWED_EDITORS       = <comma-separated Google account emails permitted to use this>
+ *        DISPENSARY_ID         = barc-vashi   (the dispensary new codes belong to, whose banner this edits)
+ *        PRINTING_ENABLED      = 'false' to turn slip printing off (optional; absent means on)
  *     Take DATABASE_URL from the Realtime Database page; it is region qualified.
  *  5. Deploy -> Web app.
  *       Execute as:     User accessing the web app   <- REQUIRED, see requireEditor_
  *       Who has access: Anyone with a Google account
+ *  6. Run purgeInstallTrigger() once from the editor. Every 30 days it erases holders removed more
+ *     than 30 days ago; purgeDryRun() lists what it would erase and changes nothing.
  *
  * This console never gets FCM credentials and cannot broadcast anything itself; issuing codes and
- * reaching four hundred phones stay separate jobs. Revoke writes /revokeQueue and a minute-ly
- * trigger in the SENDER project broadcasts it -- see Revoker.gs there. If that trigger is not
- * installed, Revoke still works: it is recorded in /codes and /audit, and phones act on it at their
- * next daily check. Only the speed depends on the trigger.
+ * reaching four hundred phones stay separate jobs. Disable, Enable, removing or restoring a holder,
+ * and banner changes write /controlQueue and a minute-ly trigger in the SENDER project broadcasts
+ * them -- see Control.gs there. If that trigger is not installed, they still work: they are recorded in the database,
+ * and phones catch up at their next daily check or app open. Only the speed depends on the trigger.
  *
  * The service account key is a real credential. It lives in Script Properties, never in this file,
  * and never in the Android app.
  */
 
-var SCRIPT_VERSION = '2026-09-01-codes';
+var SCRIPT_VERSION = '2026-09-13-codes';
 
 // Must stay identical to ActivationCode.kt in the Android app. Crockford Base32: no I, L, O or U.
 // GeneratedCodeCompatibilityTest.kt pins this agreement; if you change the rule here, regenerate
@@ -241,11 +245,20 @@ function firebase_(method, path, payload) {
 // ---------------------------------------------------------------- Audit
 
 /**
- * The only events the audit may contain. A closed set on purpose: a typo that invents a sixth
- * event would produce a row nobody ever queries, and the log is the record the NGO is meant to
- * trust without asking a developer.
+ * The only events the audit may contain. A closed set on purpose: a typo that invents a new event
+ * would produce a row nobody ever queries, and the log is the record the NGO is meant to trust
+ * without asking a developer.
+ *
+ * The first seven keep the names they were stored under, whatever the page now calls the action:
+ * `revoked` is shown as Disabled, `restored` as Enabled, `released` as Phone unlinked.
+ *
+ * The holder events never carry the holder's details -- only the holder's id, and for a move the
+ * other code. /audit is never erased, and the purge must actually remove a person's name and number;
+ * those live in /holders, where it can.
  */
-var AUDIT_EVENTS = ['issued', 'printed', 'revoked', 'restored', 'released', 'note', 'deleted'];
+var AUDIT_EVENTS = ['issued', 'printed', 'revoked', 'restored', 'released', 'note', 'deleted',
+                    'holder-added', 'holder-edited', 'holder-moved-in', 'holder-moved-out',
+                    'holder-removed', 'holder-restored', 'holder-purged'];
 
 /**
  * Appends one entry to a code's history.
@@ -289,16 +302,35 @@ function audit_(code, event, by, extra) {
  * already. The audit is the record of what has been done to a code, and printing is one of those
  * things, so the state lives there and costs no rules change.
  *
- * A Release clears it: the code goes back into the pool for somebody new, and whatever slip was
- * printed before belongs to the person who has just stopped using it.
+ * Unlinking a phone does not clear it. The slip still belongs to the code's holder, who is usually
+ * the one getting a new phone, so it must not come out on the next print run as though it were new.
+ * Only the purge clears it, when a removed holder is erased and the code goes back to Unused.
  */
 function codeIsPrinted_(timeline) {
   var printed = false;
   for (var i = 0; i < (timeline || []).length; i++) {
     if (timeline[i].event === 'printed') printed = true;
-    else if (timeline[i].event === 'released') printed = false;
+    else if (timeline[i].event === 'holder-purged') printed = false;
   }
   return printed;
+}
+
+/**
+ * Whether a code is On hold, derived from its history the same way as printed.
+ *
+ * Removing a holder puts the code on hold; restoring the holder, or the purge erasing them, takes it
+ * off. Kept in the audit rather than as a field on /codes for the reason printed is: a new sibling
+ * there needs a rules change or it breaks the app's claim write. The phone never needs to know --
+ * to the phone an On hold code is simply revoked.
+ */
+function codeIsOnHold_(timeline) {
+  var onHold = false;
+  for (var i = 0; i < (timeline || []).length; i++) {
+    var event = timeline[i].event;
+    if (event === 'holder-removed') onHold = true;
+    else if (event === 'holder-restored' || event === 'holder-purged') onHold = false;
+  }
+  return onHold;
 }
 
 function auditTimeline_(entries, node) {
@@ -307,15 +339,179 @@ function auditTimeline_(entries, node) {
   for (var key in entries) {
     if (!entries.hasOwnProperty(key)) continue;
     var e = entries[key] || {};
-    out.push({ at: e.at || 0, by: e.by || '', event: e.event || '', to: e.to || '' });
+    out.push({ at: e.at || 0, by: e.by || '', event: e.event || '', to: e.to || '', holder: e.holder || '' });
   }
 
   if (node && node.activatedAt) {
-    out.push({ at: node.activatedAt, by: '', event: 'claimed', to: '' });
+    out.push({ at: node.activatedAt, by: '', event: 'claimed', to: '', holder: '' });
   }
 
   out.sort(function (a, b) { return a.at - b.at; });
   return out;
+}
+
+// ---------------------------------------------------------------- Control queue
+
+/**
+ * Asks the sender to broadcast a control message, by writing where its trigger looks.
+ *
+ * PUT rather than PATCH, and keyed rather than pushed, so the latest decision replaces one still
+ * waiting: disabling and enabling inside a minute leaves a single resume, never a revoke followed by
+ * a resume that could arrive in either order. `at` is when staff acted; the phone uses it to ignore
+ * a message older than one it has already applied.
+ */
+function queueControl_(key, entry) {
+  firebase_('put', '/controlQueue/' + key + '.json', entry);
+}
+
+/**
+ * Drops anything still waiting to be broadcast for [code].
+ *
+ * Used when a code's phone is unlinked, or the code is deleted or purged. A stale revoke firing
+ * afterwards would cut off whoever types the code next -- they would enter their slip and be told at
+ * once that they had been removed.
+ */
+function clearCodeControl_(code) {
+  firebase_('delete', '/controlQueue/code_' + code + '.json');
+}
+
+/**
+ * The most a banner may weigh, in UTF-8 bytes, to travel inside a control message.
+ *
+ * FCM refuses a data payload over 4096 bytes, keys included, and the html is sent inside the message
+ * so four hundred phones do not all fetch /info at once (SYSTEM.md 5.14). Bytes rather than
+ * characters: Marathi or Hindi costs three bytes a character. Must match BANNER_MAX_BYTES in the
+ * sender's Code.gs.
+ */
+var BANNER_MAX_BYTES = 3500;
+
+/** UTF-8 length of [s] in bytes. Pure, and identical to the sender's copy. */
+function utf8Length_(s) {
+  s = String(s === undefined || s === null ? '' : s);
+  var bytes = 0;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) { bytes += 4; i++; }
+    else bytes += 3;
+  }
+  return bytes;
+}
+
+// ---------------------------------------------------------------- Settings
+
+/**
+ * Whether slips are printed from this console.
+ *
+ * A Script Property, PRINTING_ENABLED, so it can be switched without a redeploy. Only the exact word
+ * 'false' turns it off; absent or anything else leaves printing on, which is how the console has
+ * always behaved.
+ *
+ * Off disables the Print controls on the page and nothing else. The Printed status is still derived
+ * and shown, so codes printed before the switch keep saying so and their history stays true.
+ */
+function printingEnabled_() {
+  var value = PropertiesService.getScriptProperties().getProperty('PRINTING_ENABLED');
+  return String(value === null || value === undefined ? 'true' : value).trim().toLowerCase() !== 'false';
+}
+
+// ---------------------------------------------------------------- Codes and holders (pure)
+
+function formatCode_(code) {
+  code = String(code || '');
+  return code.length === 8 ? code.substring(0, 4) + '-' + code.substring(4) : code;
+}
+
+/**
+ * A code as typed by a person reduced to how it is stored: capitals and digits only, with O read as
+ * zero and I or L as one, the way the app reads them. So "axgx-bbbe" finds AXGXBBBE.
+ */
+function normaliseCode_(typed) {
+  return String(typed || '').toUpperCase().replace(/[^0-9A-Z]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+}
+
+/** How long a removed holder is kept, so a removal can be undone, before the purge erases them. */
+var HOLDER_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+var HOLDER_FIELDS = ['name', 'chss', 'phone'];
+
+/**
+ * Cleans what staff typed into the holder form. Pure, so the rules can be tested.
+ *
+ * The name is required: a holder nobody can find again by name defeats the point of recording one.
+ * The CHSS number is kept exactly as typed, because its format is not known and a strict check would
+ * refuse a real card at the counter. A ten-digit telephone number loses its spaces, dashes and any
+ * leading +91, 91 or 0, so the same number typed two ways is found by one search; anything else is
+ * kept as typed rather than refused, for the same reason as the CHSS number.
+ */
+function normaliseHolder_(name, chss, phone) {
+  var clean = {
+    name: String(name || '').replace(/\s+/g, ' ').trim().slice(0, 80),
+    chss: String(chss || '').trim().slice(0, 40),
+    phone: String(phone || '').trim().slice(0, 30)
+  };
+  if (!clean.name) throw new Error('A name is required, so the holder can be found again.');
+
+  var digits = clean.phone.replace(/[\s\-().]/g, '')
+    .replace(/^\+91/, '').replace(/^91(?=\d{10}$)/, '').replace(/^0(?=\d{10}$)/, '');
+  if (/^\d{10}$/.test(digits)) clean.phone = digits;
+  return clean;
+}
+
+/** What an edit changed, as { field: { from, to } }. Empty when nothing did. Pure. */
+function holderChanges_(before, after) {
+  var changes = {};
+  HOLDER_FIELDS.forEach(function (field) {
+    var from = (before && before[field]) || '';
+    var to = (after && after[field]) || '';
+    if (from !== to) changes[field] = { from: from, to: to };
+  });
+  return changes;
+}
+
+function holderHistoryList_(entries) {
+  var out = [];
+  for (var key in entries) {
+    if (!entries.hasOwnProperty(key)) continue;
+    var e = entries[key] || {};
+    out.push({ at: e.at || 0, by: e.by || '', event: e.event || '', changes: e.changes || null });
+  }
+  out.sort(function (a, b) { return a.at - b.at; });
+  return out;
+}
+
+/**
+ * Splits /holders into the active holder of each code and the removed ones. Pure.
+ *
+ * Returns { byCode: { CODE: holder }, removed: [holder] }, each holder carrying its id and its
+ * history in order. Two active holders on one code would be a bug -- adding and moving both refuse to
+ * make one -- and the newer is kept so the page still renders.
+ */
+function splitHolders_(all) {
+  var byCode = {};
+  var removed = [];
+  for (var id in all) {
+    if (!all.hasOwnProperty(id)) continue;
+    var h = all[id] || {};
+    var holder = {
+      id: id, code: h.code || '', name: h.name || '', chss: h.chss || '', phone: h.phone || '',
+      createdAt: h.createdAt || 0, removedAt: h.removedAt || 0, removedBy: h.removedBy || '',
+      wasDisabled: h.wasDisabled === true, history: holderHistoryList_(h.history)
+    };
+    if (holder.removedAt) {
+      removed.push(holder);
+    } else if (!byCode[holder.code] || byCode[holder.code].createdAt < holder.createdAt) {
+      byCode[holder.code] = holder;
+    }
+  }
+  removed.sort(function (a, b) { return b.removedAt - a.removedAt; });
+  return { byCode: byCode, removed: removed };
+}
+
+/** Whether a removed holder has been gone long enough to erase. Pure. */
+function holderIsPurgeable_(holder, now) {
+  return !!(holder && holder.removedAt) && now - holder.removedAt >= HOLDER_RETENTION_MS;
 }
 
 // ---------------------------------------------------------------- Operations
@@ -335,13 +531,16 @@ function createCodes(count, note) {
   var updates = {};
   var created = [];
   var issued = Date.now();
+  // Which dispensary the slip belongs to decides what the phone that types it is offered. Read once,
+  // before generating, so a missing Script Property fails the whole batch rather than half of it.
+  var dispensary = dispensaryId_();
 
   var guard = 0;
   while (created.length < count) {
     if (++guard > count * 50) throw new Error('Could not find unused codes; try again.');
     var code = generateCode_();
     if (existing[code] || updates[code]) continue;
-    var node = { issued: issued };
+    var node = { issued: issued, dispensary: dispensary };
     if (note) node.note = note;
     updates[code] = node;
     created.push(code);
@@ -372,7 +571,7 @@ function createCodes(count, note) {
  */
 function setNote(code, note) {
   var by = requireEditor_();
-  if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
+  refuseOnHold_(loadCode_(code), 'given a note');
   note = (note || '').toString().trim().slice(0, 120);
   firebase_('patch', '/codes/' + code + '.json', { note: note || null });
   audit_(code, 'note', by, { to: note });
@@ -380,63 +579,108 @@ function setNote(code, note) {
 }
 
 /**
- * Releases a claim so the code can be handed out again.
+ * A code's node and whether it is On hold, read fresh for an action to check against.
  *
- * This is for a claim that no longer belongs to any working phone: the app was uninstalled, the
- * phone was replaced, or its data was cleared. The device stores the anonymous UID locally, so
- * losing that storage orphans the claim -- the code stays marked "in use" with nobody able to prove
- * ownership of it.
- *
- * WARNING: if a working phone still holds this claim, releasing it cuts that phone off. Its next
- * check finds no usedBy, reads that as revoked, and returns the user to the code screen. Use
- * revokeCode for a device you intend to cut off; use this only for one that is genuinely gone.
+ * The page hides the buttons that do not apply; this is what makes that a rule rather than a
+ * suggestion. Throws for a malformed or missing code.
  */
-function releaseCode(code) {
-  var by = requireEditor_();
+function loadCode_(code) {
   if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
+  var node = firebase_('get', '/codes/' + code + '.json');
+  if (!node) throw new Error(formatCode_(code) + ' does not exist.');
+  var timeline = auditTimeline_(firebase_('get', '/audit/' + code + '.json'), node);
+  return { code: code, node: node, onHold: codeIsOnHold_(timeline) };
+}
+
+/** Nothing may be done to an On hold code; its history explains why, and Restore holder undoes it. */
+function refuseOnHold_(state, action) {
+  if (state.onHold) {
+    throw new Error(formatCode_(state.code) + ' is On hold because its holder was removed, so it cannot be ' +
+                    action + '. Restore the holder first, from Removed holders.');
+  }
+}
+
+/**
+ * Unlinks the phone from a code, so the code can be typed on a new phone.
+ *
+ * For a phone that is gone: the app was uninstalled, the phone was replaced, or its data was cleared.
+ * The device stores the anonymous UID locally, so losing that storage orphans the claim -- the code
+ * stays In use with no phone able to prove ownership of it.
+ *
+ * The note, the holder and the Printed status all stay: the usual case is the same person on a new
+ * phone, still holding the same slip.
+ *
+ * WARNING: if a working phone still holds this claim, unlinking cuts that phone off. Its next check
+ * finds no usedBy and stops. Use disableCode for a phone you mean to stop; use this only for one that
+ * is genuinely gone.
+ */
+function unlinkPhone(code) {
+  var by = requireEditor_();
+  refuseOnHold_(loadCode_(code), 'unlinked');
   firebase_('patch', '/codes/' + code + '.json', { usedBy: null, activatedAt: null, revoked: null });
 
-  // Drop any revoke still waiting to be broadcast. A released code goes back into the pool, so a
-  // stale revoke firing afterwards would cut off whoever claims it next -- they would type a fresh
-  // slip and be told immediately that they had been removed.
-  firebase_('delete', '/revokeQueue/' + code + '.json');
+  // The next phone to type this code must not be cut off by something queued for the last one.
+  clearCodeControl_(code);
 
   audit_(code, 'released', by);
   return listCodes();
 }
 
-/** Everything currently stored, newest first, with its state. */
+/**
+ * Everything the codes section shows, read in one go: every code newest first with its state and
+ * holder, the removed holders that can still be restored, and whether printing is on.
+ */
 function listCodes() {
   requireEditor_();
   var all = firebase_('get', '/codes.json') || {};
   var audit = firebase_('get', '/audit.json') || {};
+  var holders = splitHolders_(firebase_('get', '/holders.json') || {});
+
+  // History lines name the holder they concern while that holder still exists. After the purge the
+  // id names nobody, which is the point of the purge.
+  var names = {};
+  Object.keys(holders.byCode).forEach(function (code) { names[holders.byCode[code].id] = holders.byCode[code].name; });
+  holders.removed.forEach(function (h) { names[h.id] = h.name; });
+
   var rows = [];
   for (var code in all) {
     if (!all.hasOwnProperty(code)) continue;
     var node = all[code] || {};
     var timeline = auditTimeline_(audit[code], node);
-    rows.push({ code: code, formatted: code.substring(0, 4) + '-' + code.substring(4), issued: node.issued || 0, claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true, printed: codeIsPrinted_(timeline), reserved: isReservedCode_(code), note: node.note || '', audit: timeline, lastChange: timeline.length ? timeline[timeline.length - 1] : null });
+    timeline.forEach(function (entry) { if (entry.holder) entry.holderName = names[entry.holder] || ''; });
+    rows.push({
+      code: code, formatted: formatCode_(code), issued: node.issued || 0,
+      claimed: !!node.usedBy, claimedAt: node.activatedAt || 0, revoked: node.revoked === true,
+      printed: codeIsPrinted_(timeline), onHold: codeIsOnHold_(timeline), reserved: isReservedCode_(code),
+      note: node.note || '', holder: holders.byCode[code] || null,
+      audit: timeline, lastChange: timeline.length ? timeline[timeline.length - 1] : null
+    });
   }
   rows.sort(function (a, b) { return b.issued - a.issued; });
-  return rows;
+
+  return {
+    codes: rows,
+    removedHolders: holders.removed.map(function (h) {
+      h.purgeAfter = h.removedAt + HOLDER_RETENTION_MS;
+      return h;
+    }),
+    printingEnabled: printingEnabled_()
+  };
 }
 
 /**
- * Cuts a device off. The code is not deleted: deleting it would let the next person to type it
- * claim it afresh, because the rules only refuse a code that already carries usedBy.
+ * Stops the phone on a code. The code is not deleted: deleting it would let the next person to type
+ * it claim it afresh, because the rules only refuse a code that already carries usedBy.
  */
-function revokeCode(code) {
+function disableCode(code) {
   var by = requireEditor_();
-  if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
+  refuseOnHold_(loadCode_(code), 'disabled');
   firebase_('patch', '/codes/' + code + '.json', { revoked: true });
 
   // The database is the truth; the queue is only how the phone hears about it sooner. A minute-ly
   // trigger in the sender drains this and broadcasts, because this console has no FCM credentials
   // and is deliberately not given any (SYSTEM.md 2.3).
-  //
-  // Keyed by code, so revoking the same one twice leaves one pending entry rather than two. PUT
-  // rather than PATCH for the same reason: a second revoke replaces the first outright.
-  firebase_('put', '/revokeQueue/' + code + '.json', { at: Date.now(), by: by });
+  queueControl_('code_' + code, { type: 'revoke', code: code, at: Date.now(), by: by });
 
   audit_(code, 'revoked', by);
   return listCodes();
@@ -482,17 +726,21 @@ function markPrinted(codes) {
 }
 
 /**
- * Whether a code may be deleted, given its stored node. Pure, so the rule can be tested.
+ * Whether a code may be deleted. Pure, so the rule can be tested.
  *
- * Only a code nobody has ever claimed. Deleting a claimed one would cut that phone off at its next
- * check with no explanation anywhere -- the device would find no node, read that as a withdrawn
- * claim, and raise the revocation banner. Revoke does that deliberately and reversibly; this must
- * not do it by accident.
+ * Only a code with no phone and no holder, that is not On hold.
  *
- * A revoked-but-never-claimed code is deletable: revoked or not, nobody ever used it.
+ * A code with a phone: deleting it would cut that phone off at its next check with no explanation
+ * anywhere -- the device would find no node, read that as a withdrawn claim, and raise the banner.
+ * Disable does that deliberately and reversibly; this must not do it by accident.
+ *
+ * A code with a holder is somebody's. Move the holder to their new code first, and the old one can
+ * then be deleted. An On hold code is waiting on a restore or on the purge, and both need it to exist.
+ *
+ * A disabled-but-never-claimed code is deletable: disabled or not, nobody ever used it.
  */
-function codeIsDeletable_(node) {
-  if (!node) return false;
+function codeIsDeletable_(node, hasHolder, onHold) {
+  if (!node || hasHolder || onHold) return false;
   return !node.usedBy;
 }
 
@@ -510,39 +758,261 @@ function codeIsDeletable_(node) {
  */
 function deleteCode(code) {
   var by = requireEditor_();
-  if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
-
-  var node = firebase_('get', '/codes/' + code + '.json');
-  if (!node) throw new Error(code + ' does not exist.');
+  var state = loadCode_(code);
+  var holder = activeHolderOf_(code);
 
   // Checked here and not only in the page: a hidden button is not a rule.
-  if (!codeIsDeletable_(node)) {
-    throw new Error(code + ' has been claimed by a phone and cannot be deleted. Use Revoke to cut ' +
-                    'that phone off, or Release if the phone is gone.');
+  if (!codeIsDeletable_(state.node, !!holder, state.onHold)) {
+    var label = formatCode_(code);
+    if (state.onHold) throw new Error(label + ' is On hold and cannot be deleted.');
+    if (holder) throw new Error(label + ' has a holder, ' + holder.name + '. Move the holder to their new code first.');
+    throw new Error(label + ' has a phone linked and cannot be deleted. Unlink the phone first if it is gone.');
   }
 
   firebase_('delete', '/codes/' + code + '.json');
-  // Defensive: an unclaimed code should never have one, but a leftover entry would otherwise sit
-  // in the queue forever, since the drain looks the code up and it no longer exists.
-  firebase_('delete', '/revokeQueue/' + code + '.json');
+  // Defensive: an unclaimed code should never have anything queued. The drain would drop a leftover
+  // entry on finding the code gone, but only after logging it as something to look at.
+  clearCodeControl_(code);
 
   audit_(code, 'deleted', by);
   return listCodes();
 }
 
-function unrevokeCode(code) {
+/** Starts a disabled phone again. The same code keeps working, so no new slip is needed. */
+function enableCode(code) {
   var by = requireEditor_();
-  if (!isValidCode(code)) throw new Error('Not a valid code: ' + code);
+  refuseOnHold_(loadCode_(code), 'enabled');
   firebase_('patch', '/codes/' + code + '.json', { revoked: null });
 
-  // Drop any revoke the sender has not broadcast yet. Revoking and restoring inside a minute would
-  // otherwise push a revoke for a code that is live again -- recoverable, because the device
-  // re-verifies and resumes, but it would blank someone's notices and raise the banner for no
-  // reason at all.
-  firebase_('delete', '/revokeQueue/' + code + '.json');
+  // Tells the phone to resume at once rather than at its next daily check, and replaces any revoke
+  // not yet broadcast, so disabling and enabling inside a minute sends one resume and no revoke.
+  //
+  // The drain sends the resume only if a phone holds the code, so enabling a code nobody has claimed
+  // broadcasts nothing.
+  queueControl_('code_' + code, { type: 'resume', code: code, at: Date.now(), by: by });
 
   audit_(code, 'restored', by);
   return listCodes();
+}
+
+// ---------------------------------------------------------------- Holders
+
+/**
+ * The person a code was given to: name, CHSS number and telephone number.
+ *
+ * Stored at /holders/{id}, never on /codes. /codes/{CODE} is readable by any signed-in phone that
+ * knows the code, whereas no security rule opens /holders to anyone, so only this console sees who
+ * holds what. Keyed by an id of its own rather than by code, so a person keeps their record and its
+ * history when they are moved to a new code.
+ *
+ * Each holder carries its own history, with the values before and after every change. The code's
+ * /audit records only that something happened to its holder, by id -- see AUDIT_EVENTS for why.
+ *
+ * Writes are ordered so that a failure part-way leaves something staff can finish by pressing the
+ * same button again: the code and its audit first, the holder record last.
+ */
+
+function loadHolder_(id) {
+  id = String(id || '');
+  if (!/^[A-Za-z0-9_-]{1,40}$/.test(id)) throw new Error('That is not a valid holder.');
+  var holder = firebase_('get', '/holders/' + id + '.json');
+  if (!holder) throw new Error('That holder no longer exists. Refresh the page.');
+  holder.id = id;
+  return holder;
+}
+
+function activeHolderOf_(code) {
+  return splitHolders_(firebase_('get', '/holders.json') || {}).byCode[code] || null;
+}
+
+function holderHistory_(id, entry) {
+  firebase_('post', '/holders/' + id + '/history.json', entry);
+}
+
+/** Records the person a code was given to. A code has one holder at a time. */
+function addHolder(code, name, chss, phone) {
+  var by = requireEditor_();
+  refuseOnHold_(loadCode_(code), 'given a holder');
+  var existing = activeHolderOf_(code);
+  if (existing) {
+    throw new Error(formatCode_(code) + ' already has a holder, ' + existing.name + '. Edit or move that holder instead.');
+  }
+
+  var clean = normaliseHolder_(name, chss, phone);
+  var at = Date.now();
+  var id = firebase_('post', '/holders.json', {
+    code: code, name: clean.name, chss: clean.chss, phone: clean.phone, createdAt: at, createdBy: by
+  }).name;
+
+  audit_(code, 'holder-added', by, { holder: id });
+  holderHistory_(id, { at: at, by: by, event: 'added', changes: holderChanges_({}, clean) });
+  return listCodes();
+}
+
+/** Changes any of a holder's three details. Every change is kept in the holder's history. */
+function editHolder(id, name, chss, phone) {
+  var by = requireEditor_();
+  var holder = loadHolder_(id);
+  if (holder.removedAt) throw new Error(holder.name + ' has been removed. Restore them before editing.');
+
+  var clean = normaliseHolder_(name, chss, phone);
+  var changes = holderChanges_(holder, clean);
+  if (!Object.keys(changes).length) return listCodes();
+
+  var at = Date.now();
+  audit_(holder.code, 'holder-edited', by, { holder: holder.id });
+  firebase_('patch', '/holders/' + holder.id + '.json', clean);
+  holderHistory_(holder.id, { at: at, by: by, event: 'edited', changes: changes });
+  return listCodes();
+}
+
+/**
+ * Moves a holder to another code, for when the dispensary issues them a new slip.
+ *
+ * The old code is left with no holder and otherwise exactly as it was -- still In use if a phone is
+ * on it. Unlink that phone, and the old code can be deleted.
+ */
+function moveHolder(id, toCode) {
+  var by = requireEditor_();
+  var holder = loadHolder_(id);
+  if (holder.removedAt) throw new Error(holder.name + ' has been removed. Restore them before moving.');
+
+  toCode = normaliseCode_(toCode);
+  if (toCode === holder.code) throw new Error(holder.name + ' already holds ' + formatCode_(toCode) + '.');
+  refuseOnHold_(loadCode_(toCode), 'given a holder');
+  var occupant = activeHolderOf_(toCode);
+  if (occupant) throw new Error(formatCode_(toCode) + ' already has a holder, ' + occupant.name + '.');
+
+  var at = Date.now();
+  var from = holder.code;
+  audit_(from, 'holder-moved-out', by, { holder: holder.id, to: toCode });
+  audit_(toCode, 'holder-moved-in', by, { holder: holder.id, to: from });
+  firebase_('patch', '/holders/' + holder.id + '.json', { code: toCode });
+  holderHistory_(holder.id, { at: at, by: by, event: 'moved', changes: { code: { from: from, to: toCode } } });
+  return listCodes();
+}
+
+/**
+ * Takes a person off their code. The code goes On hold: its phone stops, and nothing can be done to
+ * it until the holder is restored or the purge erases them.
+ *
+ * Whether the code was already Disabled is kept on the holder, so Restore puts it back exactly as it
+ * was rather than starting a phone that somebody had deliberately stopped.
+ */
+function removeHolder(id) {
+  var by = requireEditor_();
+  var holder = loadHolder_(id);
+  if (holder.removedAt) throw new Error(holder.name + ' has already been removed.');
+
+  var state = loadCode_(holder.code);
+  var wasDisabled = state.node.revoked === true;
+  var at = Date.now();
+
+  if (!wasDisabled) {
+    firebase_('patch', '/codes/' + holder.code + '.json', { revoked: true });
+    // Only a code with a phone has anybody to tell.
+    if (state.node.usedBy) queueControl_('code_' + holder.code, { type: 'revoke', code: holder.code, at: at, by: by });
+  }
+  audit_(holder.code, 'holder-removed', by, { holder: holder.id });
+  firebase_('patch', '/holders/' + holder.id + '.json', { removedAt: at, removedBy: by, wasDisabled: wasDisabled });
+  holderHistory_(holder.id, { at: at, by: by, event: 'removed' });
+  return listCodes();
+}
+
+/** Brings a removed holder back and takes their code off hold, as it was before the removal. */
+function restoreHolder(id) {
+  var by = requireEditor_();
+  var holder = loadHolder_(id);
+  if (!holder.removedAt) throw new Error(holder.name + ' has not been removed.');
+
+  var state = loadCode_(holder.code);
+  var at = Date.now();
+
+  if (holder.wasDisabled !== true) {
+    firebase_('patch', '/codes/' + holder.code + '.json', { revoked: null });
+    if (state.node.usedBy) queueControl_('code_' + holder.code, { type: 'resume', code: holder.code, at: at, by: by });
+  }
+  audit_(holder.code, 'holder-restored', by, { holder: holder.id });
+  firebase_('patch', '/holders/' + holder.id + '.json', { removedAt: null, removedBy: null, wasDisabled: null });
+  holderHistory_(holder.id, { at: at, by: by, event: 'restored' });
+  return listCodes();
+}
+
+// ---------------------------------------------------------------- Purge
+
+/**
+ * Erases holders removed more than 30 days ago, and puts their codes back to Unused.
+ *
+ * Erasing is the point. A removed holder is kept only so the removal can be undone; after that there
+ * is no reason for a person's name and telephone number to stay. The code's /audit keeps its record
+ * that it had a holder, by id, which after this names nobody.
+ *
+ * Back to Unused means: its phone is unlinked, it is no longer stopped, its Printed status is cleared
+ * (by the holder-purged event), and anything queued for it is dropped. Its note stays.
+ *
+ * Returns one line per holder, saying what was done -- or with [dryRun], what would be.
+ */
+function purgeRemovedHolders_(dryRun, by) {
+  var now = Date.now();
+  var due = splitHolders_(firebase_('get', '/holders.json') || {}).removed.filter(function (h) {
+    return holderIsPurgeable_(h, now);
+  });
+
+  return due.map(function (h) {
+    var line = formatCode_(h.code) + '  removed ' + new Date(h.removedAt).toISOString() + '  holder ' + h.id;
+    if (dryRun) return 'would erase  ' + h.name + '  ' + line;
+
+    var node = h.code ? firebase_('get', '/codes/' + h.code + '.json') : null;
+    if (node) {
+      firebase_('patch', '/codes/' + h.code + '.json', { usedBy: null, activatedAt: null, revoked: null });
+      clearCodeControl_(h.code);
+      audit_(h.code, 'holder-purged', by, { holder: h.id });
+    }
+    firebase_('delete', '/holders/' + h.id + '.json');
+    return 'erased  ' + line;
+  });
+}
+
+/** The trigger handler. A trigger runs with no signed-in person, so it records itself as the actor. */
+function purgeRun() {
+  var lines = purgeRemovedHolders_(false, 'purge (automatic)');
+  Logger.log('purge: %s holder(s) erased%s', lines.length, lines.length ? '\n' + lines.join('\n') : '');
+}
+
+/** Lists what the next purge would erase. Changes nothing. Run from the editor. */
+function purgeDryRun() {
+  requireEditor_();
+  var lines = purgeRemovedHolders_(true, '');
+  Logger.log('purge dry run: %s holder(s) due%s', lines.length, lines.length ? '\n' + lines.join('\n') : '');
+}
+
+/**
+ * Creates the purge trigger, every 30 days. Safe to run twice: it removes any existing one first.
+ *
+ * With a 30-day run and 30-day retention, a removed holder is erased between 30 and 60 days after
+ * removal. At least 30 is the promise; the rest is only how long the trigger sleeps between runs.
+ */
+function purgeInstallTrigger() {
+  requireEditor_();
+  purgeRemoveTriggers_();
+  ScriptApp.newTrigger('purgeRun').timeBased().everyDays(30).create();
+  Logger.log('Trigger installed: purgeRun every 30 days.');
+}
+
+function purgeStopTrigger() {
+  requireEditor_();
+  Logger.log('Removed %s trigger(s).', purgeRemoveTriggers_());
+}
+
+function purgeRemoveTriggers_() {
+  var removed = 0;
+  ScriptApp.getProjectTriggers().forEach(function (trigger) {
+    if (trigger.getHandlerFunction() === 'purgeRun') {
+      ScriptApp.deleteTrigger(trigger);
+      removed++;
+    }
+  });
+  return removed;
 }
 
 // ---------------------------------------------------------------- Saved messages
@@ -668,75 +1138,164 @@ function sanitiseBanner_(html) {
   return out.trim();
 }
 
+/**
+ * The dispensary this console issues codes for and whose banner it edits.
+ *
+ * A Script Property, set to `barc-vashi` today. The id must be lower-case letters, digits and dashes:
+ * it is part of a database path and of the control queue key the sender matches on.
+ */
+function dispensaryId_() {
+  var id = property_('DISPENSARY_ID');
+  if (!/^[a-z0-9-]+$/.test(id)) {
+    throw new Error('DISPENSARY_ID "' + id + '" must be lower-case letters, digits and dashes only.');
+  }
+  return id;
+}
+
+function dispensaryInfoPath_(id) {
+  return '/dispensaries/' + id + '/info.json';
+}
+
 /** The banner as stored, plus the plain lines it falls back to when no banner is set. */
 function getBanner() {
   requireEditor_();
-  var info = firebase_('get', '/info.json') || {};
+  var info = firebase_('get', dispensaryInfoPath_(dispensaryId_())) || {};
   return { html: info.html || '', heading: info.heading || '', lines: info.lines || '' };
 }
 
 /**
  * Stores the banner. Sanitised here as well as in the page, and again on the phone.
  *
- * Written with PATCH so heading and lines survive: they are the fallback shown by any app version
- * that predates the banner, and replacing /info wholesale would delete them.
+ * Written with PATCH so heading and lines survive: they are the fallback shown when there is no
+ * banner, and replacing the info node wholesale would delete them.
  */
 function saveBanner(html) {
-  requireEditor_();
+  var by = requireEditor_();
   var clean = sanitiseBanner_(html);
   if (clean.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim() === '') {
     throw new Error('The banner is empty. Use Remove if that is what you meant.');
   }
-  if (clean.length > 4000) throw new Error('That banner is too long (' + clean.length + ' characters of markup). Keep it under 4000.');
-  firebase_('patch', '/info.json', { html: clean, htmlUpdated: Date.now() });
+  var bytes = utf8Length_(clean);
+  if (bytes > BANNER_MAX_BYTES) {
+    throw new Error('That banner is too long to send to phones (' + bytes + ' of ' + BANNER_MAX_BYTES +
+                    ' allowed). Shorten the text or remove some formatting, then save again.');
+  }
+  var id = dispensaryId_();
+  var at = Date.now();
+  firebase_('patch', dispensaryInfoPath_(id), { html: clean, htmlUpdated: at });
+  // Queued after the database write, never before: a phone that opens the app on seeing the change
+  // must find the new banner there. The drain reads it again when it broadcasts, so a second save
+  // inside the same minute sends the second banner. Keyed by dispensary, so each has its own entry.
+  queueControl_('banner_' + id, { dispensary: id, at: at, by: by });
   return getBanner();
 }
 
 /** Removes the banner, so the app falls back to the plain heading and lines. */
 function removeBanner() {
-  requireEditor_();
-  firebase_('patch', '/info.json', { html: null, htmlUpdated: null });
+  var by = requireEditor_();
+  var id = dispensaryId_();
+  var at = Date.now();
+  // htmlUpdated is stamped rather than cleared, so a phone can tell a removed banner from one that was
+  // never set, and ignore an older banner arriving after the removal.
+  firebase_('patch', dispensaryInfoPath_(id), { html: null, htmlUpdated: at });
+  queueControl_('banner_' + id, { dispensary: id, at: at, by: by });
   return getBanner();
 }
 
-// ---------------------------------------------------------------- Daily status wording
+// ---------------------------------------------------------------- One-off: move to dispensaries
 
 /**
- * The two fixed messages the QR codes send, as currently stored.
+ * The update that gives every existing code its dispensary. Pure, so it can be tested.
  *
- * Returns the shipped defaults for anything not yet edited, so the form is never blank and an
- * editor can see what is actually going out before changing it.
+ * Multi-path keys, one per code: updating `CODE/dispensary` changes that one field and leaves usedBy,
+ * activatedAt, revoked and note exactly as they are. Never an import or a PUT on /codes, either of
+ * which replaces every code and the claims on them (SYSTEM.md 5.6). A code that already names a
+ * dispensary is left out, so a second run changes nothing.
  */
-function listStatusMessages() {
-  requireEditor_();
-  var stored = firebase_('get', '/status.json') || {};
-  var defaults = { open: { title: 'The dispensary is open today', body: 'Normal OPD timings.' }, closed: { title: 'The dispensary is closed now', body: 'It will reopen at the usual time.' } };
-  var rows = [];
-  ['open', 'closed'].forEach(function (which) { var node = stored[which] || {}; rows.push({ which: which, title: node.title || defaults[which].title, body: node.body === undefined ? defaults[which].body : node.body, customised: !!node.title }); });
-  return rows;
+function dispensaryBackfill_(codes, id) {
+  var patch = {};
+  for (var code in codes) {
+    if (!codes.hasOwnProperty(code)) continue;
+    var node = codes[code];
+    if (!node || typeof node !== 'object' || node.dispensary) continue;
+    patch[code + '/dispensary'] = id;
+  }
+  return patch;
 }
 
-/** Changes the wording of one status message. Takes effect on the next scan; no redeploy needed. */
-function saveStatusMessage(which, title, body) {
-  requireEditor_();
-  which = String(which || '').trim().toLowerCase();
-  if (which !== 'open' && which !== 'closed') throw new Error('Unknown status: ' + which);
-
-  title = String(title || '').trim().slice(0, 120);
-  body = String(body || '').trim().slice(0, 900);
-  if (!title) throw new Error('A title is required. It is what people read first.');
-
-  firebase_('put', '/status/' + which + '.json', { title: title, body: body, updated: Date.now() });
-  return listStatusMessages();
+/**
+ * Moves the live database to the dispensary shape. Run once from the editor, dry run first:
+ *
+ *   migrateToDispensariesDryRun()   logs what would change and writes nothing
+ *   migrateToDispensaries()         makes the change
+ *
+ * BEFORE RUNNING
+ *   1. Import docs/dispensary-barc-vashi.json at /dispensaries/barc-vashi -- select that node, never
+ *      the root. Its `info` may stay: the live /info copied below replaces it.
+ *   2. Set DISPENSARY_ID = barc-vashi in this project's Script Properties.
+ *   3. Run it when nobody is using the console. It writes only to codes it has just read, but a code
+ *      deleted in the seconds between would come back as a node holding nothing but `dispensary`.
+ *
+ * WHAT IT DOES
+ *   - Copies /info (the live banner and timings) into /dispensaries/{id}/info. After step 4 of the
+ *     runbook deletes /info, a second run has nothing to copy.
+ *   - Gives every code without one `dispensary: {id}`.
+ *
+ * AFTERWARDS
+ *   Deploy database.rules.json, then delete /info and /status in the data viewer (SYSTEM.md §10).
+ *   Delete this section once the move is done; nothing else calls it.
+ */
+function migrateToDispensaries() {
+  return migrateToDispensaries_(false);
 }
 
-/** Drops back to the wording shipped with the sender. */
-function resetStatusMessage(which) {
+function migrateToDispensariesDryRun() {
+  return migrateToDispensaries_(true);
+}
+
+function migrateToDispensaries_(dryRun) {
   requireEditor_();
-  which = String(which || '').trim().toLowerCase();
-  if (which !== 'open' && which !== 'closed') throw new Error('Unknown status: ' + which);
-  firebase_('delete', '/status/' + which + '.json');
-  return listStatusMessages();
+  var id = dispensaryId_();
+  var prefix = dryRun ? 'DRY RUN, nothing written. ' : '';
+
+  var record = firebase_('get', '/dispensaries/' + id + '.json');
+  if (!record || !record.topics) {
+    throw new Error('/dispensaries/' + id + ' has no topics yet. Import docs/dispensary-barc-vashi.json ' +
+                    'at that node first -- select the node, never the root.');
+  }
+
+  // The live banner and timings win over the seed's placeholders. Only fields /info actually has are
+  // copied, so an absent html does not wipe one the dispensary already holds.
+  var info = firebase_('get', '/info.json');
+  var infoPatch = {};
+  ['heading', 'lines', 'html', 'htmlUpdated'].forEach(function (field) {
+    if (info && info[field] !== undefined && info[field] !== null) infoPatch[field] = info[field];
+  });
+  var infoFields = Object.keys(infoPatch);
+
+  var codes = firebase_('get', '/codes.json') || {};
+  var patch = dispensaryBackfill_(codes, id);
+  var keys = Object.keys(patch);
+
+  if (!dryRun) {
+    if (infoFields.length) firebase_('patch', '/dispensaries/' + id + '/info.json', infoPatch);
+    if (keys.length) firebase_('patch', '/codes.json', patch);
+  }
+
+  var summary = {
+    dispensary: id,
+    topics: Object.keys(record.topics).length,
+    infoFieldsCopied: infoFields,
+    codesTotal: Object.keys(codes).length,
+    codesGivenDispensary: keys.length,
+    codesAlreadyHadOne: Object.keys(codes).length - keys.length
+  };
+  Logger.log('%s%s', prefix, JSON.stringify(summary, null, 2));
+  if (keys.length) Logger.log('%sFirst few: %s', prefix, keys.slice(0, 5).join(', '));
+  Logger.log(dryRun
+    ? 'Looks right? Run migrateToDispensaries().'
+    : 'Done. Next: deploy database.rules.json, then delete /info and /status in the data viewer.');
+  return summary;
 }
 
 // ---------------------------------------------------------------- Web app
@@ -753,7 +1312,7 @@ function doGet() {
 /** Run this from the editor once after setup to prove the credentials work. */
 function testConnection() {
   requireEditor_();
-  var rows = listCodes();
-  Logger.log('version=%s codes=%s', SCRIPT_VERSION, rows.length);
+  var rows = listCodes().codes;
+  Logger.log('version=%s codes=%s printing=%s', SCRIPT_VERSION, rows.length, printingEnabled_());
   return rows.length;
 }

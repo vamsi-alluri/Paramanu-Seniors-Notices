@@ -12,60 +12,74 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import org.paramanuseniorshealth.notices.MainActivity
-import org.paramanuseniorshealth.notices.activation.Subscription
+import org.paramanuseniorshealth.notices.activation.Importance
+import org.paramanuseniorshealth.notices.data.NoticeTime
 import org.paramanuseniorshealth.notices.R
 
 /**
- * Builds and posts the tray notification for a message.
+ * The notification channels, one per importance rather than one per topic.
  *
- * One channel per [Subscription], not per severity. The app this was forked from split channels by
- * alert level, which is a server-monitoring idea; here the split that matters to a reader is what
- * the message is *for* -- an unexpected closure is worth interrupting for, the daily open/closed
- * confirmation is not.
+ * Topics now come from the dispensary's record in the database, and Android lists every channel an
+ * app has ever created in system settings and never forgets one. A channel per topic would let data
+ * add permanent entries to four hundred people's notification settings. Two importances cover what a
+ * reader actually needs to control: what may interrupt them, and what may not.
+ *
+ * Channel importance is fixed once created and belongs to the user afterwards, so these cannot be
+ * quietly retuned later; changing one means a new channel id and a fresh default.
  */
+enum class NoticeChannel(val id: String) {
+    /** Closures and circulars: worth interrupting for. Created at start-up. */
+    HIGH("notices_default"),
+
+    /** Routine messages that arrive without a sound. Created the first time one is posted. */
+    LOW("notices_low"),
+
+    /** Delivery checks. Created only once testing is switched on. */
+    TESTING("notices_testing");
+
+    companion object {
+        fun forImportance(importance: Importance): NoticeChannel =
+            if (importance == Importance.LOW) LOW else HIGH
+    }
+}
+
+/** Builds and posts the tray notification for a message. */
 object NoticeNotifications {
 
-    /**
-     * One channel per subscription.
-     *
-     * Notices are high importance: a closure notice is worth interrupting for. The daily status is
-     * low, so it appears silently in the shade rather than buzzing sixty times a month -- an app
-     * that pesters gets ignored, and an ignored app fails to deliver the closure notice too.
-     *
-     * Channel importance is fixed once created and belongs to the user afterwards, so these cannot
-     * be quietly retuned later; changing one means a new channel id and a fresh default.
-     */
+    /** The channel every phone needs. Must exist before the first notice, so start-up creates it. */
     fun create(context: Context) {
-        val notices = NotificationChannel(
-            Subscription.NOTICES.channelId,
-            context.getString(R.string.notification_channel_name),
-            NotificationManager.IMPORTANCE_HIGH,
-        ).apply { description = context.getString(R.string.notification_channel_description) }
-
-        val status = NotificationChannel(
-            Subscription.STATUS.channelId,
-            context.getString(R.string.notification_channel_status_name),
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply { description = context.getString(R.string.notification_channel_status_description) }
-
-        NotificationManagerCompat.from(context).createNotificationChannels(listOf(notices, status))
+        ensureChannel(context, NoticeChannel.HIGH)
     }
 
     /**
-     * Creates the testing channel, and only then.
+     * Creates [channel] if it does not exist yet. Idempotent, so it is called before every post.
      *
-     * Android lists every channel an app has ever created in system settings, and a channel cannot
-     * be un-created -- only deleted, which is untidy if it is ever wanted again. Creating this on
-     * demand keeps a "Testing" entry out of the notification settings of everyone who will never
-     * use it.
+     * The low and testing channels are created only when first needed. Android lists every channel
+     * an app has ever created in system settings, and a channel cannot be un-created, so creating
+     * them eagerly would put entries in the notification settings of everyone who will never receive
+     * such a message.
      */
-    fun createTestingChannel(context: Context) {
-        val testing = NotificationChannel(
-            Subscription.TESTING.channelId,
-            context.getString(R.string.notification_channel_testing_name),
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply { description = context.getString(R.string.notification_channel_testing_description) }
-        NotificationManagerCompat.from(context).createNotificationChannel(testing)
+    fun ensureChannel(context: Context, channel: NoticeChannel) {
+        val created = when (channel) {
+            NoticeChannel.HIGH -> NotificationChannel(
+                channel.id,
+                context.getString(R.string.notification_channel_name),
+                NotificationManager.IMPORTANCE_HIGH,
+            ).apply { description = context.getString(R.string.notification_channel_description) }
+
+            NoticeChannel.LOW -> NotificationChannel(
+                channel.id,
+                context.getString(R.string.notification_channel_low_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply { description = context.getString(R.string.notification_channel_low_description) }
+
+            NoticeChannel.TESTING -> NotificationChannel(
+                channel.id,
+                context.getString(R.string.notification_channel_testing_name),
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply { description = context.getString(R.string.notification_channel_testing_description) }
+        }
+        NotificationManagerCompat.from(context).createNotificationChannel(created)
     }
 
     /** Whether a notification posted now would actually appear. */
@@ -87,7 +101,7 @@ object NoticeNotifications {
         body: String,
         logId: String?,
         image: Bitmap? = null,
-        subscription: Subscription = Subscription.NOTICES,
+        channel: NoticeChannel = NoticeChannel.HIGH,
     ) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
@@ -127,14 +141,20 @@ object NoticeNotifications {
             NotificationCompat.BigTextStyle().bigText(body)
         }
 
-        val notification = NotificationCompat.Builder(context, subscription.channelId)
+        ensureChannel(context, channel)
+        val notification = NotificationCompat.Builder(context, channel.id)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(body)
+            // The time the notice was sent, not the time this phone posted it. Left to the default,
+            // a phone that came online late showed a later time than everyone else's for the same
+            // notice, and people comparing phones reasonably concluded something was wrong.
+            .setWhen(NoticeTime.sentAt(logId, System.currentTimeMillis()))
+            .setShowWhen(true)
             .setStyle(style)
             .setLargeIcon(icon)
             .setPriority(
-                if (subscription == Subscription.NOTICES) NotificationCompat.PRIORITY_HIGH
+                if (channel == NoticeChannel.HIGH) NotificationCompat.PRIORITY_HIGH
                 else NotificationCompat.PRIORITY_LOW
             )
             // Notices are about hours and closures; they are worth reading now, not on a schedule.

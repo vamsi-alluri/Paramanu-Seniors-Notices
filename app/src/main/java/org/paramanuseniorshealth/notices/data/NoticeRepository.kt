@@ -37,7 +37,7 @@ class NoticeRepository(
             logId = logId?.takeIf { it.isNotBlank() },
             title = title,
             body = body,
-            receivedAt = parseTimestamp(logId),
+            receivedAt = NoticeTime.sentAt(logId, System.currentTimeMillis()),
             imageUrl = imageUrl?.takeIf { it.isNotBlank() },
             pdfUrl = pdfUrl?.takeIf { it.isNotBlank() },
             linkUrl = linkUrl?.takeIf { it.isNotBlank() },
@@ -104,26 +104,12 @@ class NoticeRepository(
         return NoticeImageStore.fetchPdf(context, url, logId)
     }
 
-    /** Clears history and the cached renders with it, so "clear" leaves nothing on disk. */
-    suspend fun clearAll() {
-        dao.deleteAll()
-        NoticeImageStore.clear(context)
-        // A reset wipes the history the revocation notice points at, so it must not outlive it.
-        NoticeNotifications.cancel(context, REVOKED_LOG_ID)
-    }
-
     suspend fun clear(notices: List<NoticeEntity>) {
         if (notices.isEmpty()) return
         dao.deleteByIds(notices.map { it.id })
         NoticeImageStore.delete(context, notices.mapNotNull { it.logId })
     }
 
-    /**
-     * The sender supplies `logId`. When it is a timestamp we use it, so ordering reflects when the
-     * NGO published rather than when this particular phone happened to receive it -- which matters
-     * for a device that was switched off overnight. Anything unparseable (a UUID, an ISO string)
-     * falls back to arrival time.
-     */
     companion object {
         /**
          * Marks a notice this app wrote itself rather than one the sender broadcast.
@@ -136,15 +122,5 @@ class NoticeRepository(
 
         const val WELCOME_LOG_ID = LOCAL_LOG_ID_PREFIX + "welcome"
         const val REVOKED_LOG_ID = LOCAL_LOG_ID_PREFIX + "revoked"
-    }
-
-    private fun parseTimestamp(logId: String?): Long {
-        val now = System.currentTimeMillis()
-        val numeric = logId?.trim()?.toLongOrNull() ?: return now
-        return when {
-            numeric > 100_000_000_000L -> numeric          // already millis
-            numeric > 100_000_000L -> numeric * 1000L      // seconds
-            else -> now
-        }
     }
 }

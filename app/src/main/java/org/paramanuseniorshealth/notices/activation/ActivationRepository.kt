@@ -9,6 +9,8 @@ import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import com.google.firebase.messaging.FirebaseMessaging
+import org.paramanuseniorshealth.notices.data.DispensaryRepository
+import org.paramanuseniorshealth.notices.fcm.ControlMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -18,7 +20,8 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /**
- * Owns the one-time activation handshake and the entitlement check that gates every notice.
+ * Owns the one-time activation handshake, the entitlement check that gates every notice, and which
+ * topics the phone is subscribed to.
  *
  * There is no server of ours anywhere in this flow. Redemption is a single write to Realtime
  * Database that the security rules either accept or refuse -- the rules are the validator. That is
@@ -29,7 +32,10 @@ import kotlin.coroutines.resumeWithException
  * Deliberately, no contact information is ever written. A claim is an anonymous Firebase UID
  * against a code, and nothing else.
  */
-class ActivationRepository(private val context: Context) {
+class ActivationRepository(
+    private val context: Context,
+    private val dispensaries: DispensaryRepository,
+) {
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val auth: FirebaseAuth get() = FirebaseAuth.getInstance()
@@ -37,6 +43,14 @@ class ActivationRepository(private val context: Context) {
 
     val storedCode: String? get() = prefs.getString(KEY_CODE, null)
     val storedUid: String? get() = prefs.getString(KEY_UID, null)
+
+    /**
+     * The dispensary this phone's code belongs to, as last read from the code. Null until then.
+     *
+     * Decided by the code, never chosen on the phone: the console writes it when the slip is
+     * generated, and it decides what Settings offers.
+     */
+    val dispensaryId: String? get() = prefs.getString(KEY_DISPENSARY, null)
 
     /** True once a code has been redeemed on this device, regardless of server state. */
     val isActivated: Boolean get() = storedCode != null && storedUid != null
@@ -46,7 +60,7 @@ class ActivationRepository(private val context: Context) {
      *
      * Persistent, not a one-shot flag: the notice list shows a banner for as long as it is set, and
      * it is cleared only when the server says the claim stands again -- which is what makes the
-     * console's Restore button work.
+     * console's Enable button work.
      */
     val isRevoked: Boolean get() = prefs.getBoolean(KEY_REVOKED, false)
 
@@ -96,17 +110,82 @@ class ActivationRepository(private val context: Context) {
             .apply()
     }
 
-    /** Whether [subscription] is switched on for this phone. */
-    fun isSubscribed(subscription: Subscription): Boolean =
-        prefs.getBoolean(subscription.preferenceKey, subscription.defaultEnabled)
+    // ---------------------------------------------------------------- topics
 
-    /** Snapshot of every subscription's state, for the Settings screen. */
-    fun subscriptions(): Map<Subscription, Boolean> =
-        Subscription.entries.associateWith { isSubscribed(it) }
+    /** Whether [topic] is switched on. The dispensary's default holds until the user chooses. */
+    fun isTopicOn(topic: DispensaryTopic): Boolean =
+        prefs.getBoolean(topicKey(topic.topic), topic.defaultOn)
 
-    /** True when the phone wants anything at all. Used to decide whether to subscribe on launch. */
-    val anySubscribed: Boolean
-        get() = Subscription.entries.any { isSubscribed(it) }
+    /** Every offered topic's state, keyed by topic name, for Settings. */
+    fun topicChoices(): Map<String, Boolean> =
+        dispensaries.current?.topics.orEmpty().associate { it.topic to isTopicOn(it) }
+
+    /** Whether the hidden testing topic is switched on. Not a dispensary topic: it is ours. */
+    val testingOn: Boolean get() = prefs.getBoolean(KEY_TESTING, false)
+
+    /**
+     * Whether a notice that arrived on [topic] should be shown.
+     *
+     * A second check behind the subscription. Unsubscribing is not instant -- FCM can keep delivering
+     * for a short while afterwards -- so without this a user who has just switched a topic off gets
+     * the next one anyway, and reasonably concludes the switch does not work. A topic the dispensary
+     * does not offer is never shown, whatever reached the phone.
+     */
+    fun wantsTopic(topic: String): Boolean = when (topic) {
+        TESTING_TOPIC -> testingOn
+        else -> dispensaries.current?.topic(topic)?.let { isTopicOn(it) } == true
+    }
+
+    /**
+     * Turns a topic on or off from inside the app.
+     *
+     * Switching off unsubscribes but deliberately keeps the code, the UID and the anonymous account.
+     * Surrendering them would make the decision irreversible: the code is already marked used, a
+     * fresh anonymous sign-in would produce a different UID, and the rules would then refuse to
+     * re-claim it -- so a user who turned notices off out of curiosity could never turn them back on
+     * without a trip to the counter for a new slip.
+     */
+    suspend fun setTopic(topic: String, enabled: Boolean) {
+        prefs.edit().putBoolean(topicKey(topic), enabled).apply()
+        syncSubscriptions()
+    }
+
+    suspend fun setTesting(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_TESTING, enabled).apply()
+        syncSubscriptions()
+    }
+
+    /**
+     * Brings FCM into line with the claim, the dispensary and the stored choices. Safe to call on
+     * every launch.
+     *
+     * The control topic follows the claim alone, revoked or not: it is how a revoke, a resume and a
+     * banner change reach the phone, and a revoked phone is precisely the one waiting for a resume.
+     * The notice topics additionally wait for the claim to stand.
+     *
+     * What was subscribed last time is remembered, so a topic the dispensary stops offering is
+     * unsubscribed rather than left behind. A failed unsubscribe stays in that record and is tried
+     * again next time.
+     */
+    suspend fun syncSubscriptions() {
+        val desired = buildSet {
+            if (isActivated) {
+                add(CONTROL_TOPIC)
+                if (!isRevoked) {
+                    dispensaries.current?.topics.orEmpty().filter { isTopicOn(it) }.forEach { add(it.topic) }
+                    if (testingOn) add(TESTING_TOPIC)
+                }
+            }
+        }
+        val previous = prefs.getStringSet(KEY_SUBSCRIBED, null).orEmpty()
+
+        val stillSubscribed = (previous - desired).filterNot { unsubscribeTopic(it) }
+        desired.forEach { subscribeTopic(it) }
+
+        prefs.edit().putStringSet(KEY_SUBSCRIBED, desired + stillSubscribed).apply()
+    }
+
+    // ---------------------------------------------------------------- the claim
 
     /**
      * Redeems [rawCode]. The check character is tested locally first so an obvious typo is answered
@@ -139,14 +218,23 @@ class ActivationRepository(private val context: Context) {
                     )
                 ).awaitResult()
 
+                // Which dispensary the code belongs to decides what the phone is offered. Read after
+                // the claim, and allowed to fail: a claim that has succeeded must not be undone by a
+                // slow read, and the next verification fills this in anyway.
+                val dispensary = runCatching {
+                    database.reference.child(CODES).child(code).child(FIELD_DISPENSARY).get()
+                        .awaitResult().getValue(String::class.java)
+                }.onFailure { Log.w(TAG, "Could not read the dispensary for $code", it) }.getOrNull()
+
                 // KEY_REVOKED is cleared here on purpose. A revoked device keeps its old code and
-                // UID so a console Restore can bring it back, but the user may instead be handed a
+                // UID so a console Enable can bring it back, but the user may instead be handed a
                 // fresh slip -- and without this the new claim would inherit the old one's
                 // revocation and the gate would refuse every notice for a code that is perfectly
                 // good.
                 prefs.edit()
                     .putString(KEY_CODE, code)
                     .putString(KEY_UID, uid)
+                    .putString(KEY_DISPENSARY, dispensary)
                     .putBoolean(KEY_REVOKED, false)
                     .apply()
                 _revoked.value = false
@@ -155,8 +243,9 @@ class ActivationRepository(private val context: Context) {
                 // Unknown for the first notice.
                 recordVerification(ActivationState.Active)
 
-                // Only the defaults are turned on here. STATUS stays off until the user asks for
-                // it, which is the whole reason it is a separate subscription.
+                // What the dispensary offers, then subscribe to its defaults. Without the read first,
+                // a new phone would subscribe to nothing until the app was next opened.
+                dispensary?.let { dispensaries.refresh(it) }
                 syncSubscriptions()
 
                 // Start the daily check now rather than waiting for the next app start: on a phone
@@ -176,7 +265,7 @@ class ActivationRepository(private val context: Context) {
     }
 
     /**
-     * Confirms the claim still stands. Called on every arriving notice, so it is capped hard.
+     * Confirms the claim still stands, and picks up the code's dispensary while it is reading.
      *
      * Returns [ActivationState.Unknown] rather than [ActivationState.Revoked] whenever the answer
      * could not be obtained -- see the note on [ActivationState].
@@ -202,6 +291,10 @@ class ActivationRepository(private val context: Context) {
                 val claimedBy = snapshot.child(FIELD_USED_BY).getValue(String::class.java)
                 val revoked = snapshot.child(FIELD_REVOKED).getValue(Boolean::class.java) == true
                 val issued = snapshot.child(FIELD_ISSUED).exists()
+
+                snapshot.child(FIELD_DISPENSARY).getValue(String::class.java)?.let { id ->
+                    if (id != dispensaryId) prefs.edit().putString(KEY_DISPENSARY, id).apply()
+                }
 
                 val state = when {
                     revoked -> ActivationState.Revoked
@@ -229,47 +322,26 @@ class ActivationRepository(private val context: Context) {
     }
 
     /**
-     * Turns delivery on or off from inside the app.
-     *
-     * Switching off unsubscribes but deliberately keeps the code, the UID and the anonymous account.
-     * Surrendering them would make the decision irreversible: the code is already marked used, a
-     * fresh anonymous sign-in would produce a different UID, and the rules would then refuse to
-     * re-claim it -- so a user who turned notices off out of curiosity could never turn them back on
-     * without a trip to the counter for a new slip.
-     */
-    suspend fun setSubscribed(subscription: Subscription, enabled: Boolean) {
-        prefs.edit().putBoolean(subscription.preferenceKey, enabled).apply()
-        if (enabled) subscribe(subscription) else unsubscribe(subscription)
-    }
-
-    /** Brings FCM into line with the stored preferences. Safe to call on every launch. */
-    suspend fun syncSubscriptions() {
-        for (subscription in Subscription.entries) {
-            if (isActivated && isSubscribed(subscription)) subscribe(subscription)
-            else unsubscribe(subscription)
-        }
-    }
-
-    /**
      * Stops delivery without surrendering the claim.
      *
      * The code and the UID are kept on purpose, and this is the correction of a real bug. Revoking
      * sets `revoked: true` and leaves `usedBy` in place, and the security rules refuse to write
      * `usedBy` on a code that already carries one -- so a device that had thrown its code away
-     * could never come back, by any route, and the console's Restore button had nothing left to
-     * restore. Keeping them means a restore is noticed by the next verification and the phone
-     * simply resumes.
+     * could never come back, by any route, and the console's Enable button had nothing left to
+     * restore. Keeping them means an Enable is noticed and the phone simply resumes.
+     *
+     * The control topic is deliberately kept, so a resume can still reach this phone.
      *
      * Safe to call repeatedly: a second revoke broadcast for the same code changes nothing.
      */
     suspend fun suspendClaim() {
-        unsubscribeAll()
         prefs.edit()
             .putBoolean(KEY_REVOKED, true)
             .putString(KEY_LAST_STATE, ActivationState.Revoked.name)
             .putLong(KEY_LAST_VERIFIED_AT, System.currentTimeMillis())
             .apply()
         _revoked.value = true
+        syncSubscriptions()
     }
 
     /** The server says the claim stands again: clear the banner and start receiving once more. */
@@ -281,41 +353,27 @@ class ActivationRepository(private val context: Context) {
     }
 
     /**
-     * The user chose to reset from Settings: surrender the claim entirely.
+     * Whether a control message stamped [at] may be applied here, recording the stamp if so.
      *
-     * This is the one path that genuinely forgets, because the user asked for it and is usually
-     * handing the phone on. A revocation deliberately does not do this -- see [suspendClaim].
+     * Call only once the message is known to concern this phone's code. See [ControlMessage.isNewer]
+     * for why the order has to be checked at all.
      */
-    suspend fun resetByUser() {
-        unsubscribeAll()
-        prefs.edit()
-            .remove(KEY_CODE)
-            .remove(KEY_UID)
-            .remove(KEY_REVOKED)
-            .remove(KEY_LAST_STATE)
-            .remove(KEY_LAST_VERIFIED_AT)
-            .apply { Subscription.entries.forEach { remove(it.preferenceKey) } }
-            .apply()
-        _revoked.value = false
+    fun acceptControl(at: Long): Boolean {
+        if (!ControlMessage.isNewer(at, prefs.getLong(KEY_LAST_CONTROL_AT, 0L))) return false
+        prefs.edit().putLong(KEY_LAST_CONTROL_AT, at).apply()
+        return true
     }
 
     /** Idempotent and locally persisted by the SDK, so calling it on every launch is cheap. */
-    suspend fun subscribe(subscription: Subscription) {
-        runCatching {
-            FirebaseMessaging.getInstance().subscribeToTopic(subscription.topic).awaitResult()
-        }.onFailure { Log.w(TAG, "Subscribe to '${subscription.topic}' failed", it) }
-    }
+    private suspend fun subscribeTopic(topic: String): Boolean =
+        runCatching { FirebaseMessaging.getInstance().subscribeToTopic(topic).awaitResult() }
+            .onFailure { Log.w(TAG, "Subscribe to '$topic' failed", it) }
+            .isSuccess
 
-    suspend fun unsubscribe(subscription: Subscription) {
-        runCatching {
-            FirebaseMessaging.getInstance().unsubscribeFromTopic(subscription.topic).awaitResult()
-        }.onFailure { Log.w(TAG, "Unsubscribe from '${subscription.topic}' failed", it) }
-    }
-
-    /** Every topic off. Used when a claim is surrendered or revoked. */
-    suspend fun unsubscribeAll() {
-        Subscription.entries.forEach { unsubscribe(it) }
-    }
+    private suspend fun unsubscribeTopic(topic: String): Boolean =
+        runCatching { FirebaseMessaging.getInstance().unsubscribeFromTopic(topic).awaitResult() }
+            .onFailure { Log.w(TAG, "Unsubscribe from '$topic' failed", it) }
+            .isSuccess
 
     /**
      * A refusal by the security rules is a real answer and must not be retried as if it were a
@@ -327,27 +385,45 @@ class ActivationRepository(private val context: Context) {
     }
 
     companion object {
+        /**
+         * Revoke, resume and banner changes. Held for as long as the phone holds a claim, revoked or
+         * not, and never shown in Settings: it is how the app is managed, not something a user
+         * chooses. Must match CONTROL_TOPIC in the sender's Code.gs.
+         */
+        const val CONTROL_TOPIC = "control-v1"
+
+        /**
+         * Delivery checks against real devices. Not a dispensary topic, and hidden behind seven taps
+         * on the version number in Settings.
+         */
+        const val TESTING_TOPIC = "testing-v1"
+
         private const val TAG = "ActivationRepo"
         private const val PREFS = "activation"
         private const val KEY_CODE = "code"
         private const val KEY_UID = "uid"
+        private const val KEY_DISPENSARY = "dispensary"
         private const val KEY_REVOKED = "revoked"
         private const val KEY_LAST_STATE = "last_state"
         private const val KEY_LAST_VERIFIED_AT = "last_verified_at"
+        private const val KEY_LAST_CONTROL_AT = "last_control_at"
+        private const val KEY_SUBSCRIBED = "subscribed_topics"
+        private const val KEY_TESTING = "testing_enabled"
+
+        private fun topicKey(topic: String) = "topic_$topic"
 
         private const val CODES = "codes"
         private const val FIELD_USED_BY = "usedBy"
         private const val FIELD_ACTIVATED_AT = "activatedAt"
         private const val FIELD_REVOKED = "revoked"
         private const val FIELD_ISSUED = "issued"
-
+        private const val FIELD_DISPENSARY = "dispensary"
 
         private const val NETWORK_TIMEOUT_MS = 20_000L
 
         /**
-         * Runs inside onMessageReceived, where the whole budget before teardown is roughly 10-20
-         * seconds and the PDF still has to be fetched and rendered afterwards. Kept short: an
-         * inconclusive check costs nothing, because Unknown is permitted.
+         * Kept short: an inconclusive check costs nothing, because Unknown is permitted, and a person
+         * pressing Check again should not wait long to be told so.
          */
         private const val VERIFY_TIMEOUT_MS = 4_000L
     }
@@ -355,7 +431,7 @@ class ActivationRepository(private val context: Context) {
 
 /**
  * Bridges a Play Services [Task] into a coroutine without pulling in
- * `kotlinx-coroutines-play-services` for the four call sites that need it.
+ * `kotlinx-coroutines-play-services` for the handful of call sites that need it.
  */
 private suspend fun <T> Task<T>.awaitResult(): T = suspendCancellableCoroutine { continuation ->
     addOnCompleteListener { task ->
