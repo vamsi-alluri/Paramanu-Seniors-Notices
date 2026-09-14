@@ -25,6 +25,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -358,16 +359,11 @@ private fun NoticeRow(
                     )
                     Spacer(Modifier.width(12.dp))
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = notice.title, style = MaterialTheme.typography.titleLarge)
-                    Text(
-                        text = Instant.ofEpochMilli(notice.receivedAt)
-                            .atZone(ZoneId.systemDefault())
-                            .format(Stamp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
+                Text(
+                    text = notice.title,
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.weight(1f),
+                )
             }
 
             if (expanded) {
@@ -398,6 +394,17 @@ private fun NoticeRow(
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
+
+            // The date sits below a rule at the foot of the card, apart from the notice itself, so
+            // the title and body read as the message and the stamp as a detail about it.
+            HorizontalDivider(modifier = Modifier.padding(top = 12.dp, bottom = 8.dp))
+            Text(
+                text = Instant.ofEpochMilli(notice.receivedAt)
+                    .atZone(ZoneId.systemDefault())
+                    .format(Stamp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
