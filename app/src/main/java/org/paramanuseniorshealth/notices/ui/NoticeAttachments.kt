@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -185,9 +184,12 @@ fun LinkCard(
 /**
  * Everything an expanded row shows below its body text.
  *
- * [photo] and [pdfRender] are local files, already downloaded when the notice arrived, so this
- * performs no network I/O and works offline. The circular behind [pdfRender] is a different matter
- * and is fetched on demand -- see [downloading].
+ * A notice carries at most one attachment -- a PDF or an image, never both, per the one-enclosure
+ * rule `Poller.gs:105` already enforces upstream -- so [photo] and [pdfRender] resolve to a single
+ * file: the photo if there is one, otherwise the rendered PDF page. Both are local files, already
+ * downloaded when the notice arrived, so resolving one performs no network I/O and works offline.
+ * The circular itself is a different matter and is fetched on demand when tapped -- see
+ * [downloading].
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -204,46 +206,37 @@ fun NoticeAttachments(
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
 
-        // Both are shown when both exist: the photo is what the sender chose, the render is the
-        // official circular, and neither substitutes for the other.
-        listOfNotNull(photo, pdfRender).forEach { file ->
-            AsyncImage(
-                model = file,
-                contentDescription = notice.title,
-                contentScale = ContentScale.FillWidth,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(top = 12.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .combinedClickable(onClick = onOpenImage, onLongClick = onLongClick),
-            )
+        val isPdf = !notice.pdfUrl.isNullOrBlank()
+        val attachment = photo ?: pdfRender
+        if (attachment != null) {
+            // For a PDF, notice.pdfBytes is the whole document's size, not the rendered page's --
+            // the number the reader is deciding against is the download, not the thumbnail. There
+            // is no equivalent stored column for an image, so its file on disk is the size shown.
+            val bytes = if (isPdf) notice.pdfBytes else attachment.length()
+            val badgeText = AttachmentBadge.label(isPdf = isPdf, pages = notice.pdfPages, bytes = bytes)
+
+            Box(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
+                AsyncImage(
+                    model = attachment,
+                    contentDescription = notice.title,
+                    contentScale = ContentScale.FillWidth,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .combinedClickable(onClick = onOpenImage, onLongClick = onLongClick),
+                )
+                AttachmentBadge(
+                    text = badgeText,
+                    modifier = Modifier
+                        .align(Alignment.BottomStart)
+                        .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 0.dp)),
+                )
+            }
             FileActions(
-                file = file,
+                file = attachment,
                 shareText = shareText,
                 modifier = Modifier.padding(top = 4.dp),
             )
-        }
-
-        if (!notice.pdfUrl.isNullOrBlank()) {
-            if (downloading) {
-                // A 2MB circular on a poor connection takes long enough that a button which simply
-                // stayed still would read as broken, and get pressed again.
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(top = 8.dp, start = 12.dp),
-                ) {
-                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                    Spacer(Modifier.width(12.dp))
-                    Text(
-                        text = stringResource(R.string.attachment_downloading),
-                        style = MaterialTheme.typography.bodyLarge,
-                    )
-                }
-            } else {
-                TextButton(onClick = onOpenPdf, modifier = Modifier.padding(top = 4.dp)) {
-                    Text(stringResource(R.string.action_open_pdf))
-                }
-            }
         }
 
         LinkCard(notice = notice, modifier = Modifier.padding(top = 12.dp))
