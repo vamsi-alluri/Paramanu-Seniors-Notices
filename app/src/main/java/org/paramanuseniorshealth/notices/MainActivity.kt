@@ -250,6 +250,12 @@ private fun NoticesApp(
                         },
                     )
                 },
+                onFetchPdfFile = { notice, onReady ->
+                    // Share/Save's own entry point, threaded the same way as onOpenPdf above: it
+                    // needs no Context, since NoticeRepository already holds one, but is wired here
+                    // rather than left for the view model to call unprompted.
+                    viewModel.withAttachmentFile(notice, onReady)
+                },
                 onDownloadAttachment = { notice ->
                     // A tap is consent and bypasses the fetch policy -- see
                     // NoticeViewModel.downloadAttachment. Needs a Context for the same reason

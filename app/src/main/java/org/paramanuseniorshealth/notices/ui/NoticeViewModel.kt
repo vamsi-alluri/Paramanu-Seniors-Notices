@@ -195,6 +195,33 @@ class NoticeViewModel(
     }
 
     /**
+     * Share and Save's entry point: hands the real attachment file to [then] once one exists.
+     *
+     * Only meaningful for a PDF notice. An image attachment is already a local file with nothing to
+     * fetch -- callers resolve that case themselves rather than come through here. For a PDF, the
+     * file Share and Save must act on is the binary, all pages, never the rendered page-one
+     * thumbnail the card displays; that binary may not be on the phone if a metered connection
+     * deferred it. This reuses exactly the path [openPdf] already established -- `notices.pdfFile`
+     * returns a cached copy instantly, or fetches now because a tap is consent, bypassing
+     * [FetchPolicy] -- and the same [_downloadingPdf] guard and spinner, so a Share tap and an
+     * open-PDF tap on the same notice cannot race each other into two downloads.
+     *
+     * If the fetch fails, [then] is simply never called: no message, the spinner stops and the
+     * glyph returns, the same state the user could already act on.
+     */
+    fun withAttachmentFile(notice: NoticeEntity, then: (java.io.File) -> Unit) {
+        if (notice.id in _downloadingPdf.value) return
+        _downloadingPdf.value = _downloadingPdf.value + notice.id
+        viewModelScope.launch {
+            try {
+                notices.pdfFile(notice)?.let(then)
+            } finally {
+                _downloadingPdf.value = _downloadingPdf.value - notice.id
+            }
+        }
+    }
+
+    /**
      * A tap on the download glyph: fetches whichever of [notice]'s attachments are missing, right
      * now, bypassing [FetchPolicy] entirely.
      *

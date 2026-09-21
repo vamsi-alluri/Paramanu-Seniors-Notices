@@ -89,6 +89,8 @@ fun NoticeListScreen(
     /** Notices whose circular is downloading. Held by the view model so it survives scrolling. */
     downloadingPdf: Set<Long>,
     onOpenPdf: (NoticeEntity) -> Unit,
+    /** Share/Save on a circular that may not be on the phone yet. See NoticeViewModel.withAttachmentFile. */
+    onFetchPdfFile: (NoticeEntity, (File) -> Unit) -> Unit,
     /** A tap on the download glyph. Bypasses the fetch policy -- a tap is consent. */
     onDownloadAttachment: (NoticeEntity) -> Unit,
     onToggleSelection: (Long) -> Unit,
@@ -196,6 +198,7 @@ fun NoticeListScreen(
                             onOpenImage = { onOpenImage(notice) },
                             downloading = notice.id in downloadingPdf,
                             onOpenPdf = { onOpenPdf(notice) },
+                            onFetchPdfFile = { onReady -> onFetchPdfFile(notice, onReady) },
                             onDownloadAttachment = { onDownloadAttachment(notice) },
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
@@ -314,6 +317,7 @@ private fun NoticeRow(
     onOpenImage: () -> Unit,
     downloading: Boolean,
     onOpenPdf: () -> Unit,
+    onFetchPdfFile: (onReady: (File) -> Unit) -> Unit,
     onDownloadAttachment: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -454,6 +458,7 @@ private fun NoticeRow(
                     downloading = downloading,
                     onOpenImage = onOpenImage,
                     onOpenPdf = onOpenPdf,
+                    onFetchPdfFile = onFetchPdfFile,
                     onLongClick = onLongClick,
                 )
             } else if (notice.body.isNotBlank()) {

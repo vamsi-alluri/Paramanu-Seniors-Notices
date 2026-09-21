@@ -17,6 +17,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -30,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -48,16 +51,22 @@ import java.io.File
  */
 
 /**
- * Open / Share / Save for one cached file.
+ * Share / Save for one attachment.
  *
- * Shown only when the file is actually on the phone. That is the honest version of the reasoning
- * ShareText was written with -- it declined to share images because a render may have been pruned,
- * and a share that silently carries nothing is worse than no button. The condition, not the
- * feature, was the right response.
+ * [resolveFile] rather than a plain `File`: for a circular the file this must act on is the PDF
+ * binary, all pages -- never the rendered page-one thumbnail sitting above these buttons -- and
+ * that binary may not be on the phone yet if a metered connection deferred it. [resolveFile] hides
+ * that difference. It calls back with the real file once one exists, synchronously for a picture
+ * that is already local, or after a fetch (behind the caller's own spinner) for a circular that
+ * is not. Should the fetch fail, it is simply never called -- no message, per this app's rule for
+ * every failure a tap can retry.
+ *
+ * "Open" was a third button here; the one-attachment redesign removed it, because the picture
+ * above these buttons already opens on a tap and a second way to do the same thing taught nothing.
  */
 @Composable
 private fun FileActions(
-    file: File,
+    resolveFile: (onReady: (File) -> Unit) -> Unit,
     shareText: String,
     modifier: Modifier = Modifier,
 ) {
@@ -65,7 +74,8 @@ private fun FileActions(
     var pending by remember { mutableStateOf<File?>(null) }
 
     // StartActivityForResult rather than the CreateDocument contract, because that contract fixes
-    // the MIME type when the launcher is created and this row may offer a JPEG and a PDF at once.
+    // the MIME type when the launcher is created and the file it ends up asked to save is only
+    // known once resolveFile calls back.
     val saver = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -87,27 +97,31 @@ private fun FileActions(
 
     Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
         TextButton(onClick = {
-            // Falls through to nothing on a phone with no viewer for this type; the row's own
-            // image is still tappable and the in-app viewer still works.
-            AttachmentActions.open(context, file)
+            resolveFile { file ->
+                AttachmentActions.share(
+                    context = context,
+                    file = file,
+                    text = shareText,
+                    chooserTitle = context.getString(R.string.action_share_chooser),
+                )
+            }
         }) {
-            Text(stringResource(R.string.action_open_with))
-        }
-        TextButton(onClick = {
-            AttachmentActions.share(
-                context = context,
-                file = file,
-                text = shareText,
-                chooserTitle = context.getString(R.string.action_share_chooser),
+            // Iconed, unlike Save, because the user asked for Share to be recognisable at a glance.
+            Icon(
+                painter = painterResource(R.drawable.ic_share),
+                contentDescription = null,
+                modifier = Modifier.size(18.dp),
             )
-        }) {
+            Spacer(Modifier.width(4.dp))
             Text(stringResource(R.string.action_share))
         }
         TextButton(onClick = {
-            pending = file
-            saver.launch(
-                AttachmentActions.saveIntent(file.name, AttachmentActions.mimeOf(file))
-            )
+            resolveFile { file ->
+                pending = file
+                saver.launch(
+                    AttachmentActions.saveIntent(file.name, AttachmentActions.mimeOf(file))
+                )
+            }
         }) {
             Text(stringResource(R.string.action_save))
         }
@@ -186,10 +200,15 @@ fun LinkCard(
  *
  * A notice carries at most one attachment -- a PDF or an image, never both, per the one-enclosure
  * rule `Poller.gs:105` already enforces upstream -- so [photo] and [pdfRender] resolve to a single
- * file: the photo if there is one, otherwise the rendered PDF page. Both are local files, already
- * downloaded when the notice arrived, so resolving one performs no network I/O and works offline.
- * The circular itself is a different matter and is fetched on demand when tapped -- see
- * [downloading].
+ * file to display: the photo if there is one, otherwise the rendered PDF page. Both are local
+ * files, already downloaded when the notice arrived, so resolving one performs no network I/O and
+ * works offline.
+ *
+ * The rendered page is display-only, though -- it is a thumbnail, never opened, shared or saved.
+ * The circular behind it is a different file that may not be on the phone yet, and is fetched on
+ * demand: tapping it (see [onOpenPdf]) or Share/Save (see [onFetchPdfFile]) both go through the
+ * same fetch, both show the same [downloading] spinner over the thumbnail, and neither applies
+ * FetchPolicy -- a tap is consent.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -198,9 +217,13 @@ fun NoticeAttachments(
     photo: File?,
     pdfRender: File?,
     shareText: String,
+    /** Whether this notice's circular is being fetched right now, for the tile's spinner. */
     downloading: Boolean,
     onOpenImage: () -> Unit,
+    /** Attachment tap, PDF notice: fetch if needed, then hand to an external reader. */
     onOpenPdf: () -> Unit,
+    /** Share/Save tap: fetch if needed, then hand the real PDF binary to [onReady]. */
+    onFetchPdfFile: (onReady: (File) -> Unit) -> Unit,
     onLongClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -223,7 +246,15 @@ fun NoticeAttachments(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))
-                        .combinedClickable(onClick = onOpenImage, onLongClick = onLongClick),
+                        .combinedClickable(
+                            // Tapping the picture *is* opening it -- there is no separate Open
+                            // button any more. Inert mid-fetch, the same reasoning as
+                            // AttachmentPlaceholder: a second tap here would only start a second
+                            // fetch behind the view model's re-entry guard, and a tile that looks
+                            // tappable while doing nothing is worse than one that plainly is not.
+                            onClick = { if (!downloading) { if (isPdf) onOpenPdf() else onOpenImage() } },
+                            onLongClick = onLongClick,
+                        ),
                 )
                 AttachmentBadge(
                     text = badgeText,
@@ -231,9 +262,31 @@ fun NoticeAttachments(
                         .align(Alignment.BottomStart)
                         .clip(RoundedCornerShape(bottomStart = 8.dp, bottomEnd = 0.dp)),
                 )
+                if (downloading) {
+                    // A 2MB circular on a poor connection takes long enough that a picture which
+                    // simply sat still would read as broken and get tapped again -- this is what
+                    // used to be a separate "Open the full notice" button's own spinner, now over
+                    // the thing that is actually fetching.
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .background(
+                                MaterialTheme.colorScheme.scrim.copy(alpha = 0.35f),
+                                RoundedCornerShape(8.dp),
+                            )
+                            .padding(16.dp),
+                    ) {
+                        CircularProgressIndicator(color = MaterialTheme.colorScheme.onPrimary)
+                    }
+                }
             }
             FileActions(
-                file = attachment,
+                resolveFile = { onReady ->
+                    // The image case needs no fetch: [attachment] is already the real file. Only a
+                    // PDF routes through onFetchPdfFile, because [attachment] there is the render,
+                    // display-only, and never the thing Share or Save may act on.
+                    if (isPdf) onFetchPdfFile(onReady) else onReady(attachment)
+                },
                 shareText = shareText,
                 modifier = Modifier.padding(top = 4.dp),
             )
