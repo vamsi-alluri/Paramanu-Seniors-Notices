@@ -14,11 +14,14 @@ FCM HTTP v1, to the dispensary's notice topic: its first entry by `order` under
     "topic": "notices-v1",
     "android": { "priority": "high" },
     "data": {
-      "logId":  "1788248869397",
-      "topic":  "notices-v1",
-      "title":  "Dispensary closed on Thursday 28 August",
-      "body":   "OPD will reopen at 9 am on Friday.",
-      "pdfUrl": "https://paramanuseniorshealth.org/notices/2026-08-28.pdf"
+      "logId":      "1788248869397",
+      "topic":      "notices-v1",
+      "title":      "Dispensary closed on Thursday 28 August",
+      "body":       "OPD will reopen at 9 am on Friday.",
+      "pdfUrl":     "https://paramanuseniorshealth.org/notices/2026-08-28.pdf",
+      "pdfThumbUrl":"https://paramanuseniorshealth.org/notices/2026-08-28-thumb.jpg",
+      "pdfPages":   "192",
+      "pdfBytes":   "5872345"
     }
   }
 }
@@ -60,6 +63,35 @@ ordering away.
 
 **`pdfUrl` is optional** and must be a plain, unauthenticated HTTPS URL to a PDF. Anything the app
 cannot fetch or render costs only the picture — the notice still arrives as text.
+
+**`pdfThumbUrl`, `pdfPages` and `pdfBytes` are optional, PDF-only, and travel together with
+`pdfUrl`.** A real circular can run to hundreds of pages and several megabytes; fetching the
+original on every one of four hundred phones for every notice is the problem these three keys
+exist to avoid. In their place the app shows a small published thumbnail immediately and fetches
+the full PDF only if the reader taps it.
+
+| Key | Source in the feed | Notes |
+|---|---|---|
+| `pdfThumbUrl` | `media:thumbnail/@url` | A rendering of the PDF's first page, published as a JPEG. |
+| `pdfPages` | `pn:pages` | A custom extension element — there is no standard RSS field for a page count. |
+| `pdfBytes` | `enclosure/@length` | Already required by the RSS 2.0 spec for every enclosure; simply not discarded. |
+
+All three are sent as **strings**, like every other `data` value, and omitted entirely rather than
+sent empty, zero or `"NaN"` when the source is missing or unparsable — the app treats a
+present-but-junk value differently from an absent one, so a sloppy passthrough is worse than no
+value at all. None of the three is ever sent without `pdfUrl` also being present.
+
+**Producing the thumbnail, page count and size is a CI step, not something Hugo does.** Hugo's own
+image processing can resize and reformat images, but it cannot rasterize a PDF — its pipeline
+accepts only formats it can already decode as an image, and a PDF is not one of them. The
+thumbnail must therefore be produced *before* Hugo runs, as a build step, and dropped into
+`assets/` alongside the PDF so Hugo can serve it like any other image:
+
+```bash
+pdftoppm -jpeg -r 100 -f 1 -l 1 circular.pdf thumb   # thumb-1.jpg: first page only, 100 dpi
+pdfinfo circular.pdf | grep Pages                    # page count, for pn:pages
+stat -c %s circular.pdf                               # byte size, for enclosure/@length
+```
 
 ## Activation codes
 
