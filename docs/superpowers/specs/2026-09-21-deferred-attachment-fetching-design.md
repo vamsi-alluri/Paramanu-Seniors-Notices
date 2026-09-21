@@ -34,8 +34,7 @@ kept.
 ## Decisions taken
 
 - **Attachment fetching leaves the FCM service entirely** and moves to a
-  `WorkManager` job with a random 0–60 minute initial delay. The jitter spreads
-  ~400 simultaneous downloads across an hour instead of a thunderclap.
+  `WorkManager` job with a small random initial delay.
 - **The notification posts immediately**, before any attachment exists, with a
   type placeholder.
 - **Messages are still sent at FCM high priority.** Without it the app is not
@@ -101,11 +100,25 @@ the circular without making any request at all.
   next finds wifi is worse than one that never arrives, because it cannot be
   explained without words. The metered and roaming questions are asked at
   execution, where they can produce a tappable glyph instead of a silent wait.
-- `setInitialDelay` to a uniform random 0–60 minutes, injected rather than
+- `setInitialDelay` to a uniform random **0–2 minutes**, injected rather than
   computed inline so the range is testable.
+
+  This began as 0–60 minutes, sized against a thundering herd hitting an origin
+  server. The attachments are served from GitHub Pages, which is a CDN: 400
+  requests for one cached file is a non-event, and the edge collapses concurrent
+  misses into a single origin fetch. What actually binds is the monthly bandwidth
+  quota, and spreading a download does nothing for a quota — 400 devices fetching
+  5.6MB costs the same whether it takes a second or an hour. The lever for that is
+  the published thumbnail, not the delay.
+
+  A long delay also costs something real: `updatePicture` deliberately does nothing
+  once the notification has left the tray, so a picture arriving an hour late lands
+  in the app only and the notification never fills in. Two minutes keeps it inside
+  the window where the notice is still on screen. What remains of the jitter is
+  cheap insurance against ever moving off a CDN.
 - No `requiresBatteryNotLow`. A notice attachment matters more than a few
   percent of battery.
-- No entitlement re-check. The window is an hour and revocation is handled on
+- No entitlement re-check. The window is minutes, and revocation is handled on
   its own path.
 - Timeout rises from 8 seconds to 5 minutes. Nothing is being held up any more.
   `TAP_TIMEOUT_MS` (60s) is unchanged for the tap path.

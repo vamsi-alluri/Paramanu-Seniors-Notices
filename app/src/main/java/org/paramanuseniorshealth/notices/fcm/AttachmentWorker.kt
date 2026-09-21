@@ -135,7 +135,26 @@ class AttachmentWorker(
         private const val KEY_LOG_ID = "logId"
         private const val CATCH_UP = "attachment-catch-up"
         private const val CATCH_UP_WIFI = "attachment-catch-up-wifi"
-        private const val MAX_JITTER_SECONDS = 60L * 60
+        /**
+         * Two minutes, not the hour this started as.
+         *
+         * The hour was sized against a thundering herd hitting an origin server. The attachments
+         * are served from GitHub Pages, which is a CDN -- 400 requests for one cached file is a
+         * non-event, and the edge collapses concurrent misses into a single origin fetch, so even a
+         * cold file does not produce a stampede.
+         *
+         * What actually binds is the monthly bandwidth quota, and spreading a download out does
+         * nothing for a quota: 400 devices fetching 5.6MB costs the same 2.2GB whether it happens
+         * in one second or over an hour. The lever for that is the published thumbnail, which takes
+         * the same notice to about 70MB -- see [NoticeImageStore.fetchPdfThumb].
+         *
+         * So the jitter is now only cheap insurance against ever moving off a CDN, and it is kept
+         * short because a long one costs something real: [NoticeNotifications.updatePicture]
+         * deliberately does nothing once the notification has left the tray, so a picture arriving
+         * an hour late lands in the app only and the notification never fills in at all. Two
+         * minutes is inside the window where the notice is still on screen.
+         */
+        private const val MAX_JITTER_SECONDS = 2L * 60
 
         private fun connected() =
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
@@ -144,10 +163,12 @@ class AttachmentWorker(
             Constraints.Builder().setRequiredNetworkType(NetworkType.UNMETERED).build()
 
         /**
-         * The per-notice fetch, delayed by up to an hour.
+         * The per-notice fetch, delayed by up to [MAX_JITTER_SECONDS].
          *
-         * The jitter is the point: without it ~400 phones would start the same download in the same
-         * second. `CONNECTED` rather than `UNMETERED`, because an unmetered *constraint* waits
+         * The delay is deliberately small: see [MAX_JITTER_SECONDS] for why spreading the load
+         * turned out not to be the thing worth optimising for.
+         *
+         * `CONNECTED` rather than `UNMETERED`, because an unmetered *constraint* waits
          * indefinitely, and a thumbnail arriving in three days when the user next finds wifi is
          * worse than one that never arrives -- it cannot be explained, and this app does not
          * explain things. The metering question is asked at execution instead, where its answer can
