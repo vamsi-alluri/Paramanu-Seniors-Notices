@@ -105,7 +105,7 @@ class AttachmentWorker(
         val metered = withContext(Dispatchers.IO) { NetworkStatus.isMetered(context) }
         val roaming = withContext(Dispatchers.IO) { NetworkStatus.isRoaming(context) }
 
-        fetchAttachments(context, app.repository, notice, logId) { url, known ->
+        fetchAttachments(context, app.repository, notice, logId, tapInitiated = false) { url, known ->
             decide(url, known, metered, roaming)
         }
     }
@@ -211,14 +211,21 @@ class AttachmentWorker(
          *
          * Shared between [fetch] (the policy-gated worker sweep) and [fetchNow] (an explicit tap)
          * so there is one place that knows which attachments a notice can carry and how the outcome
-         * is recorded -- only the verdict differs between them. See [fetch] for why the notification
-         * update and the wifi re-enqueue are unconditional.
+         * is recorded -- only the verdict and [tapInitiated] differ between them. See [fetch] for
+         * why the notification update and the wifi re-enqueue are unconditional.
+         *
+         * [tapInitiated] threads two things that must not be inferred from the verdict alone: it
+         * tells [NoticeImageStore.fetchPdfKeeping] to use a scratch file distinct from the worker's
+         * own, since a tap bypasses [FetchPolicy] and so can run concurrently with a sweep for the
+         * same notice; and it tells [FetchPolicy.nextAttempts] that a failure here must not burn the
+         * automatic-retry budget -- the user asking is not the app failing on its own.
          */
         private suspend fun fetchAttachments(
             context: Context,
             repository: NoticeRepository,
             notice: NoticeEntity,
             logId: String,
+            tapInitiated: Boolean,
             verdict: suspend (url: String, known: Long?) -> Verdict,
         ) {
             var deferred = false
@@ -269,7 +276,9 @@ class AttachmentWorker(
                     // document. Its size decides, and the result is kept rather than thrown away.
                     when (verdict(pdfUrl, notice.pdfBytes)) {
                         Verdict.FETCH -> {
-                            val fetched = NoticeImageStore.fetchPdfKeeping(context, pdfUrl, logId)
+                            val fetched = NoticeImageStore.fetchPdfKeeping(
+                                context, pdfUrl, logId, tapInitiated,
+                            )
                             if (fetched == null) failed = true else {
                                 pages = fetched.pages
                                 bytes = fetched.bytes
@@ -281,7 +290,7 @@ class AttachmentWorker(
             }
 
             val state = FetchPolicy.outcome(deferred = deferred, failed = failed)
-            val attempts = FetchPolicy.nextAttempts(state, notice.attachmentAttempts)
+            val attempts = FetchPolicy.nextAttempts(state, notice.attachmentAttempts, tapInitiated)
             repository.recordAttachment(logId, state, attempts, pages, bytes)
 
             // Unconditional, and deliberately not gated on FETCHED. A notice carrying a sender photo
@@ -317,7 +326,9 @@ class AttachmentWorker(
          */
         suspend fun fetchNow(context: Context, repository: NoticeRepository, notice: NoticeEntity) {
             val logId = notice.logId ?: return
-            fetchAttachments(context, repository, notice, logId) { _, _ -> Verdict.FETCH }
+            fetchAttachments(context, repository, notice, logId, tapInitiated = true) { _, _ ->
+                Verdict.FETCH
+            }
         }
     }
 }

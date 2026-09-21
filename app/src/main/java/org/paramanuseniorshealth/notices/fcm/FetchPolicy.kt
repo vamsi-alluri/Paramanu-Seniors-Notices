@@ -108,16 +108,24 @@ object FetchPolicy {
     /**
      * The attempt count to store alongside [state], given [current].
      *
-     * Only a failure increments. A deferral carries the count forward untouched -- deferring is the
-     * policy working, and `updateAttachment` overwrites unconditionally, so passing anything else
-     * would silently rewrite history. A success resets to zero, so a notice that failed four times
-     * on a bad connection and then succeeded is not left one failure from the cap.
+     * Only a failure increments, and only when it was not [tapInitiated]. A deferral carries the
+     * count forward untouched -- deferring is the policy working, and `updateAttachment` overwrites
+     * unconditionally, so passing anything else would silently rewrite history. A success resets to
+     * zero, so a notice that failed four times on a bad connection and then succeeded is not left
+     * one failure from the cap.
+     *
+     * [tapInitiated] exists for the same reason a deferral does not count: the user tapping the
+     * download glyph with no connection is not the app failing on its own, and burning an attempt
+     * for it would mean five bad-luck taps permanently end the automatic "it fixes itself on wifi"
+     * sweeps for that notice -- while the tap that caused it still works, since a tap always
+     * bypasses [shouldRetry]. The manual retry path must not spend the automatic one's budget.
      */
-    fun nextAttempts(state: AttachmentState, current: Int): Int = when (state) {
-        AttachmentState.FAILED -> current + 1
-        AttachmentState.FETCHED -> 0
-        AttachmentState.PENDING, AttachmentState.DEFERRED -> current
-    }
+    fun nextAttempts(state: AttachmentState, current: Int, tapInitiated: Boolean = false): Int =
+        when (state) {
+            AttachmentState.FAILED -> if (tapInitiated) current else current + 1
+            AttachmentState.FETCHED -> 0
+            AttachmentState.PENDING, AttachmentState.DEFERRED -> current
+        }
 
     /** Delivered once and since pruned. Shows the glyph, but never re-downloads by itself. */
     fun isPruned(state: AttachmentState, fileExists: Boolean): Boolean =

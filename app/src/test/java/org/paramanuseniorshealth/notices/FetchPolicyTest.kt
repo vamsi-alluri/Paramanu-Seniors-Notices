@@ -82,6 +82,17 @@ class FetchPolicyTest {
         assertEquals(3, FetchPolicy.nextAttempts(AttachmentState.PENDING, 3))
     }
 
+    /**
+     * A tap that fails must not spend the automatic-retry budget: five unlucky taps must not end
+     * the standing wifi sweep for a notice the user only ever failed to reach manually.
+     */
+    @Test
+    fun `a tap-initiated failure does not burn an attempt`() {
+        assertEquals(3, FetchPolicy.nextAttempts(AttachmentState.FAILED, 3, tapInitiated = true))
+        assertEquals(4, FetchPolicy.nextAttempts(AttachmentState.FAILED, 3, tapInitiated = false))
+        assertEquals(4, FetchPolicy.nextAttempts(AttachmentState.FAILED, 3))
+    }
+
     /** Otherwise a notice that finally succeeded would sit one failure from the cap forever. */
     @Test
     fun `a success resets the attempt count`() {

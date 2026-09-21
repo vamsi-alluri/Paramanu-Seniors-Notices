@@ -400,6 +400,7 @@ private fun NoticeRow(
                     // files only and would otherwise show nothing at all for a failed download.
                     AttachmentPlaceholder(
                         isPdf = !notice.pdfUrl.isNullOrBlank(),
+                        downloading = downloading,
                         onDownload = onDownloadAttachment,
                     )
                     Spacer(Modifier.width(12.dp))

@@ -1,11 +1,13 @@
 package org.paramanuseniorshealth.notices.ui
 
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -16,6 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.activation.ActivationRepository
@@ -207,13 +210,30 @@ class NoticeViewModel(
      *
      * [context] is the application context, threaded in from the call site rather than held by this
      * view model, for the same reason given at [onResumed].
+     *
+     * The whole call is moved onto [Dispatchers.IO], not just the network inside it. Under
+     * [AttachmentWorker] that same work runs on `Dispatchers.Default`; `viewModelScope.launch`
+     * defaults to the main thread, and while every `NoticeImageStore.fetch*` wraps its own network
+     * I/O, the tail does not -- `NoticeNotifications.updatePicture` makes a binder call and decodes
+     * what may be a rendered A4 page, and the `cachedXxx` lookups inside it are disk reads. Left on
+     * the main thread that is jank on exactly the low-end devices this app targets.
+     *
+     * Wrapped in [runCatching] for the same reason `doWork` wraps its own call to `fetch`: a throw
+     * here -- disk full during `recordAttachment`, say -- is a bug, not a policy decision, and must
+     * not escape [viewModelScope] and crash the app.
      */
     fun downloadAttachment(notice: NoticeEntity, context: Context) {
         if (notice.id in _downloadingPdf.value) return
         _downloadingPdf.value = _downloadingPdf.value + notice.id
         viewModelScope.launch {
             try {
-                AttachmentWorker.fetchNow(context.applicationContext, notices, notice)
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        AttachmentWorker.fetchNow(context.applicationContext, notices, notice)
+                    }.onFailure { failure ->
+                        Log.w(TAG, "Attachment download threw for ${notice.logId}", failure)
+                    }
+                }
             } finally {
                 _downloadingPdf.value = _downloadingPdf.value - notice.id
             }
@@ -470,6 +490,8 @@ class NoticeViewModel(
     }
 
     companion object {
+        private const val TAG = "NoticeViewModel"
+
         /** The tap and the database write race, so resolution retries for about a second. */
         private const val RESOLVE_ATTEMPTS = 5
         private const val RESOLVE_RETRY_MS = 200L

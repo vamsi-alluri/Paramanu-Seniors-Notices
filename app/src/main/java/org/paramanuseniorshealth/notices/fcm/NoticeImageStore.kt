@@ -262,18 +262,34 @@ object NoticeImageStore {
      * introduced here: [fetchPicture] and [fetchPdf] have the identical shape. It is also
      * harmless -- the worker records FAILED for the timeout, the late write lands a valid
      * pdf+render pair, and the next sweep finds [cachedPdfRender] non-null, skips the fetch, and
-     * records FETCHED. This function's scratch file is named distinctly from [fetchPdf]'s so that
-     * late write cannot collide with a concurrent tap-path download for the same notice.
+     * records FETCHED. This function's scratch file is named distinctly from [fetchPdf]'s, and
+     * [tapInitiated] further splits it from itself, for the reason given at that parameter.
      */
-    suspend fun fetchPdfKeeping(context: Context, pdfUrl: String, logId: String): PdfFetch? =
+    suspend fun fetchPdfKeeping(
+        context: Context,
+        pdfUrl: String,
+        logId: String,
+        /**
+         * True when this call came from an explicit tap ([AttachmentWorker.fetchNow], via
+         * `NoticeViewModel.downloadAttachment`) rather than the policy-gated worker sweep.
+         *
+         * A tap bypasses [FetchPolicy] entirely, so it is not exclusive with a sweep already in
+         * flight for the same notice: `AttachmentWorker.enqueueCatchUp` runs on every app-open, and
+         * a user can tap a deferred circular's glyph the moment the app comes forward, landing two
+         * `HttpURLConnection`s writing and renaming the same scratch file at once. Each caller
+         * therefore gets its own scratch name -- this is the flag that decides which.
+         */
+        tapInitiated: Boolean = false,
+    ): PdfFetch? =
         withTimeoutOrNull(WORKER_TIMEOUT_MS) {
             withContext(Dispatchers.IO) {
-                // Named differently from fetchPdf's "notice_$logId-doc.part": the worker's much
-                // wider timeout (5 minutes vs. fetchPdf's 60 seconds) makes it plausible for both
-                // to be mid-download for the same logId at once, and two HttpURLConnections
-                // writing to and renaming the same scratch file would corrupt each other. Keep
-                // this name distinct rather than folding it back into a shared constant.
-                val scratch = File(context.cacheDir, "notice_$logId-doc-worker.part")
+                // Named differently from fetchPdf's "notice_$logId-doc.part" for the identical
+                // reason given at [tapInitiated] above, and differently again between a worker call
+                // and a tap call to this same function -- see [tapInitiated].
+                val scratch = File(
+                    context.cacheDir,
+                    "notice_$logId-doc-${if (tapInitiated) "tap" else "worker"}.part",
+                )
                 runCatching {
                     download(pdfUrl, scratch)
                     // pageCount and isReadablePdf open the file identically (same guards, same
