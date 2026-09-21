@@ -14,6 +14,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.data.NoticeEntity
+import org.paramanuseniorshealth.notices.data.NoticeRepository
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
@@ -104,81 +105,8 @@ class AttachmentWorker(
         val metered = withContext(Dispatchers.IO) { NetworkStatus.isMetered(context) }
         val roaming = withContext(Dispatchers.IO) { NetworkStatus.isRoaming(context) }
 
-        var deferred = false
-        var failed = false
-        var pages: Int? = null
-        var bytes: Long? = null
-
-        // Small things first: a link logo and a sender photo clear the 2MB threshold on any
-        // non-roaming connection, so the card has something to show within the hour.
-        notice.linkImage?.takeIf { it.isNotBlank() }?.let { url ->
-            if (NoticeImageStore.cachedLinkImage(context, logId) == null) {
-                when (decide(url, null, metered, roaming)) {
-                    Verdict.FETCH -> if (
-                        NoticeImageStore.fetchLinkImage(context, url, logId) == null
-                    ) failed = true
-                    Verdict.DEFER -> deferred = true
-                }
-            }
-        }
-
-        notice.imageUrl?.takeIf { it.isNotBlank() }?.let { url ->
-            if (NoticeImageStore.cachedImage(context, logId) == null) {
-                when (decide(url, null, metered, roaming)) {
-                    Verdict.FETCH ->
-                        if (NoticeImageStore.fetchImage(context, url, logId) == null) failed = true
-                    Verdict.DEFER -> deferred = true
-                }
-            }
-        }
-
-        // The circular. Two quite different routes.
-        val pdfUrl = notice.pdfUrl?.takeIf { it.isNotBlank() }
-        val thumbUrl = notice.pdfThumbUrl?.takeIf { it.isNotBlank() }
-        if (pdfUrl != null && NoticeImageStore.cachedPdfRender(context, logId) == null) {
-            if (thumbUrl != null) {
-                // The pipeline has published a first-page image, so the document itself is not
-                // touched until somebody taps it. This is the whole egress saving and it must not
-                // be "optimised" into pre-fetching on wifi: the website pays for the bytes whatever
-                // the phone is connected to.
-                when (decide(thumbUrl, null, metered, roaming)) {
-                    Verdict.FETCH -> if (
-                        NoticeImageStore.fetchPdfThumb(context, thumbUrl, logId) == null
-                    ) failed = true
-                    Verdict.DEFER -> deferred = true
-                }
-            } else {
-                // No published thumbnail, so page one can only be had by downloading the document.
-                // Its size decides, and the result is kept rather than thrown away.
-                when (decide(pdfUrl, notice.pdfBytes, metered, roaming)) {
-                    Verdict.FETCH -> {
-                        val fetched = NoticeImageStore.fetchPdfKeeping(context, pdfUrl, logId)
-                        if (fetched == null) failed = true else {
-                            pages = fetched.pages
-                            bytes = fetched.bytes
-                        }
-                    }
-                    Verdict.DEFER -> deferred = true
-                }
-            }
-        }
-
-        val state = FetchPolicy.outcome(deferred = deferred, failed = failed)
-        val attempts = FetchPolicy.nextAttempts(state, notice.attachmentAttempts)
-        app.repository.recordAttachment(logId, state, attempts, pages, bytes)
-
-        // Unconditional, and deliberately not gated on FETCHED. A notice carrying a sender photo
-        // and a thumbless circular on a metered connection fetches the photo and defers the
-        // document, so the outcome is DEFERRED -- and gating here would leave the tray showing a
-        // type placeholder while the photo sat on disk and the in-app row already displayed it.
-        // That is exactly the case the deferral machinery exists to handle well. updatePicture
-        // early-returns when the notification is gone and when nothing is cached, so it is already
-        // a no-op in every case where it should not act.
-        NoticeNotifications.updatePicture(context, notice)
-        if (state == AttachmentState.DEFERRED) {
-            // Nothing is scheduled for "later on mobile data" -- that is the tap. This is only the
-            // standing wifi sweep, which costs nothing while no wifi appears.
-            enqueueWifiCatchUp(context)
+        fetchAttachments(context, app.repository, notice, logId) { url, known ->
+            decide(url, known, metered, roaming)
         }
     }
 
@@ -274,6 +202,122 @@ class AttachmentWorker(
 
             WorkManager.getInstance(context.applicationContext)
                 .enqueueUniqueWork(CATCH_UP_WIFI, ExistingWorkPolicy.KEEP, request)
+        }
+
+        /**
+         * Whichever of [notice]'s attachments are missing, fetched or deferred per URL by
+         * [verdict], then recorded through [NoticeRepository.recordAttachment] and reflected in the
+         * notification tray.
+         *
+         * Shared between [fetch] (the policy-gated worker sweep) and [fetchNow] (an explicit tap)
+         * so there is one place that knows which attachments a notice can carry and how the outcome
+         * is recorded -- only the verdict differs between them. See [fetch] for why the notification
+         * update and the wifi re-enqueue are unconditional.
+         */
+        private suspend fun fetchAttachments(
+            context: Context,
+            repository: NoticeRepository,
+            notice: NoticeEntity,
+            logId: String,
+            verdict: suspend (url: String, known: Long?) -> Verdict,
+        ) {
+            var deferred = false
+            var failed = false
+            var pages: Int? = null
+            var bytes: Long? = null
+
+            // Small things first: a link logo and a sender photo clear the 2MB threshold on any
+            // non-roaming connection, so the card has something to show within the hour.
+            notice.linkImage?.takeIf { it.isNotBlank() }?.let { url ->
+                if (NoticeImageStore.cachedLinkImage(context, logId) == null) {
+                    when (verdict(url, null)) {
+                        Verdict.FETCH -> if (
+                            NoticeImageStore.fetchLinkImage(context, url, logId) == null
+                        ) failed = true
+                        Verdict.DEFER -> deferred = true
+                    }
+                }
+            }
+
+            notice.imageUrl?.takeIf { it.isNotBlank() }?.let { url ->
+                if (NoticeImageStore.cachedImage(context, logId) == null) {
+                    when (verdict(url, null)) {
+                        Verdict.FETCH ->
+                            if (NoticeImageStore.fetchImage(context, url, logId) == null) failed = true
+                        Verdict.DEFER -> deferred = true
+                    }
+                }
+            }
+
+            // The circular. Two quite different routes.
+            val pdfUrl = notice.pdfUrl?.takeIf { it.isNotBlank() }
+            val thumbUrl = notice.pdfThumbUrl?.takeIf { it.isNotBlank() }
+            if (pdfUrl != null && NoticeImageStore.cachedPdfRender(context, logId) == null) {
+                if (thumbUrl != null) {
+                    // The pipeline has published a first-page image, so the document itself is not
+                    // touched until somebody taps it. This is the whole egress saving and it must
+                    // not be "optimised" into pre-fetching on wifi: the website pays for the bytes
+                    // whatever the phone is connected to.
+                    when (verdict(thumbUrl, null)) {
+                        Verdict.FETCH -> if (
+                            NoticeImageStore.fetchPdfThumb(context, thumbUrl, logId) == null
+                        ) failed = true
+                        Verdict.DEFER -> deferred = true
+                    }
+                } else {
+                    // No published thumbnail, so page one can only be had by downloading the
+                    // document. Its size decides, and the result is kept rather than thrown away.
+                    when (verdict(pdfUrl, notice.pdfBytes)) {
+                        Verdict.FETCH -> {
+                            val fetched = NoticeImageStore.fetchPdfKeeping(context, pdfUrl, logId)
+                            if (fetched == null) failed = true else {
+                                pages = fetched.pages
+                                bytes = fetched.bytes
+                            }
+                        }
+                        Verdict.DEFER -> deferred = true
+                    }
+                }
+            }
+
+            val state = FetchPolicy.outcome(deferred = deferred, failed = failed)
+            val attempts = FetchPolicy.nextAttempts(state, notice.attachmentAttempts)
+            repository.recordAttachment(logId, state, attempts, pages, bytes)
+
+            // Unconditional, and deliberately not gated on FETCHED. A notice carrying a sender photo
+            // and a thumbless circular on a metered connection fetches the photo and defers the
+            // document, so the outcome is DEFERRED -- and gating here would leave the tray showing a
+            // type placeholder while the photo sat on disk and the in-app row already displayed it.
+            // That is exactly the case the deferral machinery exists to handle well. updatePicture
+            // early-returns when the notification is gone and when nothing is cached, so it is
+            // already a no-op in every case where it should not act.
+            NoticeNotifications.updatePicture(context, notice)
+            if (state == AttachmentState.DEFERRED) {
+                // Nothing is scheduled for "later on mobile data" -- that is the tap. This is only
+                // the standing wifi sweep, which costs nothing while no wifi appears.
+                enqueueWifiCatchUp(context)
+            }
+        }
+
+        /**
+         * Fetches whichever of [notice]'s attachments are missing, right now, bypassing
+         * [FetchPolicy] entirely.
+         *
+         * Called only from an explicit tap on the download glyph (see
+         * `NoticeViewModel.downloadAttachment`). A tap is consent -- the policy exists to protect a
+         * user's data plan without their say-so, and asking is exactly what the tap already did, so
+         * asking it again here would be asking permission for permission already given.
+         *
+         * Shares [fetchAttachments] with the worker's policy-gated sweep so a successful tap is
+         * recorded exactly the way a successful sweep is: [AttachmentState.FETCHED] with the attempt
+         * count reset to zero. No-ops when [notice] has no logId -- every cache and every
+         * notification key on it, so there is nothing to fetch into and nowhere to record the
+         * outcome. That is a real possibility here, unlike in [fetch]: this is reached from whatever
+         * the UI happens to be showing, not from a query that already filtered on logId.
+         */
+        suspend fun fetchNow(context: Context, repository: NoticeRepository, notice: NoticeEntity) {
+            val logId = notice.logId ?: return
+            fetchAttachments(context, repository, notice, logId) { _, _ -> Verdict.FETCH }
         }
     }
 }

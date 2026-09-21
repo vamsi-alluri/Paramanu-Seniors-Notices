@@ -89,6 +89,8 @@ fun NoticeListScreen(
     /** Notices whose circular is downloading. Held by the view model so it survives scrolling. */
     downloadingPdf: Set<Long>,
     onOpenPdf: (NoticeEntity) -> Unit,
+    /** A tap on the download glyph. Bypasses the fetch policy -- a tap is consent. */
+    onDownloadAttachment: (NoticeEntity) -> Unit,
     onToggleSelection: (Long) -> Unit,
     onClearSelection: () -> Unit,
     onDeleteSelected: () -> Unit,
@@ -194,6 +196,7 @@ fun NoticeListScreen(
                             onOpenImage = { onOpenImage(notice) },
                             downloading = notice.id in downloadingPdf,
                             onOpenPdf = { onOpenPdf(notice) },
+                            onDownloadAttachment = { onDownloadAttachment(notice) },
                             modifier = Modifier.padding(horizontal = 16.dp),
                         )
                     }
@@ -311,31 +314,36 @@ private fun NoticeRow(
     onOpenImage: () -> Unit,
     downloading: Boolean,
     onOpenPdf: () -> Unit,
+    onDownloadAttachment: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
 
-    // Local copy first, so a notice still shows its picture with no connection; the URL is the
-    // fallback for a render that has since been pruned. Coil keys its caches by model, so notices
-    // sharing a URL share one download and one decoded bitmap.
+    // Local files only. Handing Coil a URL here would download it at compose time with no timeout,
+    // no size check and no metering or roaming check -- the card fetching on roaming while the
+    // worker refused to. The UI does not get to spend the user's data; only the worker and an
+    // explicit tap do.
     val photo: File? = NoticeImageStore.cachedImage(context, notice.logId)
     val pdfRender: File? = NoticeImageStore.cachedPdfRender(context, notice.logId)
     val linkImage: File? = NoticeImageStore.cachedLinkImage(context, notice.logId)
-    // Local copy first, so a notice still shows its picture with no connection; the URL is the
-    // fallback for a render that has since been pruned. A link-only notice falls back to the card's
-    // logo, so a row is never left with nothing where every other row has something.
-    val thumbModel: Any? = photo ?: pdfRender ?: linkImage
-        ?: notice.imageUrl?.takeIf { it.isNotBlank() }
-        ?: notice.linkImage?.takeIf { it.isNotBlank() }
+    val thumbFile: File? = photo ?: pdfRender ?: linkImage
+
+    // An attachment the notice says it has, which is not on the phone. One glyph, four causes.
+    val awaiting = thumbFile == null && (
+        !notice.imageUrl.isNullOrBlank() ||
+            !notice.pdfUrl.isNullOrBlank() ||
+            !notice.linkImage.isNullOrBlank()
+        )
 
     // A row expanding onto nothing.
     //
     // The body is shown in full whether the row is open or closed -- it is never truncated -- so
-    // with no picture, no circular and no link card, expanding changes exactly one thing: the body
-    // becomes tappable text. That is not worth a gesture, and a chevron promising more where there
-    // is none is worse than no chevron at all. Such a row is simply drawn open and does not react
-    // to a tap.
-    val lean = thumbModel == null &&
+    // with no picture, no circular, no link card and nothing awaited, expanding changes exactly one
+    // thing: the body becomes tappable text. That is not worth a gesture, and a chevron promising
+    // more where there is none is worse than no chevron at all. Such a row is simply drawn open and
+    // does not react to a tap. A row awaiting an attachment is never lean -- it has a download
+    // glyph to show and a tap to offer, whether or not the card is open.
+    val lean = thumbFile == null && !awaiting &&
         notice.pdfUrl.isNullOrBlank() &&
         notice.linkUrl.isNullOrBlank()
     val open = expanded || lean
@@ -374,14 +382,25 @@ private fun NoticeRow(
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (thumbModel != null && !open) {
+                if (thumbFile != null && !open) {
+                    // Hidden once the card is open: the expanded row shows this same file at full
+                    // width in NoticeAttachments, and a second small copy above it would be clutter.
                     AsyncImage(
-                        model = thumbModel,
+                        model = thumbFile,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier
                             .size(56.dp)
                             .clip(RoundedCornerShape(8.dp)),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                } else if (awaiting) {
+                    // Not gated on `!open`: an attachment that has not arrived is the one thing an
+                    // expanded row must still show, since NoticeAttachments below renders local
+                    // files only and would otherwise show nothing at all for a failed download.
+                    AttachmentPlaceholder(
+                        isPdf = !notice.pdfUrl.isNullOrBlank(),
+                        onDownload = onDownloadAttachment,
                     )
                     Spacer(Modifier.width(12.dp))
                 }

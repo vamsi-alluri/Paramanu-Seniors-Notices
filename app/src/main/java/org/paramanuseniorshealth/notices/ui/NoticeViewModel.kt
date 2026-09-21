@@ -191,6 +191,35 @@ class NoticeViewModel(
         }
     }
 
+    /**
+     * A tap on the download glyph: fetches whichever of [notice]'s attachments are missing, right
+     * now, bypassing [FetchPolicy] entirely.
+     *
+     * There is no `openPdf`-shaped entry point for this -- `openPdf` fetches a circular and hands it
+     * to an external viewer, it does not fetch a missing thumbnail or photo. This is that missing
+     * entry point, wired to `AttachmentWorker.fetchNow`, which is shared with the policy-gated
+     * worker sweep so a tap records success ([org.paramanuseniorshealth.notices.fcm.AttachmentState.FETCHED],
+     * attempts reset to zero) exactly the way a sweep does.
+     *
+     * Reuses [_downloadingPdf] as its re-entry guard rather than a second set: it already drives the
+     * row's spinner and a tap firing a second fetch mid-flight is the same bug whichever attachment
+     * is in flight, circular or otherwise.
+     *
+     * [context] is the application context, threaded in from the call site rather than held by this
+     * view model, for the same reason given at [onResumed].
+     */
+    fun downloadAttachment(notice: NoticeEntity, context: Context) {
+        if (notice.id in _downloadingPdf.value) return
+        _downloadingPdf.value = _downloadingPdf.value + notice.id
+        viewModelScope.launch {
+            try {
+                AttachmentWorker.fetchNow(context.applicationContext, notices, notice)
+            } finally {
+                _downloadingPdf.value = _downloadingPdf.value - notice.id
+            }
+        }
+    }
+
     fun toggleExpanded(id: Long) {
         _expandedId.value = if (_expandedId.value == id) null else id
     }

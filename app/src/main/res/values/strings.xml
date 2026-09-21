@@ -45,6 +45,11 @@
     <string name="action_save">Save a copy</string>
     <string name="action_share_chooser">Share this notice</string>
     <string name="attachment_downloading">Getting the notice…</string>
+    <!-- Content descriptions only. Nothing here is drawn on screen; a failure the user can tap
+         past does not need a sentence explaining it. -->
+    <string name="attachment_download">Download</string>
+    <string name="attachment_pdf">Circular</string>
+    <string name="attachment_image">Picture</string>
     <string name="toast_saved">Saved.</string>
     <string name="toast_save_failed">Could not save that. Try another folder.</string>
     <string name="toast_pdf_opening_online">Opening it on the website instead.</string>

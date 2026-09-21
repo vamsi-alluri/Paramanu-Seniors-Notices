@@ -250,6 +250,12 @@ private fun NoticesApp(
                         },
                     )
                 },
+                onDownloadAttachment = { notice ->
+                    // A tap is consent and bypasses the fetch policy -- see
+                    // NoticeViewModel.downloadAttachment. Needs a Context for the same reason
+                    // onOpenPdf above does, and the view model keeps none.
+                    viewModel.downloadAttachment(notice, context.applicationContext)
+                },
                 onToggleSelection = viewModel::toggleSelection,
                 onClearSelection = viewModel::clearSelection,
                 onDeleteSelected = viewModel::deleteSelected,

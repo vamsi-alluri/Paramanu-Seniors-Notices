@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.data.NoticeEntity
+import org.paramanuseniorshealth.notices.fcm.NoticeImageStore
 import java.io.File
 
 /**
@@ -129,7 +130,9 @@ fun LinkCard(
 ) {
     val url = notice.linkUrl?.takeIf { it.isNotBlank() } ?: return
     val context = LocalContext.current
-    val image = notice.linkImage?.takeIf { it.isNotBlank() }
+    // Local file only, same reasoning as the row thumbnail: the URL is never handed to Coil, so an
+    // unfetched logo falls straight through to the placeholder below rather than downloading here.
+    val image = NoticeImageStore.cachedLinkImage(context, notice.logId)
     val heading = notice.linkTitle?.takeIf { it.isNotBlank() }
     val site = notice.linkSite?.takeIf { it.isNotBlank() } ?: url
 
