@@ -110,7 +110,11 @@ class AttachmentWorker(
         }
     }
 
-    private enum class Verdict { FETCH, DEFER }
+    /**
+     * [GONE] is not a kind of failure to be retried; it is the server saying the file was never
+     * published. It exists so the card can stop offering a download that cannot succeed.
+     */
+    private enum class Verdict { FETCH, DEFER, GONE }
 
     /**
      * [known] is the size the payload supplied, and skips the HEAD request entirely. Otherwise the
@@ -126,8 +130,21 @@ class AttachmentWorker(
     ): Verdict {
         // Roaming answers without any request at all: nothing is going to be fetched either way.
         if (roaming) return Verdict.DEFER
-        val size = known ?: withContext(Dispatchers.IO) { NetworkStatus.remoteSize(url) }
-        return if (FetchPolicy.shouldFetch(size, metered, roaming)) Verdict.FETCH else Verdict.DEFER
+        // A size supplied by the sender stands in for a successful probe: the website would not
+        // publish a length for a file it does not have.
+        val probe = known?.let { Probe.Reachable(it) }
+            ?: withContext(Dispatchers.IO) { NetworkStatus.probe(url) }
+        return when (probe) {
+            Probe.Gone -> Verdict.GONE
+            is Probe.Reachable ->
+                if (FetchPolicy.shouldFetch(probe.bytes, metered, roaming)) Verdict.FETCH
+                else Verdict.DEFER
+            // No answer is not the same as a refusal. Treated as an unknown size, which the policy
+            // reads as "large" -- so it waits for wifi rather than giving up.
+            Probe.Unreachable ->
+                if (FetchPolicy.shouldFetch(null, metered, roaming)) Verdict.FETCH
+                else Verdict.DEFER
+        }
     }
 
     companion object {
@@ -251,6 +268,9 @@ class AttachmentWorker(
         ) {
             var deferred = false
             var failed = false
+            // At least one attachment came back 4xx. Tracked apart from [failed] because it is not
+            // a thing to try again -- see where the attempt count is set below.
+            var gone = false
             var pages: Int? = null
             var bytes: Long? = null
 
@@ -263,6 +283,7 @@ class AttachmentWorker(
                             NoticeImageStore.fetchLinkImage(context, url, logId) == null
                         ) failed = true
                         Verdict.DEFER -> deferred = true
+                        Verdict.GONE -> { failed = true; gone = true }
                     }
                 }
             }
@@ -273,6 +294,7 @@ class AttachmentWorker(
                         Verdict.FETCH ->
                             if (NoticeImageStore.fetchImage(context, url, logId) == null) failed = true
                         Verdict.DEFER -> deferred = true
+                        Verdict.GONE -> { failed = true; gone = true }
                     }
                 }
             }
@@ -291,6 +313,7 @@ class AttachmentWorker(
                             NoticeImageStore.fetchPdfThumb(context, thumbUrl, logId) == null
                         ) failed = true
                         Verdict.DEFER -> deferred = true
+                        Verdict.GONE -> { failed = true; gone = true }
                     }
                 } else {
                     // No published thumbnail, so page one can only be had by downloading the
@@ -306,6 +329,7 @@ class AttachmentWorker(
                             }
                         }
                         Verdict.DEFER -> deferred = true
+                        Verdict.GONE -> { failed = true; gone = true }
                     }
                 }
             }
@@ -316,7 +340,19 @@ class AttachmentWorker(
                 previous = AttachmentState.parse(notice.attachmentState),
                 tapInitiated = tapInitiated,
             )
-            val attempts = FetchPolicy.nextAttempts(state, notice.attachmentAttempts, tapInitiated)
+            // A 4xx goes straight to the cap rather than spending five sweeps rediscovering it.
+            // That stops the automatic retries -- shouldRetry is false at the cap -- and it is what
+            // the card reads to draw a struck-out page instead of a download glyph, so the reader is
+            // not invited to tap something that cannot work.
+            //
+            // Only when the outcome is actually FAILED. If something else on the notice merely
+            // deferred, deferral still outranks failure and the count is left alone, because that
+            // part is still worth retrying; the row settles to FAILED-at-cap once it resolves.
+            val attempts = if (gone && state == AttachmentState.FAILED) {
+                FetchPolicy.MAX_ATTEMPTS
+            } else {
+                FetchPolicy.nextAttempts(state, notice.attachmentAttempts, tapInitiated)
+            }
             repository.recordAttachment(logId, state, attempts, pages, bytes)
 
             // Unconditional, and deliberately not gated on FETCHED. A notice carrying a sender photo

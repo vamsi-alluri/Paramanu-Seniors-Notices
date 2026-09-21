@@ -452,6 +452,7 @@ private fun NoticeRow(
                     AttachmentPlaceholder(
                         isPdf = !notice.pdfUrl.isNullOrBlank(),
                         downloading = downloading,
+                        broken = notice.attachmentUnavailable,
                         onDownload = onDownloadAttachment,
                     )
                     Spacer(Modifier.width(12.dp))

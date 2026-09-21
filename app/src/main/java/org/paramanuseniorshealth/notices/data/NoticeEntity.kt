@@ -3,6 +3,8 @@ package org.paramanuseniorshealth.notices.data
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import org.paramanuseniorshealth.notices.fcm.AttachmentState
+import org.paramanuseniorshealth.notices.fcm.FetchPolicy
 
 /**
  * One received notice.
@@ -92,4 +94,20 @@ data class NoticeEntity(
     val attachmentState: String? = null,
     /** Failed fetches only. Deferrals do not count; see FetchPolicy.shouldRetry. */
     val attachmentAttempts: Int = 0,
-)
+) {
+    /**
+     * Whether this notice's attachment is not coming, as opposed to not here yet.
+     *
+     * True once the fetch has failed and the attempt budget is spent -- which is also the point
+     * where `FetchPolicy.shouldRetry` stops the automatic sweeps, so the row would otherwise sit
+     * behind a download glyph that nothing will ever act on. A 4xx jumps straight to the cap
+     * rather than spending five sweeps rediscovering that the file was never published, so in
+     * practice this is true on the first attempt for a dead URL.
+     *
+     * Read by the card to draw a struck-out page instead of a download arrow. It does not stop a
+     * tap: if the sender fixes the URL, that tap is the only way back.
+     */
+    val attachmentUnavailable: Boolean
+        get() = AttachmentState.parse(attachmentState) == AttachmentState.FAILED &&
+            attachmentAttempts >= FetchPolicy.MAX_ATTEMPTS
+}

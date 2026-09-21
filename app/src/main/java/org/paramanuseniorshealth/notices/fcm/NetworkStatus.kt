@@ -16,6 +16,27 @@ import java.net.URL
  * Android imports and is unit-tested; this file exists only because the framework will not answer
  * these three questions on the JVM. If a policy question appears here, it is in the wrong file.
  */
+/**
+ * What a HEAD request found, in the only three shapes the caller cares about.
+ *
+ * The distinction that matters is [Gone] against [Unreachable]. Both mean nothing was fetched,
+ * but one is a verdict and the other is a maybe: a 404 will still be a 404 on wifi tomorrow,
+ * while a timeout very often will not. Collapsing them, as an earlier version did by returning a
+ * bare nullable size, meant a notice whose attachment was never published spent five attempts and
+ * a week of sweeps re-discovering that -- and showed the reader a download glyph throughout,
+ * inviting a tap that could never succeed.
+ */
+sealed interface Probe {
+    /** The server has it. [bytes] is null when it declined to say how large. */
+    data class Reachable(val bytes: Long?) : Probe
+
+    /** A 4xx. The server answered, and the answer was no. */
+    data object Gone : Probe
+
+    /** No answer, or one that may differ next time: offline, a timeout, a 5xx. */
+    data object Unreachable : Probe
+}
+
 object NetworkStatus {
 
     private const val TAG = "NetworkStatus"
@@ -58,7 +79,7 @@ object NetworkStatus {
      * for circulars at all -- which is the point of that field: a metered phone then skips the
      * download without making any request whatsoever.
      */
-    fun remoteSize(url: String): Long? = runCatching {
+    fun probe(url: String): Probe = runCatching {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             requestMethod = "HEAD"
             connectTimeout = 5_000
@@ -66,10 +87,18 @@ object NetworkStatus {
             instanceFollowRedirects = true
         }
         try {
-            if (connection.responseCode !in 200..299) return@runCatching null
-            connection.contentLengthLong.takeIf { it >= 0 }
+            val code = connection.responseCode
+            when {
+                code in 200..299 -> Probe.Reachable(connection.contentLengthLong.takeIf { it >= 0 })
+                // The server answered, and its answer was that this is not there. Retrying cannot
+                // change a 404 into a file, so the caller stops rather than spending five attempts
+                // and a week of sweeps discovering the same thing.
+                code in 400..499 -> Probe.Gone
+                else -> Probe.Unreachable
+            }
         } finally {
             connection.disconnect()
         }
-    }.onFailure { Log.i(TAG, "No size for $url: ${it.message}") }.getOrNull()
+    }.onFailure { Log.i(TAG, "Could not probe $url: ${it.message}") }
+        .getOrDefault(Probe.Unreachable)
 }

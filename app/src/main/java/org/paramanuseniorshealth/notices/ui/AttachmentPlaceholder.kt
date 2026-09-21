@@ -23,11 +23,18 @@ import org.paramanuseniorshealth.notices.R
 /**
  * What stands in for an attachment that is not on the phone.
  *
- * One appearance for four situations -- never fetched, deferred because the connection is metered
- * or roaming, failed, and pruned after delivery. They are the same thing from the reader's side:
+ * One appearance for never fetched, deferred because the connection is metered or roaming, failed
+ * with attempts left, and pruned after delivery. Those are the same thing from the reader's side:
  * the picture is not here, and tapping fetches it. Telling them apart in words would mean
  * explaining metered connections to people in their eighties, and would arrive at the helpdesk as
  * a phone call rather than at the user as understanding.
+ *
+ * [broken] is the one that genuinely differs, and it earns its own glyph. Everything above is "not
+ * here yet"; this is "not coming" -- the server answered 4xx, so the file was never published and
+ * no number of taps will produce it. Offering a download arrow for that is a small lie, and the
+ * reader who takes it up learns nothing from the tap except that the app ignored them. A struck-out
+ * page says what is true. The tile stays clickable even so: a sender who fixes the URL should not
+ * need the user to reinstall, and the tap is the only route back.
  *
  * The download glyph sits over the type glyph rather than beside it, so the tap target is the whole
  * tile and there is nothing small to miss.
@@ -50,6 +57,7 @@ import org.paramanuseniorshealth.notices.R
 fun AttachmentPlaceholder(
     isPdf: Boolean,
     downloading: Boolean,
+    broken: Boolean,
     onDownload: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -57,10 +65,10 @@ fun AttachmentPlaceholder(
         stringResource(if (isPdf) R.string.attachment_pdf else R.string.attachment_image)
     // Only spoken while the tile is actually an offer to fetch something -- mid-download there is
     // nothing left to invite a tap for, and the spinner already says a fetch is under way.
-    val description = if (downloading) {
-        typeDescription
-    } else {
-        "$typeDescription ${stringResource(R.string.attachment_download)}"
+    val description = when {
+        downloading -> typeDescription
+        broken -> "$typeDescription ${stringResource(R.string.attachment_unavailable)}"
+        else -> "$typeDescription ${stringResource(R.string.attachment_download)}"
     }
     Box(
         modifier = modifier
@@ -77,6 +85,18 @@ fun AttachmentPlaceholder(
             ),
         contentAlignment = Alignment.Center,
     ) {
+        if (broken) {
+            // One glyph rather than a badge over a type icon. A struck-out page is already a page,
+            // so stacking the type behind it would only make both harder to read at 56dp.
+            Icon(
+                painter = painterResource(R.drawable.ic_file_broken),
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.55f),
+                modifier = Modifier.size(36.dp),
+            )
+            return@Box
+        }
+
         Icon(
             painter = painterResource(
                 if (isPdf) R.drawable.ic_file_pdf else R.drawable.ic_file_image
