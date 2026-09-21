@@ -49,16 +49,23 @@ object NoticeImageStore {
      */
     private const val PDFS_IN_CACHE = false
 
-    /** Twenty notices' worth of artwork. A notice may contribute three files, so this is ~60. */
-    private const val KEEP_NEWEST = 60
+    /**
+     * The artwork budget, in bytes.
+     *
+     * This used to be a file count (sixty). Counting files let sixty 40KB thumbnails and three
+     * multi-megabyte page renders be called the same amount of storage, which they are not -- and a
+     * page-sized render of an A4 circular is the larger artefact by an order of magnitude.
+     */
+    private const val IMAGE_BUDGET_BYTES = 25L * 1024 * 1024
 
     /**
      * The PDF budget, in bytes, and deliberately expressed differently from the image one.
      *
-     * Counting files would let three 2MB circulars sit alongside sixty 40KB thumbnails and call it
-     * balanced. Circulars are the large, rarely-reread artefact; this is about twelve of them.
+     * Counting files would let sixty 40KB thumbnails and three multi-megabyte page renders be
+     * called the same amount of storage, which they are not. Circulars are the large, rarely-reread
+     * artefact; this is about nine of them at the measured 5.6MB.
      */
-    private const val PDF_BUDGET_BYTES = 24L * 1024 * 1024
+    private const val PDF_BUDGET_BYTES = 50L * 1024 * 1024
 
     /**
      * onMessageReceived allows roughly 10-20 seconds before the service may be torn down.
@@ -295,27 +302,24 @@ object NoticeImageStore {
 
     // ------------------------------------------------------------------ housekeeping
 
-    /** Keeps the [KEEP_NEWEST] most recently written artwork files and deletes the rest. */
-    fun prune(context: Context, keep: Int = KEEP_NEWEST) = prune(directory(context), keep)
+    fun prune(context: Context) = pruneTo(directory(context), IMAGE_BUDGET_BYTES)
 
-    /** Directory-level overload, kept free of Context so it is unit-testable on the JVM. */
-    fun prune(dir: File, keep: Int = KEEP_NEWEST) {
-        val files = dir.listFiles()?.takeIf { it.size > keep } ?: return
-        files.sortedByDescending { it.lastModified() }
-            .drop(keep)
-            .forEach { it.delete() }
-    }
+    fun prunePdfs(context: Context) = pruneTo(fileDirectory(context), PDF_BUDGET_BYTES)
 
-    /** Trims stored PDFs to [PDF_BUDGET_BYTES], oldest first. */
-    fun prunePdfs(context: Context, budgetBytes: Long = PDF_BUDGET_BYTES) =
-        prunePdfs(fileDirectory(context), budgetBytes)
-
-    fun prunePdfs(dir: File, budgetBytes: Long = PDF_BUDGET_BYTES) {
+    /**
+     * Trims [dir] to [budgetBytes], oldest first.
+     *
+     * The newest file is always kept, even if it alone is over budget: it is the notice that has
+     * just arrived, and deleting it would mean the user never sees the attachment they were
+     * notified about. One shape for both directories, because "how much storage may this use" is
+     * the same question whether the files are thumbnails or circulars.
+     */
+    fun pruneTo(dir: File, budgetBytes: Long) {
         val files = dir.listFiles()?.sortedByDescending { it.lastModified() } ?: return
         var used = 0L
-        files.forEach { file ->
+        files.forEachIndexed { index, file ->
             used += file.length()
-            if (used > budgetBytes) file.delete()
+            if (index > 0 && used > budgetBytes) file.delete()
         }
     }
 
