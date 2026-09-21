@@ -58,6 +58,50 @@ class FetchPolicyTest {
         assertFalse(FetchPolicy.shouldRetry(AttachmentState.FETCHED, 0))
     }
 
+    /** A notice can carry several attachments, and the worst-but-recoverable answer must win. */
+    @Test
+    fun `deferral outranks failure`() {
+        assertEquals(
+            AttachmentState.DEFERRED,
+            FetchPolicy.outcome(deferred = true, failed = true),
+        )
+        assertEquals(
+            AttachmentState.FAILED,
+            FetchPolicy.outcome(deferred = false, failed = true),
+        )
+        assertEquals(
+            AttachmentState.FETCHED,
+            FetchPolicy.outcome(deferred = false, failed = false),
+        )
+    }
+
+    @Test
+    fun `only a failure burns an attempt`() {
+        assertEquals(4, FetchPolicy.nextAttempts(AttachmentState.FAILED, 3))
+        assertEquals(3, FetchPolicy.nextAttempts(AttachmentState.DEFERRED, 3))
+        assertEquals(3, FetchPolicy.nextAttempts(AttachmentState.PENDING, 3))
+    }
+
+    /** Otherwise a notice that finally succeeded would sit one failure from the cap forever. */
+    @Test
+    fun `a success resets the attempt count`() {
+        assertEquals(0, FetchPolicy.nextAttempts(AttachmentState.FETCHED, FetchPolicy.MAX_ATTEMPTS))
+    }
+
+    /**
+     * A deferral must leave a notice retryable no matter how long it has been on mobile data, and
+     * that only holds because the count it carries forward never reaches the cap by deferring.
+     */
+    @Test
+    fun `repeated deferrals never reach the cap`() {
+        var attempts = 0
+        repeat(FetchPolicy.MAX_ATTEMPTS * 10) {
+            attempts = FetchPolicy.nextAttempts(AttachmentState.DEFERRED, attempts)
+            assertTrue(FetchPolicy.shouldRetry(AttachmentState.DEFERRED, attempts))
+        }
+        assertEquals(0, attempts)
+    }
+
     /** Pruned is derived, not stored: it was delivered once, so it waits for a tap. */
     @Test
     fun `pruned is fetched with the file gone`() {

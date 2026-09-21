@@ -16,20 +16,26 @@ import java.net.URL
  *
  * Three kinds, which are not alternatives:
  *  - **image** ([fetchImage]) is a picture the sender attached;
- *  - **pdf** ([fetchPdfRender] and [fetchPdf]) is a notice circular;
+ *  - **pdf** ([fetchPdfThumb], [fetchPdfKeeping] and [fetchPdf]) is a notice circular;
  *  - **link** ([fetchLinkImage]) is the logo or still for a preview card.
  *
  * They are cached under different names so one never overwrites another, and the download that
- * feeds the tray notification is the same file the in-app row reads later -- so the UI performs no
- * network I/O and a notice stays readable offline afterwards.
+ * fills in the tray notification is the same file the in-app row reads later -- so the UI performs
+ * no network I/O and a notice stays readable offline afterwards.
+ *
+ * NOTHING HERE RUNS ON THE MESSAGE PATH ANY MORE
+ *   Page one used to be rendered inside `onMessageReceived`, which meant downloading the whole
+ *   5.6MB circular on every phone inside an eight-second window it could not meet.
+ *   [AttachmentWorker] now calls these, minutes later and only when [FetchPolicy] agrees -- and
+ *   where the website has published a first-page image, [fetchPdfThumb] fetches ~40KB and the
+ *   document is never touched until somebody taps it.
  *
  * THE PDF, AND WHY IT IS NOW KEPT
  *   It used to be downloaded to a scratch file, rendered, and deleted, on the reasoning that it was
  *   the largest artefact and re-downloadable from the website. That was true and still cost the
  *   user the thing they wanted: there was no PDF on the phone to open, so a notice circular could
- *   only ever be viewed as a flattened picture of its first page. The render is still made at push
- *   time, because the tray needs a bitmap within seconds; the PDF itself is fetched by [fetchPdf]
- *   when the user asks for it, and kept from then on.
+ *   only ever be viewed as a flattened picture of its first page. [fetchPdfKeeping] keeps both when
+ *   it has had to download the document anyway, and [fetchPdf] fetches it on a tap otherwise.
  */
 object NoticeImageStore {
 
@@ -68,11 +74,13 @@ object NoticeImageStore {
     private const val PDF_BUDGET_BYTES = 50L * 1024 * 1024
 
     /**
-     * onMessageReceived allows roughly 10-20 seconds before the service may be torn down.
+     * The picture ceiling, and it stays at eight seconds now that nothing holds a service open.
      *
-     * The entitlement check no longer spends any of it -- verification moved off the message path
-     * and does no network -- but the ceiling stays: a slow attachment must never cost the
-     * notification itself, which is the part that matters.
+     * It was sized for `onMessageReceived`'s ~10-20 second teardown window. That constraint is
+     * gone, but the number is still right for what [fetchPicture] fetches: a link logo, a sender
+     * photo or a published PDF thumbnail, none of which should need longer, and a picture that
+     * does is better retried by the next sweep than left occupying the worker. The circular is the
+     * case that genuinely needs longer, and it has [WORKER_TIMEOUT_MS].
      */
     private const val TIMEOUT_MS = 8_000L
 
@@ -144,6 +152,23 @@ object NoticeImageStore {
     suspend fun fetchLinkImage(context: Context, url: String, logId: String): Bitmap? =
         fetchPicture(context, url, logId, "link")
 
+    /**
+     * A published first-page image for a circular, ~40KB instead of the document's ~5.6MB.
+     *
+     * Its scratch file is `notice_$logId-pdf.part`, distinct from the three other scratch names in
+     * this file, so two kinds downloading for one notice cannot overwrite each other mid-flight.
+     *
+     * Its **target** is not distinct, and that is deliberate: `$logId-pdf.jpg` is exactly where
+     * [fetchPdfKeeping] writes its local render. The two are alternative ways to obtain the same
+     * picture -- page one of the circular -- so they share one name, and every reader downstream
+     * asks [cachedPdfRender] without knowing or caring whether the website published it or the
+     * phone rendered it. Only one of the two ever runs for a given notice ([AttachmentWorker]
+     * chooses on `pdfThumbUrl`), and if both somehow did, the later one overwriting the earlier is
+     * a correct result rather than a collision.
+     */
+    suspend fun fetchPdfThumb(context: Context, url: String, logId: String): Bitmap? =
+        fetchPicture(context, url, logId, "pdf")
+
     private suspend fun fetchPicture(
         context: Context,
         url: String,
@@ -176,42 +201,6 @@ object NoticeImageStore {
                 .getOrNull()
         }
     }
-
-    /**
-     * Downloads [pdfUrl], renders its first page, caches the render, and returns the bitmap.
-     *
-     * The PDF is fetched to a scratch file and deleted afterwards: at push time only the render is
-     * needed, and holding a 2MB download inside the service's budget for a file the user may never
-     * open would be paying the cost early for everyone to benefit nobody. [fetchPdf] keeps it when
-     * they do open it.
-     *
-     * Returns null for anything unreachable, not actually a PDF, or password protected.
-     */
-    suspend fun fetchPdfRender(context: Context, pdfUrl: String, logId: String): Bitmap? =
-        withTimeoutOrNull(TIMEOUT_MS) {
-            withContext(Dispatchers.IO) {
-                val scratch = File(context.cacheDir, "notice_$logId.pdf")
-                runCatching {
-                    download(pdfUrl, scratch)
-                    val rendered = PdfPageRenderer.renderFirstPage(scratch)
-                        ?: error("Could not render $pdfUrl")
-
-                    val target = File(directory(context), "${stem(logId, "pdf")}.jpg")
-                    writeJpeg(rendered, target)
-
-                    // Released before returning, and read back at a smaller size. The render is now
-                    // page-sized so the viewer has something to zoom into -- an A4 page at 1600px is
-                    // about 14MB as ARGB_8888 -- and handing that to the notification path would
-                    // hold it live inside a service that is already the most memory-constrained
-                    // place this app runs. The file on disk is what the viewer opens later.
-                    rendered.recycle()
-                    prune(context)
-                    decodeDownsampled(target)
-                }.onFailure { Log.w(TAG, "Notice PDF failed for $pdfUrl", it) }
-                    .also { runCatching { scratch.delete() } }
-                    .getOrNull()
-            }
-        }
 
     /**
      * Downloads the circular itself and keeps it, for handing to a PDF viewer.
@@ -270,8 +259,8 @@ object NoticeImageStore {
      * only has to beat the connection's own 15s `readTimeout` to keep going, and it can do that
      * indefinitely. So a timed-out caller may still see the permanent PDF and render appear on
      * disk afterwards, written by a download it had already given up on. This is inherited, not
-     * introduced here: [fetchPdfRender] and [fetchPdf] have had the identical shape all along. It
-     * is also harmless -- the worker records FAILED for the timeout, the late write lands a valid
+     * introduced here: [fetchPicture] and [fetchPdf] have the identical shape. It is also
+     * harmless -- the worker records FAILED for the timeout, the late write lands a valid
      * pdf+render pair, and the next sweep finds [cachedPdfRender] non-null, skips the fetch, and
      * records FETCHED. This function's scratch file is named distinctly from [fetchPdf]'s so that
      * late write cannot collide with a concurrent tap-path download for the same notice.

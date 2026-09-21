@@ -91,6 +91,34 @@ object FetchPolicy {
         AttachmentState.FETCHED -> false
     }
 
+    /**
+     * What one pass over a notice's attachments amounts to, given that a notice may carry several.
+     *
+     * **Deferral outranks failure.** A notice with a photo that 404s and a circular the policy
+     * declined is DEFERRED, not FAILED: the circular is the part still worth waiting for wifi for,
+     * and recording FAILED would both burn an attempt and -- after [MAX_ATTEMPTS] -- stop the
+     * sweeps retrying a fetch that was never actually attempted.
+     */
+    fun outcome(deferred: Boolean, failed: Boolean): AttachmentState = when {
+        deferred -> AttachmentState.DEFERRED
+        failed -> AttachmentState.FAILED
+        else -> AttachmentState.FETCHED
+    }
+
+    /**
+     * The attempt count to store alongside [state], given [current].
+     *
+     * Only a failure increments. A deferral carries the count forward untouched -- deferring is the
+     * policy working, and `updateAttachment` overwrites unconditionally, so passing anything else
+     * would silently rewrite history. A success resets to zero, so a notice that failed four times
+     * on a bad connection and then succeeded is not left one failure from the cap.
+     */
+    fun nextAttempts(state: AttachmentState, current: Int): Int = when (state) {
+        AttachmentState.FAILED -> current + 1
+        AttachmentState.FETCHED -> 0
+        AttachmentState.PENDING, AttachmentState.DEFERRED -> current
+    }
+
     /** Delivered once and since pruned. Shows the glyph, but never re-downloads by itself. */
     fun isPruned(state: AttachmentState, fileExists: Boolean): Boolean =
         state == AttachmentState.FETCHED && !fileExists
