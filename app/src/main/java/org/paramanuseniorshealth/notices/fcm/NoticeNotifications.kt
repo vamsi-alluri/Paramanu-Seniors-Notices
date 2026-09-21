@@ -11,8 +11,10 @@ import android.graphics.Bitmap
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import org.paramanuseniorshealth.notices.MainActivity
 import org.paramanuseniorshealth.notices.activation.Importance
+import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeTime
 import org.paramanuseniorshealth.notices.R
 
@@ -94,6 +96,10 @@ object NoticeNotifications {
      *
      * [image] renders as a BigPictureStyle expansion; null falls back to BigTextStyle, which is why
      * an unreachable or unrenderable PDF costs only the picture and never the notice.
+     *
+     * [hasPdf]/[hasImage] say what kind of attachment is coming, for the placeholder glyph used
+     * when [image] is null -- either because it has not been fetched yet, or because [updatePicture]
+     * is not what posted this notification. A real [image] always wins over the placeholder.
      */
     fun post(
         context: Context,
@@ -101,6 +107,8 @@ object NoticeNotifications {
         body: String,
         logId: String?,
         image: Bitmap? = null,
+        hasPdf: Boolean = false,
+        hasImage: Boolean = false,
         channel: NoticeChannel = NoticeChannel.HIGH,
     ) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
@@ -123,6 +131,15 @@ object NoticeNotifications {
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
+
+        // The attachment has not been fetched yet -- that happens some time in the next hour, and
+        // may not happen at all on a metered connection. A type glyph says "there is a circular
+        // here" without claiming it has arrived, and without a sentence explaining why it has not.
+        val placeholder = when {
+            hasImage -> R.drawable.ic_file_image
+            hasPdf -> R.drawable.ic_file_pdf
+            else -> null
+        }
 
         // Sized here, and only here. Both bitmaps cross a Binder transaction capped near 1MB, and
         // going over throws TransactionTooLargeException -- which loses the whole notification, not
@@ -152,7 +169,7 @@ object NoticeNotifications {
             .setWhen(NoticeTime.sentAt(logId, System.currentTimeMillis()))
             .setShowWhen(true)
             .setStyle(style)
-            .setLargeIcon(icon)
+            .setLargeIcon(icon ?: placeholder?.let { context.glyphBitmap(it) })
             .setPriority(
                 if (channel == NoticeChannel.HIGH) NotificationCompat.PRIORITY_HIGH
                 else NotificationCompat.PRIORITY_LOW
@@ -161,6 +178,9 @@ object NoticeNotifications {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
+            // The worker re-posts this same id when the picture lands, up to an hour later. Without
+            // this the phone would buzz a second time for a notice the user already read.
+            .setOnlyAlertOnce(true)
             .build()
 
         // Distinct id per logId so successive notices stack instead of replacing each other.
@@ -180,6 +200,39 @@ object NoticeNotifications {
      */
     fun cancel(context: Context, logId: String) {
         NotificationManagerCompat.from(context).cancel(logId.hashCode())
+    }
+
+    /** A vector turned into the bitmap `setLargeIcon` requires. */
+    private fun Context.glyphBitmap(resId: Int): Bitmap? =
+        ContextCompat.getDrawable(this, resId)?.toBitmap(128, 128)
+
+    /**
+     * Puts a fetched picture onto a notification already in the tray.
+     *
+     * Does nothing if the notification is gone. Dismissed means dismissed -- re-posting an hour
+     * later would resurrect something the user has already dealt with, and `setOnlyAlertOnce`
+     * would not save them from seeing it reappear. A notice whose notification has gone still gets
+     * its picture in the app, which is where they would go looking.
+     */
+    fun updatePicture(context: Context, notice: NoticeEntity) {
+        val logId = notice.logId ?: return
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val id = logId.hashCode()
+        if (manager.activeNotifications.none { it.id == id }) return
+
+        val file = NoticeImageStore.cachedImage(context, logId)
+            ?: NoticeImageStore.cachedPdfRender(context, logId)
+            ?: return
+        val bitmap = NoticeImageStore.decodeDownsampled(file) ?: return
+
+        post(
+            context = context,
+            title = notice.title,
+            body = notice.body,
+            logId = logId,
+            image = bitmap,
+            channel = NoticeChannel.HIGH,
+        )
     }
 
     const val EXTRA_LOG_ID = "logId"
