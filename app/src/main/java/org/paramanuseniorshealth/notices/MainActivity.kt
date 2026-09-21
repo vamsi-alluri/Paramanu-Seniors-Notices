@@ -163,7 +163,7 @@ private fun NoticesApp(
     // Re-check whenever the app comes forward. Previously the only check was in the view model's
     // init, which survives a trip through recents -- so a user whose code had been restored had to
     // know to swipe the app away and reopen it, which nobody knows.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed(context.applicationContext) }
 
     // The permission prompt is deliberately not raised on the code screen: asking before the user
     // has any reason to expect notices is how a denial happens, and on Android 13+ a denial

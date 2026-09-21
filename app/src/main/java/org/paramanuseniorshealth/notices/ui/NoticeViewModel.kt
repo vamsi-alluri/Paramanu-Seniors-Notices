@@ -1,5 +1,6 @@
 package org.paramanuseniorshealth.notices.ui
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -26,6 +27,7 @@ import org.paramanuseniorshealth.notices.data.InfoRepository
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.data.OfficeInfo
+import org.paramanuseniorshealth.notices.fcm.AttachmentWorker
 
 /** Where the user is. Deliberately a state machine rather than a navigation graph: four
  *  destinations do not justify a navigation dependency, and the code screen is a gate rather
@@ -296,8 +298,22 @@ class NoticeViewModel(
      * A revoked phone checks every time: its user is the one actively waiting for an answer, and
      * they may be standing at the counter. An active phone is throttled, because switching between
      * two apps should not open a database connection each way.
+     *
+     * The two attachment sweeps below run unconditionally, outside that throttle. They are cheap
+     * and idempotent -- the worker itself filters rows through [FetchPolicy.shouldRetry], so
+     * enqueuing when nothing is outstanding costs nothing -- unlike [refreshActivation], which
+     * makes a real network call and is rightly rate-limited. One sweep runs now, on whatever
+     * connection is available, and picks up anything small that was missed. The other stands
+     * waiting for wifi and costs nothing until it appears, which is how a circular deferred on
+     * mobile data eventually arrives without the user being told anything.
+     *
+     * [context] is the application context, threaded in from the call site rather than held by
+     * this view model -- a ViewModel holding a Context outlives the Activity and leaks it.
      */
-    fun onResumed() {
+    fun onResumed(context: Context) {
+        AttachmentWorker.enqueueCatchUp(context)
+        AttachmentWorker.enqueueWifiCatchUp(context)
+
         val stale = System.currentTimeMillis() - lastCheckedAt >= RESUME_RECHECK_MS
         if (activation.isRevoked || stale) refreshActivation()
     }
