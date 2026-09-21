@@ -71,11 +71,12 @@ fun NoticeViewerScreen(
 
     LaunchedEffect(notice?.logId) {
         val current = notice ?: return@LaunchedEffect
+        // Image only. A PDF never reaches this screen: its thumbnail attachment tap goes straight
+        // to an external reader (see NoticeViewModel.openPdf), and cachedPdfRender is a rendered
+        // page one, display-only -- resolving it here would only produce a picture the user cannot
+        // act on, exactly the confusion the one-attachment redesign removes.
         val found = withContext(Dispatchers.IO) {
-            // The sender's photo first, then the rendered PDF page. A notice may carry both, and
-            // the photo is the one chosen deliberately for people to look at.
             NoticeImageStore.cachedImage(context, current.logId)
-                ?: NoticeImageStore.cachedPdfRender(context, current.logId)
         }
         file = found
         bitmap = withContext(Dispatchers.IO) {
@@ -166,7 +167,7 @@ fun NoticeViewerScreen(
     }
 }
 
-/** Open / Share / Save, behind the overflow so the picture keeps the screen. */
+/** Share / Save, behind the overflow so the picture keeps the screen. */
 @Composable
 private fun ViewerActions(file: File, shareText: String) {
     val context = LocalContext.current
@@ -196,13 +197,6 @@ private fun ViewerActions(file: File, shareText: String) {
         )
     }
     DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-        DropdownMenuItem(
-            text = { Text(stringResource(R.string.action_open_with)) },
-            onClick = {
-                expanded = false
-                AttachmentActions.open(context, file)
-            },
-        )
         DropdownMenuItem(
             text = { Text(stringResource(R.string.action_share)) },
             onClick = {

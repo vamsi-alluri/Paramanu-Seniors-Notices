@@ -36,9 +36,10 @@ data class NoticeEntity(
     /**
      * A notice PDF on the website. Page one is rendered to an image on arrival.
      *
-     * This and [imageUrl] are not alternatives and may both be present: a notice can carry a photo
-     * *and* link the official circular. When both exist the photo wins the notification tray, since
-     * it was chosen for a small frame, and the expanded row shows both.
+     * A notice carries at most one attachment -- this or [imageUrl], never both -- because RSS
+     * permits only one `<enclosure>` per item and `Poller.gs:105` records exactly that. When a card
+     * resolves its attachment it therefore checks the photo first and falls back to the PDF render,
+     * never both at once.
      */
     val pdfUrl: String? = null,
     /**
