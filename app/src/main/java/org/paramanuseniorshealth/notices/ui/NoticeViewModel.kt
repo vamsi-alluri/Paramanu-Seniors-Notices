@@ -301,8 +301,9 @@ class NoticeViewModel(
      *
      * The two attachment sweeps below run unconditionally, outside that throttle. They are cheap
      * and idempotent -- the worker itself filters rows through [FetchPolicy.shouldRetry], so
-     * enqueuing when nothing is outstanding costs nothing -- unlike [refreshActivation], which
-     * makes a real network call and is rightly rate-limited. One sweep runs now, on whatever
+     * enqueuing when nothing is outstanding is at most a WorkManager bookkeeping write, not a
+     * fetch -- categorically cheaper than the network round trip [refreshActivation] makes, which
+     * is why that one stays rate-limited and these do not. One sweep runs now, on whatever
      * connection is available, and picks up anything small that was missed. The other stands
      * waiting for wifi and costs nothing until it appears, which is how a circular deferred on
      * mobile data eventually arrives without the user being told anything.

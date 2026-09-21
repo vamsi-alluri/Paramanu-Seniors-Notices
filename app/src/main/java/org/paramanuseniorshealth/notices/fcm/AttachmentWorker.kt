@@ -236,14 +236,27 @@ class AttachmentWorker(
                 .enqueueUniqueWork("attachment-$logId", ExistingWorkPolicy.KEEP, request)
         }
 
-        /** Sweeps everything outstanding. Called when the app comes forward: no delay, no jitter. */
+        /**
+         * Sweeps everything outstanding. Called when the app comes forward: no delay, no jitter.
+         *
+         * KEEP, not REPLACE. WorkManager cancels a REPLACE'd `CoroutineWorker`'s backing job on
+         * `onStopped()`, and that throws at the next suspension point -- not only between notices --
+         * so a REPLACE landing mid-download tears down the transfer itself. A user who resumes the
+         * app faster than one large circular takes to fetch would re-cancel that download every
+         * time, silently, forever. REPLACE would also buy nothing here even without that risk: this
+         * request carries no input data, no initial delay and no backoff, so there is no newer
+         * version of it for REPLACE to install. KEEP does not retain *finished* work either, so a
+         * later resume still enqueues a fresh sweep once the previous one has ended -- it only
+         * refuses to interrupt one still running. That also makes all three enqueue calls in this
+         * file consistently KEEP; do not "optimise" this one back to REPLACE.
+         */
         fun enqueueCatchUp(context: Context) {
             val request = OneTimeWorkRequestBuilder<AttachmentWorker>()
                 .setConstraints(connected())
                 .build()
 
             WorkManager.getInstance(context.applicationContext)
-                .enqueueUniqueWork(CATCH_UP, ExistingWorkPolicy.REPLACE, request)
+                .enqueueUniqueWork(CATCH_UP, ExistingWorkPolicy.KEEP, request)
         }
 
         /**
