@@ -823,17 +823,38 @@ In `PdfPageRenderer`, after `isReadablePdf`:
      *
      * Runs under [WORKER_TIMEOUT_MS], not the old eight seconds: nothing is holding a service open
      * behind this any more.
+     *
+     * **What the timeout does and does not bound.** [download] is a synchronous
+     * `HttpURLConnection` read with no suspension points, so [withTimeoutOrNull] cannot interrupt
+     * it mid-read -- it only stops *waiting* for it. A stalled trickle can keep this coroutine's
+     * underlying thread running well past [WORKER_TIMEOUT_MS], because each individual `read()`
+     * only has to beat the connection's own 15s `readTimeout` to keep going, and it can do that
+     * indefinitely. So a timed-out caller may still see the permanent PDF and render appear on
+     * disk afterwards, written by a download it had already given up on. This is inherited, not
+     * introduced here: [fetchPdfRender] and [fetchPdf] have had the identical shape all along. It
+     * is also harmless -- the worker records FAILED for the timeout, the late write lands a valid
+     * pdf+render pair, and the next sweep finds [cachedPdfRender] non-null, skips the fetch, and
+     * records FETCHED. This function's scratch file is named distinctly from [fetchPdf]'s so that
+     * late write cannot collide with a concurrent tap-path download for the same notice.
      */
     suspend fun fetchPdfKeeping(context: Context, pdfUrl: String, logId: String): PdfFetch? =
         withTimeoutOrNull(WORKER_TIMEOUT_MS) {
             withContext(Dispatchers.IO) {
-                val scratch = File(context.cacheDir, "notice_$logId-doc.part")
+                // Named differently from fetchPdf's "notice_$logId-doc.part": the worker's much
+                // wider timeout (5 minutes vs. fetchPdf's 60 seconds) makes it plausible for both
+                // to be mid-download for the same logId at once, and two HttpURLConnections
+                // writing to and renaming the same scratch file would corrupt each other. Keep
+                // this name distinct rather than folding it back into a shared constant.
+                val scratch = File(context.cacheDir, "notice_$logId-doc-worker.part")
                 runCatching {
                     download(pdfUrl, scratch)
-                    if (!PdfPageRenderer.isReadablePdf(scratch)) {
-                        error("$pdfUrl is not a readable PDF")
-                    }
-                    val pages = PdfPageRenderer.pageCount(scratch) ?: error("No pages in $pdfUrl")
+                    // pageCount and isReadablePdf open the file identically (same guards, same
+                    // PdfRenderer, same >= 1 check) -- pageCount's non-null result already proves
+                    // the file is readable, so a separate isReadablePdf call would be a third full
+                    // PdfRenderer open over what can be a 192-page document for information the
+                    // next line already has.
+                    val pages = PdfPageRenderer.pageCount(scratch)
+                        ?: error("$pdfUrl is not a readable PDF")
                     val bytes = scratch.length()
 
                     val rendered = PdfPageRenderer.renderFirstPage(scratch)
