@@ -37,6 +37,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,6 +50,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import org.paramanuseniorshealth.notices.R
@@ -66,6 +70,20 @@ import java.time.format.DateTimeFormatter
  * themselves use ("Blood Test: Every Thu").
  */
 private val Stamp = DateTimeFormatter.ofPattern("EEE, d MMM yyyy, h:mm a")
+
+/**
+ * How much of a notice a closed card shows.
+ *
+ * Four lines is enough that most notices say what they have to say without opening at all, while
+ * still holding the list to rows of roughly one height. A notice that fits is therefore lean: it
+ * draws open, carries no chevron, and ignores a tap, because there is nothing behind it. One that
+ * does not fit keeps its chevron and stays closed until asked.
+ *
+ * Deliberately a line count rather than a fixed height. This audience runs large system fonts, and
+ * a card pinned to a dp value would clip the first line for exactly the people who set the font
+ * that way.
+ */
+private const val COLLAPSED_BODY_LINES = 4
 
 /**
  * The notice history, with the standing dispensary information pinned above it.
@@ -360,9 +378,25 @@ private fun NoticeRow(
     // more where there is none is worse than no chevron at all. Such a row is simply drawn open and
     // does not react to a tap. A row awaiting an attachment is never lean -- it has a download
     // glyph to show and a tap to offer, whether or not the card is open.
+    // Whether the closed card's body is being cut off.
+    //
+    // Starts true -- assume there is more until the layout says otherwise -- because the two
+    // states feed each other: a lean row draws open, and an open row never renders the clipped
+    // Text that does the measuring. Guessing "it fits" would therefore open a long notice and
+    // never look again. Guessing "it does not" costs one frame on a short one, where the closed
+    // and open forms differ only by a rule and a chevron.
+    var bodyOverflows by remember(notice.id) { mutableStateOf(true) }
+
+    // A row expanding onto nothing.
+    //
+    // Two things have to be true: it carries no attachment, and its body already fits inside the
+    // closed card. The second half used to be free, because the body was never truncated -- so
+    // opening a text-only notice revealed literally nothing. Now that a long body is clipped to
+    // [COLLAPSED_BODY_LINES], such a notice does have more to show and must keep its chevron.
     val lean = thumbFile == null && !awaiting &&
         notice.pdfUrl.isNullOrBlank() &&
-        notice.linkUrl.isNullOrBlank()
+        notice.linkUrl.isNullOrBlank() &&
+        !bodyOverflows
     val open = expanded || lean
 
     // Rotated rather than swapped for a second drawable, so the arrow travels between its two
@@ -425,6 +459,11 @@ private fun NoticeRow(
                 Text(
                     text = notice.title,
                     style = MaterialTheme.typography.titleLarge,
+                    // Capped even when open. A headline running past two lines is a badly written
+                    // headline, and letting one stretch the card defeats the point of a list whose
+                    // rows are meant to scan at a glance.
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
                 if (!lean) {
@@ -475,9 +514,20 @@ private fun NoticeRow(
                     onLongClick = onLongClick,
                 )
             } else if (notice.body.isNotBlank()) {
+                // Clipped, so a wordy notice does not tower over a terse one. A closed card used
+                // to show its body in full, which made the list a column of wildly uneven blocks
+                // and made a long notice look as though it had opened itself.
+                //
+                // Plain Text rather than LinkedText on purpose: in a closed card a tap means
+                // "open this", and a tappable web address sitting in the middle of it would
+                // sometimes mean "leave the app" instead. Links become live once the card is open.
                 Text(
                     text = notice.body,
                     style = MaterialTheme.typography.bodyLarge,
+                    maxLines = COLLAPSED_BODY_LINES,
+                    overflow = TextOverflow.Ellipsis,
+                    // The only place the body is measured. See [bodyOverflows].
+                    onTextLayout = { bodyOverflows = it.hasVisualOverflow },
                     modifier = Modifier.padding(top = 8.dp),
                 )
             }
