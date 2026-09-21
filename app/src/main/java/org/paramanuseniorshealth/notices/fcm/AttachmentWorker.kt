@@ -289,7 +289,12 @@ class AttachmentWorker(
                 }
             }
 
-            val state = FetchPolicy.outcome(deferred = deferred, failed = failed)
+            val state = FetchPolicy.outcome(
+                deferred = deferred,
+                failed = failed,
+                previous = AttachmentState.parse(notice.attachmentState),
+                tapInitiated = tapInitiated,
+            )
             val attempts = FetchPolicy.nextAttempts(state, notice.attachmentAttempts, tapInitiated)
             repository.recordAttachment(logId, state, attempts, pages, bytes)
 

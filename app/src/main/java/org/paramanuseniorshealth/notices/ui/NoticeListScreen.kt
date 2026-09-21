@@ -315,6 +315,12 @@ private fun NoticeRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onOpenImage: () -> Unit,
+    // Also this row's only reason to recompose after a tap lands. `photo`/`pdfRender`/`linkImage`
+    // below read NoticeImageStore.cachedImage/cachedPdfRender/cachedLinkImage directly rather than
+    // from Compose snapshot state, so a successful download does not by itself invalidate this
+    // composable -- it is `downloading` flipping true -> false that forces the recomposition which
+    // re-reads the files and shows the new thumbnail. Do not "optimise" this parameter into a local
+    // `remember`, or the spinner will still work but the tile it is next to will stop updating.
     downloading: Boolean,
     onOpenPdf: () -> Unit,
     onFetchPdfFile: (onReady: (File) -> Unit) -> Unit,
@@ -330,6 +336,13 @@ private fun NoticeRow(
     val photo: File? = NoticeImageStore.cachedImage(context, notice.logId)
     val pdfRender: File? = NoticeImageStore.cachedPdfRender(context, notice.logId)
     val linkImage: File? = NoticeImageStore.cachedLinkImage(context, notice.logId)
+    // Falls through to linkImage where NoticeAttachments (the expanded view) stops at
+    // photo ?: pdfRender. That gap is currently unreachable, not unused: it depends on
+    // Poller.gs only attaching a link card when `!item.pdfUrl && !item.imageUrl`, i.e. a notice
+    // with a link logo never also carries a circular. If that sender-side property ever changes,
+    // a notice with a landed link logo and a still-deferred circular would show the favicon as
+    // its thumbnail with awaiting == false -- and since the "Open circular" button is gone, offer
+    // no way to reach the PDF at all.
     val thumbFile: File? = photo ?: pdfRender ?: linkImage
 
     // An attachment the notice says it has, which is not on the phone. One glyph, four causes.

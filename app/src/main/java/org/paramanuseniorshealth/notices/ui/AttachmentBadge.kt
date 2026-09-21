@@ -9,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import java.util.Locale
 
 /**
  * What the reader is told about an attachment before they commit to opening it: type, page count,
@@ -45,13 +46,18 @@ object AttachmentBadge {
      * Ceiling division below a megabyte, so a real file never reads as `0 kB`: the one reading that
      * would look like an error rather than a small file. An empty file (`bytes <= 0`) is the
      * exception -- there is nothing to round up to.
+     *
+     * [Locale.ROOT], not the default locale: `%.1f` under a Devanagari-digit default locale
+     * renders in Devanagari digits, while the page count next to it in [label] is plain
+     * `Int.toString` and stays ASCII -- one badge, two digit systems, for readers in their
+     * eighties who do not need that puzzle.
      */
     fun formatSize(bytes: Long?): String? {
         if (bytes == null) return null
         return when {
             bytes <= 0 -> "0 kB"
             bytes < MB -> "${(bytes + KB - 1) / KB} kB"
-            else -> "%.1f MB".format(bytes.toDouble() / MB)
+            else -> String.format(Locale.ROOT, "%.1f MB", bytes.toDouble() / MB)
         }
     }
 }

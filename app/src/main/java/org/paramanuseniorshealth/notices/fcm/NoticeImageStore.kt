@@ -169,6 +169,22 @@ object NoticeImageStore {
     suspend fun fetchPdfThumb(context: Context, url: String, logId: String): Bitmap? =
         fetchPicture(context, url, logId, "pdf")
 
+    /**
+     * Fetches a picture ([fetchImage], [fetchLinkImage] or [fetchPdfThumb]) into the cache.
+     *
+     * The scratch file is created with [File.createTempFile], unique per *call* rather than per
+     * `logId`+`kind`, because up to four producers can race to fetch the same notice's same kind
+     * at once: the per-notice jittered worker (`attachment-$logId`), the app-open sweep
+     * (`attachment-catch-up`, which fires with no delay -- exactly when a user might also tap),
+     * the wifi sweep (`attachment-catch-up-wifi`), and a user tap. A name shared between them lets
+     * two downloads interleave into one file; the MIME check above still passes because only the
+     * header needs to be intact, so [moveInto] commits the interleaved bytes to the real target,
+     * the bitmap fails to decode, and the notice is left FAILED with a corrupt file that
+     * [cachedImage]/[cachedPdfRender] treat as already fetched forever after -- a permanently
+     * blank tile with no glyph, no tap and no retry able to reach it. A unique name per call makes
+     * that interleaving impossible; the `finally` below cleans it up since, unlike the old shared
+     * name, it never gets overwritten by the next call and would otherwise litter `cacheDir`.
+     */
     private suspend fun fetchPicture(
         context: Context,
         url: String,
@@ -176,29 +192,32 @@ object NoticeImageStore {
         kind: String,
     ): Bitmap? = withTimeoutOrNull(TIMEOUT_MS) {
         withContext(Dispatchers.IO) {
-            runCatching {
-                val scratch = File(context.cacheDir, "notice_$logId-$kind.part")
-                val contentType = download(url, scratch)
+            val scratch = File.createTempFile("notice_$logId-$kind", ".part", context.cacheDir)
+            try {
+                runCatching {
+                    val contentType = download(url, scratch)
 
-                // Checked before the file is kept, not after it fails to decode. An ICO favicon
-                // downloads perfectly and then renders as nothing at all, which on a phone looks
-                // like the app losing the picture rather than like a format it cannot read.
-                if (!MimeTypes.isDecodableImage(contentType)) {
-                    scratch.delete()
-                    error("$url is ${MimeTypes.normalise(contentType)}, which cannot be decoded")
-                }
+                    // Checked before the file is kept, not after it fails to decode. An ICO favicon
+                    // downloads perfectly and then renders as nothing at all, which on a phone looks
+                    // like the app losing the picture rather than like a format it cannot read.
+                    if (!MimeTypes.isDecodableImage(contentType)) {
+                        error("$url is ${MimeTypes.normalise(contentType)}, which cannot be decoded")
+                    }
 
-                val target = File(
-                    directory(context),
-                    "${stem(logId, kind)}.${MimeTypes.imageExtension(contentType, url)}",
-                )
-                find(directory(context), stem(logId, kind))?.takeIf { it != target }?.delete()
-                moveInto(scratch, target)
+                    val target = File(
+                        directory(context),
+                        "${stem(logId, kind)}.${MimeTypes.imageExtension(contentType, url)}",
+                    )
+                    find(directory(context), stem(logId, kind))?.takeIf { it != target }?.delete()
+                    moveInto(scratch, target)
 
-                prune(context)
-                decodeDownsampled(target)
-            }.onFailure { Log.w(TAG, "Image fetch failed for $url", it) }
-                .getOrNull()
+                    prune(context)
+                    decodeDownsampled(target)
+                }.onFailure { Log.w(TAG, "Image fetch failed for $url", it) }
+                    .getOrNull()
+            } finally {
+                runCatching { scratch.delete() }
+            }
         }
     }
 

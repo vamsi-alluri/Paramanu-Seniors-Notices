@@ -1,11 +1,26 @@
 package org.paramanuseniorshealth.notices
 
 import org.paramanuseniorshealth.notices.ui.AttachmentBadge
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Before
 import org.junit.Test
+import java.util.Locale
 
 class AttachmentBadgeTest {
+
+    private lateinit var originalLocale: Locale
+
+    @Before
+    fun saveLocale() {
+        originalLocale = Locale.getDefault()
+    }
+
+    @After
+    fun restoreLocale() {
+        Locale.setDefault(originalLocale)
+    }
 
     @Test
     fun `pdf with pages and size`() {
@@ -85,5 +100,16 @@ class AttachmentBadgeTest {
     @Test
     fun `formatSize of null is null`() {
         assertNull(AttachmentBadge.formatSize(null))
+    }
+
+    /**
+     * A default locale whose numbering system is Devanagari must not change the MB figure --
+     * otherwise it reads in Devanagari digits next to a page count that is plain ASCII
+     * `Int.toString`, mixing two digit systems in one badge.
+     */
+    @Test
+    fun `formatSize is stable under a non-ASCII-digit default locale`() {
+        Locale.setDefault(Locale.forLanguageTag("hi-IN-u-nu-deva"))
+        assertEquals("5.6 MB", AttachmentBadge.formatSize(5_872_345))
     }
 }

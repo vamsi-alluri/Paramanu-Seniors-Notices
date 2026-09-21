@@ -98,11 +98,36 @@ object FetchPolicy {
      * declined is DEFERRED, not FAILED: the circular is the part still worth waiting for wifi for,
      * and recording FAILED would both burn an attempt and -- after [MAX_ATTEMPTS] -- stop the
      * sweeps retrying a fetch that was never actually attempted.
+     *
+     * **A tap must not downgrade an existing DEFERRED to FAILED.** [tapInitiated] never *defers* --
+     * `fetchNow` bypasses [FetchPolicy] and always attempts -- so a tap that fails computes FAILED
+     * here even when [previous] was DEFERRED. Writing that FAILED over a DEFERRED row is a real
+     * regression, not a neutral update: DEFERRED is uncapped ([shouldRetry] always retries it), so a
+     * notice already at [MAX_ATTEMPTS] from earlier *automatic* failures, later deferred by the
+     * policy, would go from "the standing wifi sweep will keep trying forever" to permanently dead
+     * the moment an unlucky tap fails on it -- with [nextAttempts]'s `tapInitiated` guard doing
+     * nothing to stop it, because that guard only protects the *count*, not the *state*. So this
+     * case alone keeps [previous]: the tap gets to try, but a failed tap cannot make a notice worse
+     * off than it was before the user touched it.
      */
-    fun outcome(deferred: Boolean, failed: Boolean): AttachmentState = when {
-        deferred -> AttachmentState.DEFERRED
-        failed -> AttachmentState.FAILED
-        else -> AttachmentState.FETCHED
+    fun outcome(
+        deferred: Boolean,
+        failed: Boolean,
+        previous: AttachmentState = AttachmentState.PENDING,
+        tapInitiated: Boolean = false,
+    ): AttachmentState {
+        val computed = when {
+            deferred -> AttachmentState.DEFERRED
+            failed -> AttachmentState.FAILED
+            else -> AttachmentState.FETCHED
+        }
+        return if (
+            tapInitiated && computed == AttachmentState.FAILED && previous == AttachmentState.DEFERRED
+        ) {
+            previous
+        } else {
+            computed
+        }
     }
 
     /**

@@ -75,6 +75,46 @@ class FetchPolicyTest {
         )
     }
 
+    /**
+     * A notice already DEFERRED is uncapped and retried by the standing wifi sweep forever. A tap
+     * that then fails must not overwrite that with FAILED -- doing so, combined with an attempt
+     * count already at the cap from earlier automatic failures, would permanently kill the wifi
+     * sweep for a notice an unlucky tap touched. A non-tap (automatic) failure is not protected:
+     * only a tap gets this exemption, since only a tap can fail without ever having deferred.
+     */
+    @Test
+    fun `a failed tap does not downgrade an existing deferral`() {
+        assertEquals(
+            AttachmentState.DEFERRED,
+            FetchPolicy.outcome(
+                deferred = false,
+                failed = true,
+                previous = AttachmentState.DEFERRED,
+                tapInitiated = true,
+            ),
+        )
+        // Same inputs, but not from a tap: the automatic path is not exempted.
+        assertEquals(
+            AttachmentState.FAILED,
+            FetchPolicy.outcome(
+                deferred = false,
+                failed = true,
+                previous = AttachmentState.DEFERRED,
+                tapInitiated = false,
+            ),
+        )
+        // A tap failing on a notice that was never deferred still records FAILED normally.
+        assertEquals(
+            AttachmentState.FAILED,
+            FetchPolicy.outcome(
+                deferred = false,
+                failed = true,
+                previous = AttachmentState.FAILED,
+                tapInitiated = true,
+            ),
+        )
+    }
+
     @Test
     fun `only a failure burns an attempt`() {
         assertEquals(4, FetchPolicy.nextAttempts(AttachmentState.FAILED, 3))
