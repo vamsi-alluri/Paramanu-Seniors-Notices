@@ -607,15 +607,20 @@ Replace both prune functions with:
      *
      * The newest file is always kept, even if it alone is over budget: it is the notice that has
      * just arrived, and deleting it would mean the user never sees the attachment they were
-     * notified about. One shape for both directories, because "how much storage may this use" is
-     * the same question whether the files are thumbnails or circulars.
+     * notified about. An oversized file is skipped rather than ending the scan, so a smaller older
+     * file that still fits is kept. One shape for both directories, because "how much storage may
+     * this use" is the same question whether the files are thumbnails or circulars.
      */
     fun pruneTo(dir: File, budgetBytes: Long) {
         val files = dir.listFiles()?.sortedByDescending { it.lastModified() } ?: return
         var used = 0L
         files.forEachIndexed { index, file ->
-            used += file.length()
-            if (index > 0 && used > budgetBytes) file.delete()
+            val projected = used + file.length()
+            if (index > 0 && projected > budgetBytes) {
+                file.delete()
+            } else {
+                used = projected
+            }
         }
     }
 ```

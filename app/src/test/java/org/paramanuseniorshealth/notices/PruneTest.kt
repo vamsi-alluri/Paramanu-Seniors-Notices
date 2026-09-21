@@ -56,4 +56,21 @@ class PruneTest {
         NoticeImageStore.pruneTo(folder.root, budgetBytes = 100)
         NoticeImageStore.pruneTo(File(folder.root, "absent"), budgetBytes = 100)
     }
+
+    /**
+     * The bug this pins: a running total that keeps counting bytes it has already deleted will take
+     * the older small file with it, though the survivors are nowhere near the budget.
+     */
+    @Test
+    fun `a small older file survives an oversized newer neighbour`() {
+        val newest = write("c.jpg", 100, 1_000)
+        val oversized = write("b.jpg", 5_000, 2_000)
+        val oldSmall = write("a.jpg", 100, 3_000)
+
+        NoticeImageStore.pruneTo(folder.root, budgetBytes = 1_000)
+
+        assertTrue(newest.exists())
+        assertFalse(oversized.exists())
+        assertTrue(oldSmall.exists())
+    }
 }
