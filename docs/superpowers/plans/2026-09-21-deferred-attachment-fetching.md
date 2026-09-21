@@ -1276,9 +1276,43 @@ Add `.setOnlyAlertOnce(true)` to the builder, and set the large icon from the pl
 Add the helper and the update entry point at the end of the object:
 
 ```kotlin
-    /** A vector turned into the bitmap `setLargeIcon` requires. */
-    private fun Context.glyphBitmap(resId: Int): Bitmap? =
-        AppCompatResources.getDrawable(this, resId)?.toBitmap(128, 128)
+    /**
+     * A vector turned into the bitmap `setLargeIcon` requires, on a filled disc rather than
+     * transparency.
+     *
+     * The tray's large icon is not auto-tinted the way `setSmallIcon` is -- it is drawn as-is over
+     * a panel background that follows the system theme. A theme attribute in the vector would
+     * resolve against this app's theme at render time, not the tray's independent dark styling, so
+     * it would not reliably track the background it needs contrast against. A disc carries its own
+     * background instead, so the glyph reads the same in both themes with no detection at all.
+     * Paper and ink match the standing-information card (see `NoticeListScreen.kt`), for the same
+     * "fixed, identical in light and dark" reasoning recorded there.
+     *
+     * Note: `androidx.appcompat` is not a project dependency; use `ContextCompat.getDrawable`
+     * instead of `AppCompatResources.getDrawable`.
+     */
+    private fun Context.glyphBitmap(resId: Int): Bitmap? {
+        val drawable = ContextCompat.getDrawable(this, resId) ?: return null
+        val size = 128
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.drawCircle(
+            size / 2f,
+            size / 2f,
+            size / 2f,
+            Paint().apply {
+                isAntiAlias = true
+                color = 0xFFFAF4E6.toInt() // paper
+            },
+        )
+        // A quarter-size inset on each side leaves the glyph sitting inside the disc rather than
+        // touching its edge.
+        val inset = size / 4
+        drawable.setBounds(inset, inset, size - inset, size - inset)
+        drawable.setTint(0xFF10131A.toInt()) // ink
+        drawable.draw(canvas)
+        return bitmap
+    }
 
     /**
      * Puts a fetched picture onto a notification already in the tray.
