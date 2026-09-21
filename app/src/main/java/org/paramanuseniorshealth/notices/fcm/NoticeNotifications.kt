@@ -245,17 +245,36 @@ object NoticeNotifications {
      * later would resurrect something the user has already dealt with, and `setOnlyAlertOnce`
      * would not save them from seeing it reappear. A notice whose notification has gone still gets
      * its picture in the app, which is where they would go looking.
+     *
+     * Safe to call after any fetch attempt, not only a wholly successful one: a notice can carry
+     * several attachments and have some land while others defer, and the ones that landed should
+     * be shown. Every path below returns without posting when there is nothing new to show.
      */
     fun updatePicture(context: Context, notice: NoticeEntity) {
         val logId = notice.logId ?: return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
         val id = logId.hashCode()
-        if (manager.activeNotifications.none { it.id == id }) return
+        val posted = manager.activeNotifications.firstOrNull { it.id == id } ?: return
 
-        val file = NoticeImageStore.cachedImage(context, logId)
+        // Same precedence the message path used to apply: the sender's own picture, then the
+        // circular's first page, then the link card. The card is last and conditional -- see below.
+        val chosen = NoticeImageStore.cachedImage(context, logId)
             ?: NoticeImageStore.cachedPdfRender(context, logId)
-            ?: return
-        val bitmap = NoticeImageStore.decodeDownsampled(file) ?: return
+        val card = if (chosen == null) NoticeImageStore.cachedLinkImage(context, logId) else null
+        val bitmap = NoticeImageStore.decodeDownsampled(chosen ?: card ?: return) ?: return
+
+        // A link image only earns the tray when it is a picture rather than a logo: a YouTube still
+        // fills a notification, a 128px favicon stretched across one looks broken. The test has to
+        // run after decoding, because the dimensions are not known before. The two other kinds are
+        // exempt -- a sender's photo and a rendered A4 page were both chosen to be looked at.
+        //
+        // No placeholder glyph accompanies this. A link-only notice has always shown either the
+        // card image or nothing, and giving it a glyph here would be new behaviour rather than the
+        // restoration this is.
+        if (card != null && !TrayArtwork.isPictureWorthy(bitmap)) {
+            bitmap.recycle()
+            return
+        }
 
         post(
             context = context,
@@ -263,7 +282,14 @@ object NoticeNotifications {
             body = notice.body,
             logId = logId,
             image = bitmap,
-            channel = NoticeChannel.HIGH,
+            // Read back off the notification being replaced rather than assumed. NoticeEntity does
+            // not store the topic, so the channel cannot be re-derived from the notice the way
+            // NoticeMessagingService derives it -- but the live notification already carries the
+            // answer, and it is the same one that post() chose minutes ago. Hardcoding HIGH here
+            // silently promoted a TESTING or LOW notice the moment its picture landed, which would
+            // have buzzed a phone for a delivery check.
+            channel = NoticeChannel.entries.firstOrNull { it.id == posted.notification.channelId }
+                ?: NoticeChannel.HIGH,
         )
     }
 

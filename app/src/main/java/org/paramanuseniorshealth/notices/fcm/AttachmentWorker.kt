@@ -51,12 +51,39 @@ class AttachmentWorker(
             }
         }
 
-        // One bad notice must not abandon the rest of a sweep, so each is isolated. Logged rather
-        // than swallowed: a fetch that throws is a bug here, not a policy decision, and the
-        // recordAttachment inside fetch() never runs when it does.
         notices.forEach { notice ->
-            runCatching { fetch(app, notice) }
-                .onFailure { Log.w(TAG, "Attachment fetch threw for ${notice.logId}", it) }
+            // Notices are processed serially and each may take up to NoticeImageStore's five-minute
+            // circular ceiling, so a sweep holding several retryable circulars can run past
+            // WorkManager's ten-minute execution window. Once stopped, continuing would keep
+            // downloading and keep writing to Room on behalf of work the system has already given
+            // up on. What a cutoff drops is decided by `withAttachments()`'s `ORDER BY receivedAt
+            // DESC`: the oldest notices go first, which is the right end to lose -- and they are
+            // picked up by the next sweep, since nothing here has advanced their state.
+            if (isStopped) return Result.success()
+
+            // One bad notice must not abandon the rest of a sweep, so each is isolated. Logged
+            // rather than swallowed: a fetch that throws is a bug here, not a policy decision.
+            runCatching { fetch(app, notice) }.onFailure { failure ->
+                Log.w(TAG, "Attachment fetch threw for ${notice.logId}", failure)
+
+                // fetch()'s own recordAttachment never ran, so without this the row keeps both its
+                // prior state and its prior attempt count -- and a notice that throws on every pass
+                // would be retried by every sweep forever, never reaching MAX_ATTEMPTS. A throw is
+                // a failure in the plainest sense, so it is recorded as one.
+                //
+                // Null-safe rather than asserted, unlike in fetch(): the throw being handled here
+                // may be that very assertion, and re-throwing it from the handler would abandon the
+                // rest of the sweep -- which is the one thing this block exists to prevent.
+                notice.logId?.let { logId ->
+                    runCatching {
+                        app.repository.recordAttachment(
+                            logId = logId,
+                            state = AttachmentState.FAILED,
+                            attempts = notice.attachmentAttempts + 1,
+                        )
+                    }.onFailure { Log.w(TAG, "Could not record the failure for $logId", it) }
+                }
+            }
         }
         return Result.success()
     }
@@ -140,9 +167,14 @@ class AttachmentWorker(
         val attempts = FetchPolicy.nextAttempts(state, notice.attachmentAttempts)
         app.repository.recordAttachment(logId, state, attempts, pages, bytes)
 
-        if (state == AttachmentState.FETCHED) {
-            NoticeNotifications.updatePicture(context, notice)
-        }
+        // Unconditional, and deliberately not gated on FETCHED. A notice carrying a sender photo
+        // and a thumbless circular on a metered connection fetches the photo and defers the
+        // document, so the outcome is DEFERRED -- and gating here would leave the tray showing a
+        // type placeholder while the photo sat on disk and the in-app row already displayed it.
+        // That is exactly the case the deferral machinery exists to handle well. updatePicture
+        // early-returns when the notification is gone and when nothing is cached, so it is already
+        // a no-op in every case where it should not act.
+        NoticeNotifications.updatePicture(context, notice)
         if (state == AttachmentState.DEFERRED) {
             // Nothing is scheduled for "later on mobile data" -- that is the tap. This is only the
             // standing wifi sweep, which costs nothing while no wifi appears.

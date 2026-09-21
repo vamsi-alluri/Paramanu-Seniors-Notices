@@ -155,7 +155,7 @@ object NoticeImageStore {
     /**
      * A published first-page image for a circular, ~40KB instead of the document's ~5.6MB.
      *
-     * Its scratch file is `notice_$logId-pdf.part`, distinct from the three other scratch names in
+     * Its scratch file is `notice_$logId-pdf.part`, distinct from the four other scratch names in
      * this file, so two kinds downloading for one notice cannot overwrite each other mid-flight.
      *
      * Its **target** is not distinct, and that is deliberate: `$logId-pdf.jpg` is exactly where
