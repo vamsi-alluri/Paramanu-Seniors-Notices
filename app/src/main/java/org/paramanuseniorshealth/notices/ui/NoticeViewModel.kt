@@ -269,7 +269,20 @@ class NoticeViewModel(
         val id = activation.dispensaryId ?: return
         dispensaries.refresh(id)
         activation.syncSubscriptions()
+        enforceSoleTopic()
         _topicChoices.value = activation.topicChoices()
+    }
+
+    /**
+     * Re-subscribes a dispensary's only topic if it is off. See [Dispensary.soleTopicToForceOn].
+     *
+     * Runs after [ActivationRepository.syncSubscriptions] rather than before it, so it is deciding
+     * against the topic list that was just read rather than the previous one.
+     */
+    private suspend fun enforceSoleTopic() {
+        val topic = dispensaries.dispensary.value?.soleTopicToForceOn(activation.topicChoices())
+            ?: return
+        activation.setTopic(topic, true)
     }
 
     /**
@@ -330,7 +343,10 @@ class NoticeViewModel(
             when (val result = activation.redeem(rawCode)) {
                 RedeemResult.Success -> {
                     // redeem() has already read the dispensary -- its topics and its banner -- and
-                    // subscribed to the defaults, so Settings and the header are ready.
+                    // subscribed to the defaults, so Settings and the header are ready. A sole
+                    // topic defaulting to off would still leave a silent app, so it is forced here
+                    // too rather than only on the refresh path.
+                    enforceSoleTopic()
                     _topicChoices.value = activation.topicChoices()
                     // redeem() clears the revocation itself, so the banner is already down by here.
                     // The old revocation notice goes too: it says no more alerts will arrive, which

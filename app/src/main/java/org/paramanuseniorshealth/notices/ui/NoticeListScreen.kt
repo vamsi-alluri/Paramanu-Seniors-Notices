@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -39,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -326,6 +328,25 @@ private fun NoticeRow(
         ?: notice.imageUrl?.takeIf { it.isNotBlank() }
         ?: notice.linkImage?.takeIf { it.isNotBlank() }
 
+    // A row expanding onto nothing.
+    //
+    // The body is shown in full whether the row is open or closed -- it is never truncated -- so
+    // with no picture, no circular and no link card, expanding changes exactly one thing: the body
+    // becomes tappable text. That is not worth a gesture, and a chevron promising more where there
+    // is none is worse than no chevron at all. Such a row is simply drawn open and does not react
+    // to a tap.
+    val lean = thumbModel == null &&
+        notice.pdfUrl.isNullOrBlank() &&
+        notice.linkUrl.isNullOrBlank()
+    val open = expanded || lean
+
+    // Rotated rather than swapped for a second drawable, so the arrow travels between its two
+    // meanings instead of blinking from one to the other.
+    val chevronTurn by animateFloatAsState(
+        targetValue = if (open) 180f else 0f,
+        label = "row-chevron",
+    )
+
     val target = MaterialTheme.colorScheme.let {
         when {
             selected -> it.secondaryContainer
@@ -342,13 +363,18 @@ private fun NoticeRow(
         modifier = modifier
             .fillMaxWidth()
             // Long-press enters selection; once in it a plain tap selects rather than expands, so
-            // the gesture does not change meaning halfway through a multi-select.
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            // the gesture does not change meaning halfway through a multi-select. A lean row has
+            // nothing to expand, so its tap is inert -- except in selection mode, where every row
+            // must stay selectable regardless of what it carries.
+            .combinedClickable(
+                onClick = { if (!lean || inSelection) onClick() },
+                onLongClick = onLongClick,
+            )
             .animateContentSize(),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (thumbModel != null && !expanded) {
+                if (thumbModel != null && !open) {
                     AsyncImage(
                         model = thumbModel,
                         contentDescription = null,
@@ -364,9 +390,32 @@ private fun NoticeRow(
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.weight(1f),
                 )
+                if (!lean) {
+                    // Not an IconButton: the whole card already handles the tap, and a nested
+                    // clickable here would swallow it and give the arrow a different meaning from
+                    // the card it sits on. This is the sign, not a second control.
+                    Icon(
+                        painter = painterResource(R.drawable.ic_expand_more),
+                        contentDescription = stringResource(
+                            if (open) R.string.action_collapse else R.string.action_expand
+                        ),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .size(32.dp)
+                            .rotate(chevronTurn),
+                    )
+                }
             }
 
-            if (expanded) {
+            // Rules the title off from the notice once the card is open, so an expanded card reads
+            // as three bands -- who it is from, what it says, when it arrived -- rather than as a
+            // wall of text with an arrow floating over it. Closed, the card stays a single block.
+            if (open) {
+                HorizontalDivider(modifier = Modifier.padding(top = 12.dp))
+            }
+
+            if (open) {
                 if (notice.body.isNotBlank()) {
                     LinkedText(
                         text = notice.body,
