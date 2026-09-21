@@ -50,16 +50,19 @@ ksp {
     arg('room.schemaLocation', "$projectDir/schemas".toString())
 }
 
-configurations.matching { it.name.contains("AndroidTest") }.configureEach {
+configurations.matching { it.name.toLowerCase().contains("androidtest") }.configureEach {
     // The Compose BOM pins kotlinx-serialization-core to 1.7.3 for the whole project, but
     // room-testing's precompiled migration-bundle serializers were built against a newer
     // kotlinx.serialization runtime (GeneratedSerializer.typeParametersSerializers()). Forced
-    // only on the androidTest classpath so app code keeps the BOM's pin everywhere else.
+    // only on the androidTest classpath so app code keeps the BOM's pin everywhere else -- app
+    // code never deserializes a Room migration bundle, only room-testing does, so the BOM's
+    // 1.7.3 pin is correct and safe for what actually ships to a device.
+    def serializationVersion = libs.versions.kotlinxSerialization.get()
     resolutionStrategy {
-        force 'org.jetbrains.kotlinx:kotlinx-serialization-core:1.8.1'
-        force 'org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.8.1'
-        force 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1'
-        force 'org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.8.1'
+        force "org.jetbrains.kotlinx:kotlinx-serialization-core:$serializationVersion"
+        force "org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:$serializationVersion"
+        force "org.jetbrains.kotlinx:kotlinx-serialization-json:$serializationVersion"
+        force "org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:$serializationVersion"
     }
 }
 
