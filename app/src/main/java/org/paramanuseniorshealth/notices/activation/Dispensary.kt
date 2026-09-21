@@ -19,6 +19,22 @@ data class Dispensary(
     val topics: List<DispensaryTopic>,
 ) {
     fun topic(name: String): DispensaryTopic? = topics.firstOrNull { it.topic == name }
+
+    /**
+     * The topic that must be forced back on, or null when there is nothing to force.
+     *
+     * A dispensary offering exactly one topic is not offering a choice, and Settings draws it as
+     * plain text with no switch. A user who had already switched it off -- or who arrives at this
+     * build with it off -- would then have no way back and no sign of what happened: the app would
+     * simply go quiet. So the sole topic is re-subscribed rather than left as the user last set it.
+     *
+     * Returns null for two or more topics, where the switches are real and the user's answer stands.
+     */
+    fun soleTopicToForceOn(choices: Map<String, Boolean>): String? {
+        val only = topics.singleOrNull() ?: return null
+        val on = choices[only.topic] ?: only.defaultOn
+        return only.topic.takeIf { !on }
+    }
 }
 
 data class DispensaryTopic(

@@ -103,6 +103,30 @@ object PdfPageRenderer {
     }
 
     /**
+     * How many pages [file] has, or null if it cannot be opened.
+     *
+     * The renderer already had this and discarded it: [renderFirstPage] opens a `PdfRenderer` and
+     * reads `pageCount` purely to check it is at least one. A dispensary circular runs to about
+     * 192 pages, which is worth telling the reader before they tap into it.
+     */
+    fun pageCount(file: File): Int? {
+        if (!file.exists() || file.length() == 0L) return null
+        var descriptor: ParcelFileDescriptor? = null
+        var renderer: PdfRenderer? = null
+        return try {
+            descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            renderer = PdfRenderer(descriptor)
+            renderer.pageCount.takeIf { it >= 1 }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not count pages in ${file.name}", e)
+            null
+        } finally {
+            runCatching { renderer?.close() }
+            runCatching { descriptor?.close() }
+        }
+    }
+
+    /**
      * Renders page one of [file] at up to [RENDER_LONG_EDGE] on its long edge.
      *
      * Returns null for anything that is not a readable PDF -- password-protected files included,

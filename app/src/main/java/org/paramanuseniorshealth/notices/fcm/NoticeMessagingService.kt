@@ -40,6 +40,12 @@ class NoticeMessagingService : FirebaseMessagingService() {
         val logId = data["logId"]
         val imageUrl = data["imageUrl"]?.takeIf { it.isNotBlank() }
         val pdfUrl = data["pdfUrl"]?.takeIf { it.isNotBlank() }
+        // A published first-page image, and the circular's measurements. All three are absent until
+        // the website's pipeline ships; when they arrive the worker fetches ~40KB rather than
+        // ~5.6MB, and `pdfBytes` lets a metered phone decide without even making a HEAD request.
+        val pdfThumbUrl = data["pdfThumbUrl"]?.takeIf { it.isNotBlank() }
+        val pdfPages = data["pdfPages"]?.toIntOrNull()
+        val pdfBytes = data["pdfBytes"]?.toLongOrNull()
         // Resolved by the sender, never here: see NoticeEntity.linkUrl. All four may be absent, and
         // linkUrl may arrive alone when the sender could not resolve a card.
         val linkUrl = data["linkUrl"]?.takeIf { it.isNotBlank() }
@@ -68,6 +74,8 @@ class NoticeMessagingService : FirebaseMessagingService() {
             }
 
             // Saved before anything is fetched: a slow or dead URL must never cost a history entry.
+            // It is also what the worker reads minutes later, so the URLs must be persisted here
+            // even though nothing on this path uses them.
             val isNew = app.repository.save(
                 title = title,
                 body = body,
@@ -78,30 +86,19 @@ class NoticeMessagingService : FirebaseMessagingService() {
                 linkTitle = linkTitle,
                 linkImage = linkImage,
                 linkSite = linkSite,
+                pdfThumbUrl = pdfThumbUrl,
+                pdfPages = pdfPages,
+                pdfBytes = pdfBytes,
             )
 
-            // Every attachment present is fetched -- they are not alternatives, and the expanded row
-            // shows each. Fetching serves double duty: one of these bitmaps goes into the tray
-            // notification and the same files back the in-app row, so the UI never performs network
-            // I/O and the notice stays readable offline.
+            // Nothing is downloaded here any more.
             //
-            // The PDF here is only page one, rendered. The circular itself is downloaded when the
-            // user taps to open it: holding a 2MB download inside this service's budget, for a file
-            // most people never open, would pay the cost for everyone to benefit nobody.
-            val picture = if (logId != null) {
-                val photo = imageUrl?.let { NoticeImageStore.fetchImage(applicationContext, it, logId) }
-                val rendered = pdfUrl?.let { NoticeImageStore.fetchPdfRender(applicationContext, it, logId) }
-                val card = linkImage?.let { NoticeImageStore.fetchLinkImage(applicationContext, it, logId) }
-
-                // The sender's own picture wins the tray: it was chosen for a small frame, whereas
-                // an A4 page shrunk to notification size is barely legible. The card image comes
-                // last and only when it is a picture rather than a logo -- a YouTube still fills a
-                // notification well, a 128px favicon stretched across one looks broken.
-                photo ?: rendered ?: card?.takeIf { TrayArtwork.isPictureWorthy(it) }
-            } else {
-                null
-            }
-
+            // This ran under runBlocking inside a service that may be torn down after ten or twenty
+            // seconds, and for a circular it pulled the whole 5.6MB document to render page one.
+            // The notification now goes out immediately with a type placeholder, and the worker
+            // fills the picture in within the hour -- or leaves a download glyph, if the policy says
+            // this is not the app's data to spend.
+            //
             // Only draw the tray notification for data-only payloads: if the sender also included a
             // `notification` block while we were foregrounded, posting again would duplicate it.
             // `isNew` additionally suppresses FCM's at-least-once re-deliveries.
@@ -111,10 +108,15 @@ class NoticeMessagingService : FirebaseMessagingService() {
                     title = title,
                     body = body,
                     logId = logId,
-                    image = picture,
+                    hasPdf = pdfUrl != null,
+                    hasImage = imageUrl != null,
                     channel = channel,
                 )
             }
+            // Guarded by isNew for the same reason: a re-delivery must not queue a second fetch.
+            // Guarded by logId because every cache path keys on it, so a notice without one has
+            // nowhere to put an attachment.
+            if (isNew && logId != null) AttachmentWorker.enqueueFor(applicationContext, logId)
         }
     }
 

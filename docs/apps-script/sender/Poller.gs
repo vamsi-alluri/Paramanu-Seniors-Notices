@@ -104,11 +104,20 @@ function pollerFetchFeed_(url) {
  *
  * RSS allows at most one enclosure per item, so an alert carries a picture or a circular, never
  * both. The app tolerates both being present; the feed simply cannot express it.
+ *
+ * A PDF item may also carry thumbUrl, pages and bytes -- a published first-page preview, its page
+ * count, and its size -- so the app can show a small picture and fetch the multi-megabyte original
+ * only if the reader taps it. All three are optional and PDF-only: thumbUrl comes from
+ * media:thumbnail/@url, pages from the pn:pages extension element, and bytes from
+ * enclosure/@length. Absent stays absent -- '' for thumbUrl, null for the two numbers -- rather
+ * than 0 or NaN, because the app treats a present-but-junk value differently from a missing one.
  */
 function pollerParseFeed_(xml) {
   // Built here rather than at file scope: a getNamespace call at load time runs before the project
   // has finished loading its other files, and load-order bugs in Apps Script are miserable to find.
   var contentNs = XmlService.getNamespace('content', 'http://purl.org/rss/1.0/modules/content/');
+  var mediaNs = XmlService.getNamespace('media', 'http://search.yahoo.com/mrss/');
+  var pnNs = XmlService.getNamespace('pn', 'https://paramanuseniorshealth.org/rss');
 
   var channel = XmlService.parse(xml).getRootElement().getChild('channel');
   if (!channel) {
@@ -128,6 +137,21 @@ function pollerParseFeed_(xml) {
 
     var encoded = item.getChild('encoded', contentNs);
 
+    // RSS 2.0 gives the size for nothing: enclosure/@length is bytes, and is already required by
+    // the spec. Only the page count needs a namespace of our own -- there is no standard for it.
+    var lengthAttr = enclosure ? enclosure.getAttribute('length') : null;
+    var bytes = lengthAttr ? parseInt(lengthAttr.getValue(), 10) : null;
+    if (isNaN(bytes)) bytes = null;
+
+    // A PDF cannot carry its own preview: RSS allows one enclosure per item and that is the
+    // document. media:thumbnail is where the first-page image goes.
+    var thumb = item.getChild('thumbnail', mediaNs);
+    var thumbAttr = thumb ? thumb.getAttribute('url') : null;
+
+    var pagesText = pollerText_(item, 'pages', pnNs);
+    var pages = pagesText ? parseInt(pagesText, 10) : null;
+    if (isNaN(pages)) pages = null;
+
     return {
       guid: pollerText_(item, 'guid') || pollerText_(item, 'link'),
       title: pollerText_(item, 'title'),
@@ -138,7 +162,10 @@ function pollerParseFeed_(xml) {
       enclosureUrl: url,
       enclosureType: mime,
       pdfUrl: (mime === 'application/pdf') ? url : '',
-      imageUrl: (mime.indexOf('image/') === 0) ? url : ''
+      imageUrl: (mime.indexOf('image/') === 0) ? url : '',
+      bytes: bytes,
+      pages: pages,
+      thumbUrl: (mime === 'application/pdf' && thumbAttr) ? thumbAttr.getValue() : ''
     };
   });
 
@@ -147,8 +174,8 @@ function pollerParseFeed_(xml) {
   return items.reverse();
 }
 
-function pollerText_(element, name) {
-  var child = element.getChild(name);
+function pollerText_(element, name, namespace) {
+  var child = namespace ? element.getChild(name, namespace) : element.getChild(name);
   return child ? String(child.getText() || '').trim() : '';
 }
 
@@ -288,6 +315,14 @@ function pollerSendAlert_(item) {
   var extras = {};
   if (item.pdfUrl) extras.pdfUrl = item.pdfUrl;
   if (item.imageUrl) extras.imageUrl = item.imageUrl;
+
+  // Only alongside a PDF, and only when present. Every optional key is one more thing that can be
+  // sent wrong, and the app treats all three as absent-by-default.
+  if (item.pdfUrl) {
+    if (item.thumbUrl) extras.pdfThumbUrl = item.thumbUrl;
+    if (item.pages) extras.pdfPages = String(item.pages);
+    if (item.bytes) extras.pdfBytes = String(item.bytes);
+  }
 
   if (item.enclosureUrl && !item.pdfUrl && !item.imageUrl) {
     // Neither a PDF nor an image - a video, a zip, a spreadsheet. The app has no way to show it, and
@@ -627,9 +662,13 @@ function pollerDryRun() {
   unsent.slice(0, pollerMaxPerRun_()).forEach(function (item, i) {
     var link = (!item.pdfUrl && !item.imageUrl) ? pollerFirstLink_(item.body) : '';
     Logger.log('  %s. title   : %s\n     body    : %s\n     pdfUrl  : %s\n' +
-               '     imageUrl: %s\n     linkUrl : %s\n     guid    : %s',
+               '     imageUrl: %s\n     thumbUrl: %s\n     pages   : %s\n     bytes   : %s\n' +
+               '     linkUrl : %s\n     guid    : %s',
                i + 1, item.title, item.body, item.pdfUrl || '(none)',
-               item.imageUrl || '(none)', link ? pollerNormaliseUrl_(link) : '(none)', item.guid);
+               item.imageUrl || '(none)', item.thumbUrl || '(none)',
+               (item.pages === null ? '(none)' : item.pages),
+               (item.bytes === null ? '(none)' : item.bytes),
+               link ? pollerNormaliseUrl_(link) : '(none)', item.guid);
   });
   return unsent.length;
 }
@@ -645,7 +684,9 @@ function testPollerParseFixture() {
   var fixture =
     '<?xml version="1.0" encoding="utf-8" standalone="yes"?>' +
     '<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" ' +
-    'xmlns:content="http://purl.org/rss/1.0/modules/content/">' +
+    'xmlns:content="http://purl.org/rss/1.0/modules/content/" ' +
+    'xmlns:media="http://search.yahoo.com/mrss/" ' +
+    'xmlns:pn="https://paramanuseniorshealth.org/rss">' +
     '<channel><title>Alerts</title><link>https://parmanuseniorhealth-github-io.vercel.app/alerts/</link>' +
     // Newest first, as a real feed is: pollerParseFeed_ reverses rather than sorts, so a fixture
     // written oldest-first would pass a reversed test and prove the opposite of what it claims.
@@ -657,6 +698,19 @@ function testPollerParseFixture() {
     '<enclosure url="https://paramanuseniorshealth.org/files/camp-2026-09-11.jpeg" ' +
     'length="201988" type="image/jpeg"/>' +
     '<content:encoded><![CDATA[<p>Slots are <strong>limited</strong>.</p>]]></content:encoded></item>' +
+    // Carries all three optional PDF fields, so pdfBytes/pdfPages/pdfThumbUrl have something to
+    // parse. Placed between the JPEG and PDF items so the pre-existing items[0]/items[1] (the plain
+    // item and the attachment-free PDF, "Holiday list published") keep their indices and their
+    // assertions below are unaffected by this insertion.
+    '<item><title>Holiday list 2026</title>' +
+    '<description>Dispensary closed on listed days.</description>' +
+    '<guid>https://paramanuseniorshealth.org/alerts/holidays-2026</guid>' +
+    '<enclosure url="https://paramanuseniorshealth.org/files/holidays-2026.pdf" ' +
+    'length="5872345" type="application/pdf"/>' +
+    '<media:thumbnail url="https://paramanuseniorshealth.org/files/holidays-2026-thumb.jpg" ' +
+    'width="1200" height="1697"/>' +
+    '<pn:pages>192</pn:pages>' +
+    '</item>' +
     '<item><title>Holiday list published</title>' +
     '<link>https://parmanuseniorhealth-github-io.vercel.app/alerts/2026-holidays/</link>' +
     '<guid isPermaLink="true">https://parmanuseniorhealth-github-io.vercel.app/alerts/2026-holidays/</guid>' +
@@ -682,9 +736,9 @@ function testPollerParseFixture() {
     }
   }
 
-  check('item count', items.length, 3);
+  check('item count', items.length, 4);
   check('oldest first', items[0].title, 'Older alert');
-  check('newest last', items[2].title, 'Consultation camp on Friday');
+  check('newest last', items[3].title, 'Consultation camp on Friday');
 
   check('title', items[1].title, 'Holiday list published');
   check('body', items[1].body, 'The list of holidays for 2026 is now available.');
@@ -695,11 +749,29 @@ function testPollerParseFixture() {
   // The two attachment fields never both fill from one enclosure. Asserting the empty one on each
   // item is what catches a widened mime test sending a PDF as a picture, which the app would then
   // hand to an image decoder and quietly drop.
-  check('imageUrl', items[2].imageUrl, 'https://paramanuseniorshealth.org/files/camp-2026-09-11.jpeg');
-  check('image item has no pdfUrl', items[2].pdfUrl, '');
+  check('imageUrl', items[3].imageUrl, 'https://paramanuseniorshealth.org/files/camp-2026-09-11.jpeg');
+  check('image item has no pdfUrl', items[3].pdfUrl, '');
   check('pdf item has no imageUrl', items[1].imageUrl, '');
   check('no pdf on plain item', items[0].pdfUrl, '');
   check('no image on plain item', items[0].imageUrl, '');
+
+  // The three optional PDF-only fields, present on the item that carries them...
+  check('pdfBytes', items[2].bytes, 5872345);
+  check('pdfPages', items[2].pages, 192);
+  check('pdfThumbUrl', items[2].thumbUrl,
+        'https://paramanuseniorshealth.org/files/holidays-2026-thumb.jpg');
+
+  // ...and absent, not zero or NaN, on a PDF item that does not carry them. The pre-pipeline shape
+  // must keep parsing unchanged: absent means absent.
+  check('no thumb', items[1].thumbUrl, '');
+  check('no pages', items[1].pages, null);
+  check('no bytes', items[1].bytes, null);
+
+  // And absent on a non-PDF item too, which never gets these fields regardless of what the feed
+  // sends -- thumbUrl and pdfUrl/pdfThumbUrl are a PDF-only pair.
+  check('no thumb on image item', items[3].thumbUrl, '');
+  check('no pages on image item', items[3].pages, null);
+  check('no bytes-collision on plain item', items[0].bytes, null);
 
   if (failures.length) {
     throw new Error('testPollerParseFixture failed:\n  ' + failures.join('\n  '));

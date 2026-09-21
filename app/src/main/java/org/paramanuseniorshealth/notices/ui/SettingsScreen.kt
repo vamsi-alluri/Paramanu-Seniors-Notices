@@ -115,13 +115,25 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyMedium,
                 )
             }
-            topics.forEach { topic ->
-                TopicRow(
-                    label = topic.label,
-                    explainer = topic.explainer,
-                    checked = topicChoices[topic.topic] ?: topic.defaultOn,
-                    onCheckedChange = { onTopicChange(topic.topic, it) },
-                )
+            // A sole topic is standing information, not a choice.
+            //
+            // A switch invites being switched, and the only thing it can do here is turn the app
+            // off entirely -- which does not look like "off" to the person who did it, it looks
+            // like an app that stopped working, and arrives as a phone call. There is nothing to
+            // decide when there is one option, so the row states what arrives and offers no
+            // control to get wrong.
+            if (topics.size == 1) {
+                val only = topics.first()
+                SoleTopicRow(label = only.label, explainer = only.explainer)
+            } else {
+                topics.forEach { topic ->
+                    TopicRow(
+                        label = topic.label,
+                        explainer = topic.explainer,
+                        checked = topicChoices[topic.topic] ?: topic.defaultOn,
+                        onCheckedChange = { onTopicChange(topic.topic, it) },
+                    )
+                }
             }
             if (testingUnlocked) {
                 TopicRow(
@@ -311,6 +323,22 @@ private fun ContactLink(text: String, onClick: () -> Unit) {
             .padding(top = 8.dp)
             .clickable(onClick = onClick),
     )
+}
+
+/**
+ * The same information a [TopicRow] carries, with no control beside it.
+ *
+ * Deliberately not a disabled [Switch]: a greyed switch is still a switch, and the reader who
+ * cannot move it is left wondering what they have done wrong rather than reading what it says.
+ */
+@Composable
+private fun SoleTopicRow(label: String, explainer: String) {
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(text = label, style = MaterialTheme.typography.titleMedium)
+        if (explainer.isNotBlank()) {
+            Text(text = explainer, style = MaterialTheme.typography.bodyMedium)
+        }
+    }
 }
 
 @Composable

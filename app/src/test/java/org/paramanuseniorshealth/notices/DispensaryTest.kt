@@ -133,4 +133,44 @@ class DispensaryTest {
         assertNull(DispensaryConfig.decode(""))
         assertNull(DispensaryConfig.decode("x\tname\nonly\tthree\tfields"))
     }
+
+    private fun dispensaryOf(vararg topics: DispensaryTopic) =
+        Dispensary(id = "x", name = "X", topics = topics.toList())
+
+    private fun topic(name: String, defaultOn: Boolean = true) =
+        DispensaryTopic(name, name, name, "", defaultOn, Importance.HIGH, 0)
+
+    @Test
+    fun `a sole topic that is off must be forced back on`() {
+        val d = dispensaryOf(topic("notices-v1"))
+        assertEquals("notices-v1", d.soleTopicToForceOn(mapOf("notices-v1" to false)))
+    }
+
+    @Test
+    fun `a sole topic that is already on needs no forcing`() {
+        val d = dispensaryOf(topic("notices-v1"))
+        assertNull(d.soleTopicToForceOn(mapOf("notices-v1" to true)))
+    }
+
+    /** No stored choice means the default applies, and a default of on is already on. */
+    @Test
+    fun `a sole topic with no stored choice falls back to its default`() {
+        assertNull(dispensaryOf(topic("a-v1", defaultOn = true)).soleTopicToForceOn(emptyMap()))
+        assertEquals(
+            "a-v1",
+            dispensaryOf(topic("a-v1", defaultOn = false)).soleTopicToForceOn(emptyMap()),
+        )
+    }
+
+    /** With a real choice on offer, the user's answer stands -- including "all of them off". */
+    @Test
+    fun `two topics are never forced`() {
+        val d = dispensaryOf(topic("a-v1"), topic("b-v1"))
+        assertNull(d.soleTopicToForceOn(mapOf("a-v1" to false, "b-v1" to false)))
+    }
+
+    @Test
+    fun `a dispensary offering no topics forces nothing`() {
+        assertNull(dispensaryOf().soleTopicToForceOn(emptyMap()))
+    }
 }

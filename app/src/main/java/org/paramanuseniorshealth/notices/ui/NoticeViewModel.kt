@@ -1,10 +1,13 @@
 package org.paramanuseniorshealth.notices.ui
 
+import android.content.Context
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -15,6 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.activation.ActivationRepository
@@ -26,6 +30,7 @@ import org.paramanuseniorshealth.notices.data.InfoRepository
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.data.OfficeInfo
+import org.paramanuseniorshealth.notices.fcm.AttachmentWorker
 
 /** Where the user is. Deliberately a state machine rather than a navigation graph: four
  *  destinations do not justify a navigation dependency, and the code screen is a gate rather
@@ -189,6 +194,79 @@ class NoticeViewModel(
         }
     }
 
+    /**
+     * Share and Save's entry point: hands the real attachment file to [then] once one exists.
+     *
+     * Only meaningful for a PDF notice. An image attachment is already a local file with nothing to
+     * fetch -- callers resolve that case themselves rather than come through here. For a PDF, the
+     * file Share and Save must act on is the binary, all pages, never the rendered page-one
+     * thumbnail the card displays; that binary may not be on the phone if a metered connection
+     * deferred it. This reuses exactly the path [openPdf] already established -- `notices.pdfFile`
+     * returns a cached copy instantly, or fetches now because a tap is consent, bypassing
+     * [FetchPolicy] -- and the same [_downloadingPdf] guard and spinner, so a Share tap and an
+     * open-PDF tap on the same notice cannot race each other into two downloads.
+     *
+     * If the fetch fails, [then] is simply never called: no message, the spinner stops and the
+     * glyph returns, the same state the user could already act on.
+     */
+    fun withAttachmentFile(notice: NoticeEntity, then: (java.io.File) -> Unit) {
+        if (notice.id in _downloadingPdf.value) return
+        _downloadingPdf.value = _downloadingPdf.value + notice.id
+        viewModelScope.launch {
+            try {
+                notices.pdfFile(notice)?.let(then)
+            } finally {
+                _downloadingPdf.value = _downloadingPdf.value - notice.id
+            }
+        }
+    }
+
+    /**
+     * A tap on the download glyph: fetches whichever of [notice]'s attachments are missing, right
+     * now, bypassing [FetchPolicy] entirely.
+     *
+     * There is no `openPdf`-shaped entry point for this -- `openPdf` fetches a circular and hands it
+     * to an external viewer, it does not fetch a missing thumbnail or photo. This is that missing
+     * entry point, wired to `AttachmentWorker.fetchNow`, which is shared with the policy-gated
+     * worker sweep so a tap records success ([org.paramanuseniorshealth.notices.fcm.AttachmentState.FETCHED],
+     * attempts reset to zero) exactly the way a sweep does.
+     *
+     * Reuses [_downloadingPdf] as its re-entry guard rather than a second set: it already drives the
+     * row's spinner and a tap firing a second fetch mid-flight is the same bug whichever attachment
+     * is in flight, circular or otherwise.
+     *
+     * [context] is the application context, threaded in from the call site rather than held by this
+     * view model, for the same reason given at [onResumed].
+     *
+     * The whole call is moved onto [Dispatchers.IO], not just the network inside it. Under
+     * [AttachmentWorker] that same work runs on `Dispatchers.Default`; `viewModelScope.launch`
+     * defaults to the main thread, and while every `NoticeImageStore.fetch*` wraps its own network
+     * I/O, the tail does not -- `NoticeNotifications.updatePicture` makes a binder call and decodes
+     * what may be a rendered A4 page, and the `cachedXxx` lookups inside it are disk reads. Left on
+     * the main thread that is jank on exactly the low-end devices this app targets.
+     *
+     * Wrapped in [runCatching] for the same reason `doWork` wraps its own call to `fetch`: a throw
+     * here -- disk full during `recordAttachment`, say -- is a bug, not a policy decision, and must
+     * not escape [viewModelScope] and crash the app.
+     */
+    fun downloadAttachment(notice: NoticeEntity, context: Context) {
+        if (notice.id in _downloadingPdf.value) return
+        _downloadingPdf.value = _downloadingPdf.value + notice.id
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        AttachmentWorker.fetchNow(context.applicationContext, notices, notice)
+                    }.onFailure { failure ->
+                        Log.w(TAG, "Attachment download threw for ${notice.logId}", failure)
+                    }
+                }
+            } finally {
+                _downloadingPdf.value = _downloadingPdf.value - notice.id
+            }
+        }
+    }
+
     fun toggleExpanded(id: Long) {
         _expandedId.value = if (_expandedId.value == id) null else id
     }
@@ -269,7 +347,20 @@ class NoticeViewModel(
         val id = activation.dispensaryId ?: return
         dispensaries.refresh(id)
         activation.syncSubscriptions()
+        enforceSoleTopic()
         _topicChoices.value = activation.topicChoices()
+    }
+
+    /**
+     * Re-subscribes a dispensary's only topic if it is off. See [Dispensary.soleTopicToForceOn].
+     *
+     * Runs after [ActivationRepository.syncSubscriptions] rather than before it, so it is deciding
+     * against the topic list that was just read rather than the previous one.
+     */
+    private suspend fun enforceSoleTopic() {
+        val topic = dispensaries.dispensary.value?.soleTopicToForceOn(activation.topicChoices())
+            ?: return
+        activation.setTopic(topic, true)
     }
 
     /**
@@ -283,8 +374,23 @@ class NoticeViewModel(
      * A revoked phone checks every time: its user is the one actively waiting for an answer, and
      * they may be standing at the counter. An active phone is throttled, because switching between
      * two apps should not open a database connection each way.
+     *
+     * The two attachment sweeps below run unconditionally, outside that throttle. They are cheap
+     * and idempotent -- the worker itself filters rows through [FetchPolicy.shouldRetry], so
+     * enqueuing when nothing is outstanding is at most a WorkManager bookkeeping write, not a
+     * fetch -- categorically cheaper than the network round trip [refreshActivation] makes, which
+     * is why that one stays rate-limited and these do not. One sweep runs now, on whatever
+     * connection is available, and picks up anything small that was missed. The other stands
+     * waiting for wifi and costs nothing until it appears, which is how a circular deferred on
+     * mobile data eventually arrives without the user being told anything.
+     *
+     * [context] is the application context, threaded in from the call site rather than held by
+     * this view model -- a ViewModel holding a Context outlives the Activity and leaks it.
      */
-    fun onResumed() {
+    fun onResumed(context: Context) {
+        AttachmentWorker.enqueueCatchUp(context)
+        AttachmentWorker.enqueueWifiCatchUp(context)
+
         val stale = System.currentTimeMillis() - lastCheckedAt >= RESUME_RECHECK_MS
         if (activation.isRevoked || stale) refreshActivation()
     }
@@ -330,7 +436,10 @@ class NoticeViewModel(
             when (val result = activation.redeem(rawCode)) {
                 RedeemResult.Success -> {
                     // redeem() has already read the dispensary -- its topics and its banner -- and
-                    // subscribed to the defaults, so Settings and the header are ready.
+                    // subscribed to the defaults, so Settings and the header are ready. A sole
+                    // topic defaulting to off would still leave a silent app, so it is forced here
+                    // too rather than only on the refresh path.
+                    enforceSoleTopic()
                     _topicChoices.value = activation.topicChoices()
                     // redeem() clears the revocation itself, so the banner is already down by here.
                     // The old revocation notice goes too: it says no more alerts will arrive, which
@@ -408,6 +517,8 @@ class NoticeViewModel(
     }
 
     companion object {
+        private const val TAG = "NoticeViewModel"
+
         /** The tap and the database write race, so resolution retries for about a second. */
         private const val RESOLVE_ATTEMPTS = 5
         private const val RESOLVE_RETRY_MS = 200L

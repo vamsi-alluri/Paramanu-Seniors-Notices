@@ -31,17 +31,24 @@
     <string name="selection_count">%1$d selected</string>
     <string name="action_settings">Settings</string>
     <string name="action_delete">Delete</string>
+    <!-- Spoken by a screen reader on the card's chevron. Never drawn on screen. -->
+    <string name="action_expand">Show more</string>
+    <string name="action_collapse">Show less</string>
     <string name="action_exit_selection">Exit selection</string>
     <string name="action_back">Back</string>
-    <string name="action_open_pdf">Open the full notice</string>
     <string name="dialog_cancel">Cancel</string>
 
     <!-- Attachments. "a copy" in Save, because the notice itself stays in the app either way. -->
-    <string name="action_open_with">Open</string>
     <string name="action_share">Share</string>
     <string name="action_save">Save a copy</string>
     <string name="action_share_chooser">Share this notice</string>
-    <string name="attachment_downloading">Getting the notice…</string>
+    <!-- Content descriptions only. Nothing here is drawn on screen; a failure the user can tap
+         past does not need a sentence explaining it. -->
+    <string name="attachment_download">Download</string>
+    <!-- Spoken only. The card says this with a struck-out page, never with words. -->
+    <string name="attachment_unavailable">Not available</string>
+    <string name="attachment_pdf">Circular</string>
+    <string name="attachment_image">Picture</string>
     <string name="toast_saved">Saved.</string>
     <string name="toast_save_failed">Could not save that. Try another folder.</string>
     <string name="toast_pdf_opening_online">Opening it on the website instead.</string>

@@ -41,6 +41,10 @@ object TrayArtwork {
      * A favicon is 128px and looks absurd stretched across a notification; a YouTube thumbnail is
      * 320x180 at its smallest and looks right. This is the line between them, and it is why a link
      * card sometimes fills the tray and sometimes does not.
+     *
+     * The test is applied in [NoticeNotifications.updatePicture], and only to a link image -- a
+     * sender's photograph and a rendered circular page are both meant to be looked at, whatever
+     * size they arrive in.
      */
     const val MIN_PICTURE_DIMENSION = 240
 

@@ -3,6 +3,8 @@ package org.paramanuseniorshealth.notices.data
 import androidx.room.Entity
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import org.paramanuseniorshealth.notices.fcm.AttachmentState
+import org.paramanuseniorshealth.notices.fcm.FetchPolicy
 
 /**
  * One received notice.
@@ -36,9 +38,10 @@ data class NoticeEntity(
     /**
      * A notice PDF on the website. Page one is rendered to an image on arrival.
      *
-     * This and [imageUrl] are not alternatives and may both be present: a notice can carry a photo
-     * *and* link the official circular. When both exist the photo wins the notification tray, since
-     * it was chosen for a small frame, and the expanded row shows both.
+     * A notice carries at most one attachment -- this or [imageUrl], never both -- because RSS
+     * permits only one `<enclosure>` per item and `Poller.gs:105` records exactly that. When a card
+     * resolves its attachment it therefore checks the photo first and falls back to the PDF render,
+     * never both at once.
      */
     val pdfUrl: String? = null,
     /**
@@ -64,4 +67,47 @@ data class NoticeEntity(
     val linkImage: String? = null,
     /** The host, or `YouTube`. The small grey line on the card. */
     val linkSite: String? = null,
-)
+    /**
+     * A ready-made first-page image for [pdfUrl], published alongside the circular.
+     *
+     * Absent today: the website does not produce one yet, so the worker downloads the whole PDF and
+     * renders page one itself. Once the pipeline ships this arrives filled in, the worker fetches
+     * ~40KB instead of ~5.6MB, and the circular is only ever downloaded when somebody taps it.
+     *
+     * Persisted rather than used and discarded, because a notice deferred on mobile data may be
+     * tapped a day later and the tap path has nothing else to read the URL from.
+     */
+    val pdfThumbUrl: String? = null,
+    /**
+     * Page count and size of [pdfUrl], for the card's badge.
+     *
+     * Filled from the payload when the sender supplies them, and otherwise derived locally the
+     * first time the worker renders the PDF -- `PdfRenderer` already has both and used to throw
+     * them away. Null means neither has happened yet, and the badge simply omits the numbers.
+     */
+    val pdfPages: Int? = null,
+    val pdfBytes: Long? = null,
+    /**
+     * One of [org.paramanuseniorshealth.notices.fcm.AttachmentState], or NULL on a row written
+     * before this column existed -- which reads as PENDING and so retries.
+     */
+    val attachmentState: String? = null,
+    /** Failed fetches only. Deferrals do not count; see FetchPolicy.shouldRetry. */
+    val attachmentAttempts: Int = 0,
+) {
+    /**
+     * Whether this notice's attachment is not coming, as opposed to not here yet.
+     *
+     * True once the fetch has failed and the attempt budget is spent -- which is also the point
+     * where `FetchPolicy.shouldRetry` stops the automatic sweeps, so the row would otherwise sit
+     * behind a download glyph that nothing will ever act on. A 4xx jumps straight to the cap
+     * rather than spending five sweeps rediscovering that the file was never published, so in
+     * practice this is true on the first attempt for a dead URL.
+     *
+     * Read by the card to draw a struck-out page instead of a download arrow. It does not stop a
+     * tap: if the sender fixes the URL, that tap is the only way back.
+     */
+    val attachmentUnavailable: Boolean
+        get() = AttachmentState.parse(attachmentState) == AttachmentState.FAILED &&
+            attachmentAttempts >= FetchPolicy.MAX_ATTEMPTS
+}

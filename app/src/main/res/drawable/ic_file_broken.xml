@@ -1,0 +1,41 @@
+<!--
+  A page, outlined, with a line struck through it.
+
+  Drawn in strokes rather than fills. The first attempt used the solid page from ic_file_pdf with a
+  filled diagonal laid over it, which is invisible: both are the same colour, so the slash only
+  shows where it leaves the page, and it barely does. Outlining the page leaves somewhere for the
+  line to read against.
+
+  Deliberately not a warning triangle or an exclamation mark: those say "something went wrong, do
+  something about it", and there is nothing the reader can do about a file the sender never
+  published. A struck-out page says "this one is not coming", which is the truth.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- The page, and its folded corner. -->
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M14,3H7a1,1 0,0 0,-1 1v16a1,1 0,0 0,1 1h10a1,1 0,0 0,1 -1V7z" />
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="1.8"
+        android:strokeLineJoin="round"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M14,3v4h4" />
+    <!-- The strike. Runs corner to corner so it reads as crossing the page out, not as a detail
+         drawn on it. -->
+    <path
+        android:strokeColor="#FF000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:fillColor="@android:color/transparent"
+        android:pathData="M4,2.8L20,21.2" />
+</vector>

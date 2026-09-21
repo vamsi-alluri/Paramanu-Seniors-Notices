@@ -163,7 +163,7 @@ private fun NoticesApp(
     // Re-check whenever the app comes forward. Previously the only check was in the view model's
     // init, which survives a trip through recents -- so a user whose code had been restored had to
     // know to swipe the app away and reopen it, which nobody knows.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed(context.applicationContext) }
 
     // The permission prompt is deliberately not raised on the code screen: asking before the user
     // has any reason to expect notices is how a denial happens, and on Android 13+ a denial
@@ -249,6 +249,18 @@ private fun NoticesApp(
                             notice.pdfUrl?.let { AttachmentActions.openUrl(context, it) }
                         },
                     )
+                },
+                onFetchPdfFile = { notice, onReady ->
+                    // Share/Save's own entry point, threaded the same way as onOpenPdf above: it
+                    // needs no Context, since NoticeRepository already holds one, but is wired here
+                    // rather than left for the view model to call unprompted.
+                    viewModel.withAttachmentFile(notice, onReady)
+                },
+                onDownloadAttachment = { notice ->
+                    // A tap is consent and bypasses the fetch policy -- see
+                    // NoticeViewModel.downloadAttachment. Needs a Context for the same reason
+                    // onOpenPdf above does, and the view model keeps none.
+                    viewModel.downloadAttachment(notice, context.applicationContext)
                 },
                 onToggleSelection = viewModel::toggleSelection,
                 onClearSelection = viewModel::clearSelection,

@@ -2,6 +2,7 @@ package org.paramanuseniorshealth.notices.data
 
 import android.content.Context
 import kotlinx.coroutines.flow.Flow
+import org.paramanuseniorshealth.notices.fcm.AttachmentState
 import org.paramanuseniorshealth.notices.fcm.NoticeImageStore
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
 import java.io.File
@@ -32,6 +33,9 @@ class NoticeRepository(
         linkTitle: String? = null,
         linkImage: String? = null,
         linkSite: String? = null,
+        pdfThumbUrl: String? = null,
+        pdfPages: Int? = null,
+        pdfBytes: Long? = null,
     ): Boolean {
         val entity = NoticeEntity(
             logId = logId?.takeIf { it.isNotBlank() },
@@ -44,9 +48,22 @@ class NoticeRepository(
             linkTitle = linkTitle?.takeIf { it.isNotBlank() },
             linkImage = linkImage?.takeIf { it.isNotBlank() },
             linkSite = linkSite?.takeIf { it.isNotBlank() },
+            pdfThumbUrl = pdfThumbUrl?.takeIf { it.isNotBlank() },
+            pdfPages = pdfPages,
+            pdfBytes = pdfBytes,
         )
         return dao.insert(entity) != -1L
     }
+
+    suspend fun recordAttachment(
+        logId: String,
+        state: AttachmentState,
+        attempts: Int,
+        pages: Int? = null,
+        bytes: Long? = null,
+    ) = dao.updateAttachment(logId, state.name, attempts, pages, bytes)
+
+    suspend fun withAttachments(): List<NoticeEntity> = dao.withAttachments()
 
     /**
      * Writes the first entry a new install sees, immediately after a code is redeemed.

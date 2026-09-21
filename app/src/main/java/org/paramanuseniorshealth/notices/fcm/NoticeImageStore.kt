@@ -16,20 +16,26 @@ import java.net.URL
  *
  * Three kinds, which are not alternatives:
  *  - **image** ([fetchImage]) is a picture the sender attached;
- *  - **pdf** ([fetchPdfRender] and [fetchPdf]) is a notice circular;
+ *  - **pdf** ([fetchPdfThumb], [fetchPdfKeeping] and [fetchPdf]) is a notice circular;
  *  - **link** ([fetchLinkImage]) is the logo or still for a preview card.
  *
  * They are cached under different names so one never overwrites another, and the download that
- * feeds the tray notification is the same file the in-app row reads later -- so the UI performs no
- * network I/O and a notice stays readable offline afterwards.
+ * fills in the tray notification is the same file the in-app row reads later -- so the UI performs
+ * no network I/O and a notice stays readable offline afterwards.
+ *
+ * NOTHING HERE RUNS ON THE MESSAGE PATH ANY MORE
+ *   Page one used to be rendered inside `onMessageReceived`, which meant downloading the whole
+ *   5.6MB circular on every phone inside an eight-second window it could not meet.
+ *   [AttachmentWorker] now calls these, minutes later and only when [FetchPolicy] agrees -- and
+ *   where the website has published a first-page image, [fetchPdfThumb] fetches ~40KB and the
+ *   document is never touched until somebody taps it.
  *
  * THE PDF, AND WHY IT IS NOW KEPT
  *   It used to be downloaded to a scratch file, rendered, and deleted, on the reasoning that it was
  *   the largest artefact and re-downloadable from the website. That was true and still cost the
  *   user the thing they wanted: there was no PDF on the phone to open, so a notice circular could
- *   only ever be viewed as a flattened picture of its first page. The render is still made at push
- *   time, because the tray needs a bitmap within seconds; the PDF itself is fetched by [fetchPdf]
- *   when the user asks for it, and kept from then on.
+ *   only ever be viewed as a flattened picture of its first page. [fetchPdfKeeping] keeps both when
+ *   it has had to download the document anyway, and [fetchPdf] fetches it on a tap otherwise.
  */
 object NoticeImageStore {
 
@@ -49,23 +55,32 @@ object NoticeImageStore {
      */
     private const val PDFS_IN_CACHE = false
 
-    /** Twenty notices' worth of artwork. A notice may contribute three files, so this is ~60. */
-    private const val KEEP_NEWEST = 60
+    /**
+     * The artwork budget, in bytes.
+     *
+     * This used to be a file count (sixty). Counting files let sixty 40KB thumbnails and three
+     * multi-megabyte page renders be called the same amount of storage, which they are not -- and a
+     * page-sized render of an A4 circular is the larger artefact by an order of magnitude.
+     */
+    private const val IMAGE_BUDGET_BYTES = 25L * 1024 * 1024
 
     /**
      * The PDF budget, in bytes, and deliberately expressed differently from the image one.
      *
-     * Counting files would let three 2MB circulars sit alongside sixty 40KB thumbnails and call it
-     * balanced. Circulars are the large, rarely-reread artefact; this is about twelve of them.
+     * Counting files would let sixty 40KB thumbnails and three multi-megabyte page renders be
+     * called the same amount of storage, which they are not. Circulars are the large, rarely-reread
+     * artefact; this is about nine of them at the measured 5.6MB.
      */
-    private const val PDF_BUDGET_BYTES = 24L * 1024 * 1024
+    private const val PDF_BUDGET_BYTES = 50L * 1024 * 1024
 
     /**
-     * onMessageReceived allows roughly 10-20 seconds before the service may be torn down.
+     * The picture ceiling, and it stays at eight seconds now that nothing holds a service open.
      *
-     * The entitlement check no longer spends any of it -- verification moved off the message path
-     * and does no network -- but the ceiling stays: a slow attachment must never cost the
-     * notification itself, which is the part that matters.
+     * It was sized for `onMessageReceived`'s ~10-20 second teardown window. That constraint is
+     * gone, but the number is still right for what [fetchPicture] fetches: a link logo, a sender
+     * photo or a published PDF thumbnail, none of which should need longer, and a picture that
+     * does is better retried by the next sweep than left occupying the worker. The circular is the
+     * case that genuinely needs longer, and it has [WORKER_TIMEOUT_MS].
      */
     private const val TIMEOUT_MS = 8_000L
 
@@ -77,6 +92,16 @@ object NoticeImageStore {
      * and leaving the user to guess whether pressing again would help.
      */
     private const val TAP_TIMEOUT_MS = 60_000L
+
+    /**
+     * The worker's ceiling.
+     *
+     * [TIMEOUT_MS] was eight seconds because `onMessageReceived` may be torn down after ten or
+     * twenty. A 5.6MB circular needs a sustained ~5.6 Mbps to land inside that, which an ordinary
+     * mobile connection does not provide -- so the download reliably failed and nobody was told.
+     * Nothing is held open behind the worker, so it can wait as long as the file honestly needs.
+     */
+    private const val WORKER_TIMEOUT_MS = 5L * 60 * 1000
 
     /** Notifications reject oversized bitmaps and the list shows a thumbnail, so decode small. */
     private const val MAX_DIMENSION = 1024
@@ -127,6 +152,39 @@ object NoticeImageStore {
     suspend fun fetchLinkImage(context: Context, url: String, logId: String): Bitmap? =
         fetchPicture(context, url, logId, "link")
 
+    /**
+     * A published first-page image for a circular, ~40KB instead of the document's ~5.6MB.
+     *
+     * Its scratch file is `notice_$logId-pdf.part`, distinct from the four other scratch names in
+     * this file, so two kinds downloading for one notice cannot overwrite each other mid-flight.
+     *
+     * Its **target** is not distinct, and that is deliberate: `$logId-pdf.jpg` is exactly where
+     * [fetchPdfKeeping] writes its local render. The two are alternative ways to obtain the same
+     * picture -- page one of the circular -- so they share one name, and every reader downstream
+     * asks [cachedPdfRender] without knowing or caring whether the website published it or the
+     * phone rendered it. Only one of the two ever runs for a given notice ([AttachmentWorker]
+     * chooses on `pdfThumbUrl`), and if both somehow did, the later one overwriting the earlier is
+     * a correct result rather than a collision.
+     */
+    suspend fun fetchPdfThumb(context: Context, url: String, logId: String): Bitmap? =
+        fetchPicture(context, url, logId, "pdf")
+
+    /**
+     * Fetches a picture ([fetchImage], [fetchLinkImage] or [fetchPdfThumb]) into the cache.
+     *
+     * The scratch file is created with [File.createTempFile], unique per *call* rather than per
+     * `logId`+`kind`, because up to four producers can race to fetch the same notice's same kind
+     * at once: the per-notice jittered worker (`attachment-$logId`), the app-open sweep
+     * (`attachment-catch-up`, which fires with no delay -- exactly when a user might also tap),
+     * the wifi sweep (`attachment-catch-up-wifi`), and a user tap. A name shared between them lets
+     * two downloads interleave into one file; the MIME check above still passes because only the
+     * header needs to be intact, so [moveInto] commits the interleaved bytes to the real target,
+     * the bitmap fails to decode, and the notice is left FAILED with a corrupt file that
+     * [cachedImage]/[cachedPdfRender] treat as already fetched forever after -- a permanently
+     * blank tile with no glyph, no tap and no retry able to reach it. A unique name per call makes
+     * that interleaving impossible; the `finally` below cleans it up since, unlike the old shared
+     * name, it never gets overwritten by the next call and would otherwise litter `cacheDir`.
+     */
     private suspend fun fetchPicture(
         context: Context,
         url: String,
@@ -134,67 +192,34 @@ object NoticeImageStore {
         kind: String,
     ): Bitmap? = withTimeoutOrNull(TIMEOUT_MS) {
         withContext(Dispatchers.IO) {
-            runCatching {
-                val scratch = File(context.cacheDir, "notice_$logId-$kind.part")
-                val contentType = download(url, scratch)
-
-                // Checked before the file is kept, not after it fails to decode. An ICO favicon
-                // downloads perfectly and then renders as nothing at all, which on a phone looks
-                // like the app losing the picture rather than like a format it cannot read.
-                if (!MimeTypes.isDecodableImage(contentType)) {
-                    scratch.delete()
-                    error("$url is ${MimeTypes.normalise(contentType)}, which cannot be decoded")
-                }
-
-                val target = File(
-                    directory(context),
-                    "${stem(logId, kind)}.${MimeTypes.imageExtension(contentType, url)}",
-                )
-                find(directory(context), stem(logId, kind))?.takeIf { it != target }?.delete()
-                moveInto(scratch, target)
-
-                prune(context)
-                decodeDownsampled(target)
-            }.onFailure { Log.w(TAG, "Image fetch failed for $url", it) }
-                .getOrNull()
-        }
-    }
-
-    /**
-     * Downloads [pdfUrl], renders its first page, caches the render, and returns the bitmap.
-     *
-     * The PDF is fetched to a scratch file and deleted afterwards: at push time only the render is
-     * needed, and holding a 2MB download inside the service's budget for a file the user may never
-     * open would be paying the cost early for everyone to benefit nobody. [fetchPdf] keeps it when
-     * they do open it.
-     *
-     * Returns null for anything unreachable, not actually a PDF, or password protected.
-     */
-    suspend fun fetchPdfRender(context: Context, pdfUrl: String, logId: String): Bitmap? =
-        withTimeoutOrNull(TIMEOUT_MS) {
-            withContext(Dispatchers.IO) {
-                val scratch = File(context.cacheDir, "notice_$logId.pdf")
+            val scratch = File.createTempFile("notice_$logId-$kind", ".part", context.cacheDir)
+            try {
                 runCatching {
-                    download(pdfUrl, scratch)
-                    val rendered = PdfPageRenderer.renderFirstPage(scratch)
-                        ?: error("Could not render $pdfUrl")
+                    val contentType = download(url, scratch)
 
-                    val target = File(directory(context), "${stem(logId, "pdf")}.jpg")
-                    writeJpeg(rendered, target)
+                    // Checked before the file is kept, not after it fails to decode. An ICO favicon
+                    // downloads perfectly and then renders as nothing at all, which on a phone looks
+                    // like the app losing the picture rather than like a format it cannot read.
+                    if (!MimeTypes.isDecodableImage(contentType)) {
+                        error("$url is ${MimeTypes.normalise(contentType)}, which cannot be decoded")
+                    }
 
-                    // Released before returning, and read back at a smaller size. The render is now
-                    // page-sized so the viewer has something to zoom into -- an A4 page at 1600px is
-                    // about 14MB as ARGB_8888 -- and handing that to the notification path would
-                    // hold it live inside a service that is already the most memory-constrained
-                    // place this app runs. The file on disk is what the viewer opens later.
-                    rendered.recycle()
+                    val target = File(
+                        directory(context),
+                        "${stem(logId, kind)}.${MimeTypes.imageExtension(contentType, url)}",
+                    )
+                    find(directory(context), stem(logId, kind))?.takeIf { it != target }?.delete()
+                    moveInto(scratch, target)
+
                     prune(context)
                     decodeDownsampled(target)
-                }.onFailure { Log.w(TAG, "Notice PDF failed for $pdfUrl", it) }
-                    .also { runCatching { scratch.delete() } }
+                }.onFailure { Log.w(TAG, "Image fetch failed for $url", it) }
                     .getOrNull()
+            } finally {
+                runCatching { scratch.delete() }
             }
         }
+    }
 
     /**
      * Downloads the circular itself and keeps it, for handing to a PDF viewer.
@@ -229,6 +254,93 @@ object NoticeImageStore {
             }
         }
     }
+
+    /** What one circular fetch produced: the document, its first page, and its measurements. */
+    data class PdfFetch(val pdf: File, val render: File, val pages: Int, val bytes: Long)
+
+    /**
+     * Downloads a circular, renders page one, and **keeps both**.
+     *
+     * This used to download to a scratch file and delete it, on the reasoning that holding a large
+     * download for a file the user may never open paid the cost early for everyone to benefit
+     * nobody. The reasoning was about the wrong cost. The download happens either way -- page one
+     * cannot be rendered without the whole document, because `PdfRenderer` takes a descriptor on a
+     * complete file -- so deleting it saved no bandwidth at all and guaranteed a second download
+     * later. It saved disk, which [prunePdfs] already manages.
+     *
+     * Runs under [WORKER_TIMEOUT_MS], not the old eight seconds: nothing is holding a service open
+     * behind this any more.
+     *
+     * **What the timeout does and does not bound.** [download] is a synchronous
+     * `HttpURLConnection` read with no suspension points, so [withTimeoutOrNull] cannot interrupt
+     * it mid-read -- it only stops *waiting* for it. A stalled trickle can keep this coroutine's
+     * underlying thread running well past [WORKER_TIMEOUT_MS], because each individual `read()`
+     * only has to beat the connection's own 15s `readTimeout` to keep going, and it can do that
+     * indefinitely. So a timed-out caller may still see the permanent PDF and render appear on
+     * disk afterwards, written by a download it had already given up on. This is inherited, not
+     * introduced here: [fetchPicture] and [fetchPdf] have the identical shape. It is also
+     * harmless -- the worker records FAILED for the timeout, the late write lands a valid
+     * pdf+render pair, and the next sweep finds [cachedPdfRender] non-null, skips the fetch, and
+     * records FETCHED. This function's scratch file is named distinctly from [fetchPdf]'s, and
+     * [tapInitiated] further splits it from itself, for the reason given at that parameter.
+     */
+    suspend fun fetchPdfKeeping(
+        context: Context,
+        pdfUrl: String,
+        logId: String,
+        /**
+         * True when this call came from an explicit tap ([AttachmentWorker.fetchNow], via
+         * `NoticeViewModel.downloadAttachment`) rather than the policy-gated worker sweep.
+         *
+         * A tap bypasses [FetchPolicy] entirely, so it is not exclusive with a sweep already in
+         * flight for the same notice: `AttachmentWorker.enqueueCatchUp` runs on every app-open, and
+         * a user can tap a deferred circular's glyph the moment the app comes forward, landing two
+         * `HttpURLConnection`s writing and renaming the same scratch file at once. Each caller
+         * therefore gets its own scratch name -- this is the flag that decides which.
+         */
+        tapInitiated: Boolean = false,
+    ): PdfFetch? =
+        withTimeoutOrNull(WORKER_TIMEOUT_MS) {
+            withContext(Dispatchers.IO) {
+                // Named differently from fetchPdf's "notice_$logId-doc.part" for the identical
+                // reason given at [tapInitiated] above, and differently again between a worker call
+                // and a tap call to this same function -- see [tapInitiated].
+                val scratch = File(
+                    context.cacheDir,
+                    "notice_$logId-doc-${if (tapInitiated) "tap" else "worker"}.part",
+                )
+                runCatching {
+                    download(pdfUrl, scratch)
+                    // pageCount and isReadablePdf open the file identically (same guards, same
+                    // PdfRenderer, same >= 1 check) -- pageCount's non-null result already proves
+                    // the file is readable, so a separate isReadablePdf call would be a third full
+                    // PdfRenderer open over what can be a 192-page document for information the
+                    // next line already has.
+                    val pages = PdfPageRenderer.pageCount(scratch)
+                        ?: error("$pdfUrl is not a readable PDF")
+                    val bytes = scratch.length()
+
+                    val rendered = PdfPageRenderer.renderFirstPage(scratch)
+                        ?: error("Could not render $pdfUrl")
+                    val render = File(directory(context), "${stem(logId, "pdf")}.jpg")
+                    writeJpeg(rendered, render)
+                    rendered.recycle()
+
+                    // Moved into place only after the render succeeded, so a file that cannot be
+                    // shown is never left sitting in the cache looking like a usable circular.
+                    val pdf = File(fileDirectory(context), "${stem(logId, "doc")}.pdf")
+                    pdf.delete()
+                    moveInto(scratch, pdf)
+
+                    prune(context)
+                    prunePdfs(context)
+                    PdfFetch(pdf, render, pages, bytes)
+                }.onFailure {
+                    Log.w(TAG, "Notice PDF failed for $pdfUrl", it)
+                    runCatching { scratch.delete() }
+                }.getOrNull()
+            }
+        }
 
     /** Returns the response's Content-Type, which is the only honest source for the extension. */
     private fun download(url: String, target: File): String? {
@@ -295,27 +407,29 @@ object NoticeImageStore {
 
     // ------------------------------------------------------------------ housekeeping
 
-    /** Keeps the [KEEP_NEWEST] most recently written artwork files and deletes the rest. */
-    fun prune(context: Context, keep: Int = KEEP_NEWEST) = prune(directory(context), keep)
+    fun prune(context: Context) = pruneTo(directory(context), IMAGE_BUDGET_BYTES)
 
-    /** Directory-level overload, kept free of Context so it is unit-testable on the JVM. */
-    fun prune(dir: File, keep: Int = KEEP_NEWEST) {
-        val files = dir.listFiles()?.takeIf { it.size > keep } ?: return
-        files.sortedByDescending { it.lastModified() }
-            .drop(keep)
-            .forEach { it.delete() }
-    }
+    fun prunePdfs(context: Context) = pruneTo(fileDirectory(context), PDF_BUDGET_BYTES)
 
-    /** Trims stored PDFs to [PDF_BUDGET_BYTES], oldest first. */
-    fun prunePdfs(context: Context, budgetBytes: Long = PDF_BUDGET_BYTES) =
-        prunePdfs(fileDirectory(context), budgetBytes)
-
-    fun prunePdfs(dir: File, budgetBytes: Long = PDF_BUDGET_BYTES) {
+    /**
+     * Trims [dir] to [budgetBytes], oldest first.
+     *
+     * The newest file is always kept, even if it alone is over budget: it is the notice that has
+     * just arrived, and deleting it would mean the user never sees the attachment they were
+     * notified about. An oversized file is skipped rather than ending the scan, so a smaller older
+     * file that still fits is kept. One shape for both directories, because "how much storage may
+     * this use" is the same question whether the files are thumbnails or circulars.
+     */
+    fun pruneTo(dir: File, budgetBytes: Long) {
         val files = dir.listFiles()?.sortedByDescending { it.lastModified() } ?: return
         var used = 0L
-        files.forEach { file ->
-            used += file.length()
-            if (used > budgetBytes) file.delete()
+        files.forEachIndexed { index, file ->
+            val projected = used + file.length()
+            if (index > 0 && projected > budgetBytes) {
+                file.delete()
+            } else {
+                used = projected
+            }
         }
     }
 

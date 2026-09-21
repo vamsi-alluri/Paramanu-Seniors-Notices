@@ -1,9 +1,11 @@
 package org.paramanuseniorshealth.notices
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.paramanuseniorshealth.notices.fcm.PdfPageRenderer
+import java.io.File
 
 /**
  * Geometry only. The render itself needs a device, but the letterboxing is where the interesting
@@ -70,5 +72,12 @@ class PdfPageRendererTest {
         // TransactionTooLargeException, losing the notification rather than just the picture.
         val bytes = w * h * 2
         assertTrue("$bytes bytes must stay well under 1MB", bytes < 900_000)
+    }
+
+    @Test
+    fun `page count declines a missing or empty file`() {
+        assertNull(PdfPageRenderer.pageCount(File("does-not-exist.pdf")))
+        val empty = File.createTempFile("empty", ".pdf").apply { deleteOnExit() }
+        assertNull(PdfPageRenderer.pageCount(empty))
     }
 }
