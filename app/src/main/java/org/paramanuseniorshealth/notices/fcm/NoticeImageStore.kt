@@ -85,6 +85,16 @@ object NoticeImageStore {
      */
     private const val TAP_TIMEOUT_MS = 60_000L
 
+    /**
+     * The worker's ceiling.
+     *
+     * [TIMEOUT_MS] was eight seconds because `onMessageReceived` may be torn down after ten or
+     * twenty. A 5.6MB circular needs a sustained ~5.6 Mbps to land inside that, which an ordinary
+     * mobile connection does not provide -- so the download reliably failed and nobody was told.
+     * Nothing is held open behind the worker, so it can wait as long as the file honestly needs.
+     */
+    private const val WORKER_TIMEOUT_MS = 5L * 60 * 1000
+
     /** Notifications reject oversized bitmaps and the list shows a thumbnail, so decode small. */
     private const val MAX_DIMENSION = 1024
 
@@ -236,6 +246,56 @@ object NoticeImageStore {
             }
         }
     }
+
+    /** What one circular fetch produced: the document, its first page, and its measurements. */
+    data class PdfFetch(val pdf: File, val render: File, val pages: Int, val bytes: Long)
+
+    /**
+     * Downloads a circular, renders page one, and **keeps both**.
+     *
+     * This used to download to a scratch file and delete it, on the reasoning that holding a large
+     * download for a file the user may never open paid the cost early for everyone to benefit
+     * nobody. The reasoning was about the wrong cost. The download happens either way -- page one
+     * cannot be rendered without the whole document, because `PdfRenderer` takes a descriptor on a
+     * complete file -- so deleting it saved no bandwidth at all and guaranteed a second download
+     * later. It saved disk, which [prunePdfs] already manages.
+     *
+     * Runs under [WORKER_TIMEOUT_MS], not the old eight seconds: nothing is holding a service open
+     * behind this any more.
+     */
+    suspend fun fetchPdfKeeping(context: Context, pdfUrl: String, logId: String): PdfFetch? =
+        withTimeoutOrNull(WORKER_TIMEOUT_MS) {
+            withContext(Dispatchers.IO) {
+                val scratch = File(context.cacheDir, "notice_$logId-doc.part")
+                runCatching {
+                    download(pdfUrl, scratch)
+                    if (!PdfPageRenderer.isReadablePdf(scratch)) {
+                        error("$pdfUrl is not a readable PDF")
+                    }
+                    val pages = PdfPageRenderer.pageCount(scratch) ?: error("No pages in $pdfUrl")
+                    val bytes = scratch.length()
+
+                    val rendered = PdfPageRenderer.renderFirstPage(scratch)
+                        ?: error("Could not render $pdfUrl")
+                    val render = File(directory(context), "${stem(logId, "pdf")}.jpg")
+                    writeJpeg(rendered, render)
+                    rendered.recycle()
+
+                    // Moved into place only after the render succeeded, so a file that cannot be
+                    // shown is never left sitting in the cache looking like a usable circular.
+                    val pdf = File(fileDirectory(context), "${stem(logId, "doc")}.pdf")
+                    pdf.delete()
+                    moveInto(scratch, pdf)
+
+                    prune(context)
+                    prunePdfs(context)
+                    PdfFetch(pdf, render, pages, bytes)
+                }.onFailure {
+                    Log.w(TAG, "Notice PDF failed for $pdfUrl", it)
+                    runCatching { scratch.delete() }
+                }.getOrNull()
+            }
+        }
 
     /** Returns the response's Content-Type, which is the only honest source for the extension. */
     private fun download(url: String, target: File): String? {
