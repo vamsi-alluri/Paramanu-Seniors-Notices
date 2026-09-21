@@ -23,6 +23,10 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    sourceSets {
+        androidTest.assets.srcDirs += "$projectDir/schemas"
+    }
+
     buildTypes {
         release {
             optimization {
@@ -44,6 +48,19 @@ android {
 // Exports the Room schema as JSON so future migrations can be diffed/tested.
 ksp {
     arg('room.schemaLocation', "$projectDir/schemas".toString())
+}
+
+configurations.matching { it.name.contains("AndroidTest") }.configureEach {
+    // The Compose BOM pins kotlinx-serialization-core to 1.7.3 for the whole project, but
+    // room-testing's precompiled migration-bundle serializers were built against a newer
+    // kotlinx.serialization runtime (GeneratedSerializer.typeParametersSerializers()). Forced
+    // only on the androidTest classpath so app code keeps the BOM's pin everywhere else.
+    resolutionStrategy {
+        force 'org.jetbrains.kotlinx:kotlinx-serialization-core:1.8.1'
+        force 'org.jetbrains.kotlinx:kotlinx-serialization-core-jvm:1.8.1'
+        force 'org.jetbrains.kotlinx:kotlinx-serialization-json:1.8.1'
+        force 'org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.8.1'
+    }
 }
 
 dependencies {
@@ -79,6 +96,7 @@ dependencies {
     androidTestImplementation libs.androidx.compose.ui.test.junit4
     androidTestImplementation libs.androidx.espresso.core
     androidTestImplementation libs.androidx.junit
+    androidTestImplementation libs.androidx.room.testing
     debugImplementation libs.androidx.compose.ui.test.manifest
     debugImplementation libs.androidx.compose.ui.tooling
 }

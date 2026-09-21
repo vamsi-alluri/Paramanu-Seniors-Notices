@@ -64,4 +64,31 @@ data class NoticeEntity(
     val linkImage: String? = null,
     /** The host, or `YouTube`. The small grey line on the card. */
     val linkSite: String? = null,
+    /**
+     * A ready-made first-page image for [pdfUrl], published alongside the circular.
+     *
+     * Absent today: the website does not produce one yet, so the worker downloads the whole PDF and
+     * renders page one itself. Once the pipeline ships this arrives filled in, the worker fetches
+     * ~40KB instead of ~5.6MB, and the circular is only ever downloaded when somebody taps it.
+     *
+     * Persisted rather than used and discarded, because a notice deferred on mobile data may be
+     * tapped a day later and the tap path has nothing else to read the URL from.
+     */
+    val pdfThumbUrl: String? = null,
+    /**
+     * Page count and size of [pdfUrl], for the card's badge.
+     *
+     * Filled from the payload when the sender supplies them, and otherwise derived locally the
+     * first time the worker renders the PDF -- `PdfRenderer` already has both and used to throw
+     * them away. Null means neither has happened yet, and the badge simply omits the numbers.
+     */
+    val pdfPages: Int? = null,
+    val pdfBytes: Long? = null,
+    /**
+     * One of [org.paramanuseniorshealth.notices.fcm.AttachmentState], or NULL on a row written
+     * before this column existed -- which reads as PENDING and so retries.
+     */
+    val attachmentState: String? = null,
+    /** Failed fetches only. Deferrals do not count; see FetchPolicy.shouldRetry. */
+    val attachmentAttempts: Int = 0,
 )

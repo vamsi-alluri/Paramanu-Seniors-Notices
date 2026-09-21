@@ -1,0 +1,121 @@
+{
+  "formatVersion": 1,
+  "database": {
+    "version": 4,
+    "identityHash": "8c60a0fef75bdf689efe8b8490260b8c",
+    "entities": [
+      {
+        "tableName": "notices",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `logId` TEXT, `title` TEXT NOT NULL, `body` TEXT NOT NULL, `receivedAt` INTEGER NOT NULL, `imageUrl` TEXT, `pdfUrl` TEXT, `linkUrl` TEXT, `linkTitle` TEXT, `linkImage` TEXT, `linkSite` TEXT, `pdfThumbUrl` TEXT, `pdfPages` INTEGER, `pdfBytes` INTEGER, `attachmentState` TEXT, `attachmentAttempts` INTEGER NOT NULL)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "logId",
+            "columnName": "logId",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "body",
+            "columnName": "body",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "receivedAt",
+            "columnName": "receivedAt",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "imageUrl",
+            "columnName": "imageUrl",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pdfUrl",
+            "columnName": "pdfUrl",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "linkUrl",
+            "columnName": "linkUrl",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "linkTitle",
+            "columnName": "linkTitle",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "linkImage",
+            "columnName": "linkImage",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "linkSite",
+            "columnName": "linkSite",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pdfThumbUrl",
+            "columnName": "pdfThumbUrl",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "pdfPages",
+            "columnName": "pdfPages",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "pdfBytes",
+            "columnName": "pdfBytes",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "attachmentState",
+            "columnName": "attachmentState",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "attachmentAttempts",
+            "columnName": "attachmentAttempts",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_notices_logId",
+            "unique": true,
+            "columnNames": [
+              "logId"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_notices_logId` ON `${TABLE_NAME}` (`logId`)"
+          }
+        ]
+      }
+    ],
+    "setupQueries": [
+      "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '8c60a0fef75bdf689efe8b8490260b8c')"
+    ]
+  }
+}
