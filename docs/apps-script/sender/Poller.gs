@@ -39,7 +39,7 @@
  *  4. Run pollerDryRun(). Reads the real feed, logs what a real run would send, sends nothing.
  *  5. Run pollerSeedFeed() ONCE. Marks every alert currently in the feed as already handled,
  *     without sending. Skip it and the first trigger run broadcasts the whole back catalogue.
- *  6. Run pollerInstallTrigger() to create the 15-minute trigger.
+ *  6. Run pollerInstallTrigger() to create the 8-hour trigger.
  *
  * Adding this file does not change the web app. There is no need to redeploy it - and redeploying
  * is worth avoiding here, since a new version resets nothing but is the step most easily done
@@ -893,13 +893,13 @@ function testPollerConnection() {
              POLLER_VERSION, pollerFeedUrl_(), items.length, Object.keys(seen).length);
 }
 
-/** Creates the 15-minute trigger. Safe to run twice; it removes any existing one first. */
+/** Creates the 8-hour trigger. Safe to run twice; it removes any existing one first. */
 function pollerInstallTrigger() {
   ScriptApp.getProjectTriggers().forEach(function (trigger) {
     if (trigger.getHandlerFunction() === 'pollAlertsFeed') ScriptApp.deleteTrigger(trigger);
   });
-  ScriptApp.newTrigger('pollAlertsFeed').timeBased().everyMinutes(15).create();
-  Logger.log('Trigger installed: pollAlertsFeed every 15 minutes.');
+  ScriptApp.newTrigger('pollAlertsFeed').timeBased().everyHours(8).create();
+  Logger.log('Trigger installed: pollAlertsFeed every 8 hours.');
 }
 
 /** Removes the trigger. The first thing to reach for if something is going wrong. */

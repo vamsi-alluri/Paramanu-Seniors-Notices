@@ -2,6 +2,65 @@
 
 Standing decisions and the questions that prompted them. Newest first.
 
+## The sender's triggers stay in Apps Script for now
+
+**Question.** Should `controlRun` and `pollAlertsFeed` move out of Apps Script? For three days in
+September 2026 both ran once a minute while the poller was being tested, and together they used up
+the account's UrlFetch quota. The staff console, which runs as whoever is using it, then failed for
+that account too.
+
+**Finding.** The quota is **20,000 UrlFetch calls a day for each consumer Google account**, and every
+Apps Script project and manual run on that account shares it, whether a trigger started it or not.
+Time-driven triggers also share **90 minutes of runtime a day** across the account. What each run
+costs:
+
+- `controlRun`: 1 fetch when the queue is empty, and 4 more for each entry it sends.
+- `pollAlertsFeed`: 1 + N fetches when nothing is new, where N is the number of feed items (6
+  today), and 6–8 more for each alert it sends.
+
+The planned timings are every minute for `controlRun` and every 8 hours for the poller. At those
+timings the two cost about 1,500 fetches a day, and trigger runtime stays well under 90 minutes.
+
+The options considered:
+
+1. **Leave them as they are.** Free and no work. Fine until something else on the account needs a
+   lot of the quota.
+2. **Make the triggers cheaper where they are.** One shallow read of `/alertsSeen` instead of one
+   read per feed item brings the poller to 2 fetches a run. Running `controlRun` every 5 minutes
+   brings it to 288 a day, but a revoke then takes up to 5 minutes to reach phones.
+3. **Install the triggers from a different Google account.** A trigger uses the quota of the account
+   that installed it. Every fetch authenticates with the service account key, not the Google
+   account, so the code doesn't change. A Google Workspace account, such as one from Google for
+   Nonprofits, gets 100,000 fetches and 6 hours of trigger runtime a day.
+4. **Move both to Cloud Functions for Firebase.**
+   - `controlRun` becomes an `onValueWritten` trigger on `/controlQueue/{key}`: nothing runs while
+     the queue is empty, and a revoke reaches phones in seconds.
+   - The poller becomes a scheduled function every 8 hours.
+   - It costs about $0 a month within the free tier, but needs the Blaze plan, and a budget alert
+     should be set first.
+   - About 1–1½ days of work. The URLs staff use, the console and the app don't change.
+   - The details that must carry over:
+     - Skip deletes, including the function's own delete of the entry it just sent.
+     - Retry a failed broadcast, either with `retry: true` or with a scheduled sweep of the queue.
+     - Clear an entry with a transaction, and only if its `at` is unchanged.
+     - Keep `/alertsSeen` keys the same: SHA-256 hex, first 32 characters.
+     - Keep `/sent` ids compatible with the sender's `nextLogId_`.
+     - Stop the Apps Script poller trigger before the first scheduled run.
+     - Stop using `t_controlDrain_`: its writes to `/controlQueue` would make the live function
+       broadcast on `control-v1`.
+
+**Decision.** Stay on Apps Script at the planned timings. Move to option 4 when the account's quota
+has to be shared with something heavy. The known case is the tab-to-PDF script on the same account,
+retired since late 2025, which used up the account's limits when it ran. It fetches only when it
+exports a tab, but every run reads all ~60 tabs, so running often uses up the trigger runtime.
+Before restarting it, make it return early when the document's Drive `getLastUpdated()` hasn't
+changed since the last clean run. Option 3 fixes the same problem with no code, if a second account
+is acceptable.
+
+**Consequence.** A revoke takes up to a minute to reach phones, and an alert can take up to 8 hours.
+Before restarting any other trigger on the same account, add up its daily fetches and runtime against
+the limits above.
+
 ## What a phone can receive comes from its code's dispensary
 
 **Question.** "What you receive" was compiled into the app as Notices and Daily open and closed. The
