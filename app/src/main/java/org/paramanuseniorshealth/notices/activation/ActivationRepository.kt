@@ -18,6 +18,8 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.time.Duration.Companion.milliseconds
+import androidx.core.content.edit
 
 /**
  * Owns the one-time activation handshake, the entitlement check that gates every notice, and which
@@ -87,7 +89,7 @@ class ActivationRepository(
      * 100 simultaneous connections; over the cap the connection is refused, the answer comes back
      * Unknown, and the check silently stopped working during exactly the event it exists for.
      *
-     * Nothing stored yet, or anything unrecognised, permits the notice -- the same reasoning that
+     * Nothing stored yet, or anything unrecognized, permits the notice -- the same reasoning that
      * already permits Unknown. A missed closure notice is worse than a revoked device seeing one
      * more public announcement. See docs/decisions.md.
      */
@@ -104,10 +106,10 @@ class ActivationRepository(
     /** Stores a definitive answer. [ActivationState.Unknown] is not an answer, so it is not stored. */
     fun recordVerification(state: ActivationState) {
         if (state == ActivationState.Unknown) return
-        prefs.edit()
-            .putString(KEY_LAST_STATE, state.name)
-            .putLong(KEY_LAST_VERIFIED_AT, System.currentTimeMillis())
-            .apply()
+        prefs.edit {
+            putString(KEY_LAST_STATE, state.name)
+                .putLong(KEY_LAST_VERIFIED_AT, System.currentTimeMillis())
+        }
     }
 
     // ---------------------------------------------------------------- topics
@@ -127,7 +129,7 @@ class ActivationRepository(
      * Whether a notice that arrived on [topic] should be shown.
      *
      * A second check behind the subscription. Unsubscribing is not instant -- FCM can keep delivering
-     * for a short while afterwards -- so without this a user who has just switched a topic off gets
+     * for a short while afterward -- so without this a user who has just switched a topic off gets
      * the next one anyway, and reasonably concludes the switch does not work. A topic the dispensary
      * does not offer is never shown, whatever reached the phone.
      */
@@ -146,12 +148,12 @@ class ActivationRepository(
      * without a trip to the counter for a new slip.
      */
     suspend fun setTopic(topic: String, enabled: Boolean) {
-        prefs.edit().putBoolean(topicKey(topic), enabled).apply()
+        prefs.edit { putBoolean(topicKey(topic), enabled) }
         syncSubscriptions()
     }
 
     suspend fun setTesting(enabled: Boolean) {
-        prefs.edit().putBoolean(KEY_TESTING, enabled).apply()
+        prefs.edit { putBoolean(KEY_TESTING, enabled) }
         syncSubscriptions()
     }
 
@@ -182,7 +184,7 @@ class ActivationRepository(
         val stillSubscribed = (previous - desired).filterNot { unsubscribeTopic(it) }
         desired.forEach { subscribeTopic(it) }
 
-        prefs.edit().putStringSet(KEY_SUBSCRIBED, desired + stillSubscribed).apply()
+        prefs.edit { putStringSet(KEY_SUBSCRIBED, desired + stillSubscribed) }
     }
 
     // ---------------------------------------------------------------- the claim
@@ -201,7 +203,7 @@ class ActivationRepository(
         // told their code "may already have been used" while holding the slip it is printed on.
         if (code == storedCode) return RedeemResult.SameCode
 
-        return withTimeoutOrNull(NETWORK_TIMEOUT_MS) {
+        return withTimeoutOrNull(NETWORK_TIMEOUT_MS.milliseconds) {
             try {
                 // Reuse the existing anonymous account when there is one: signing in again would
                 // mint a new UID and orphan any claim this device already holds.
@@ -220,7 +222,7 @@ class ActivationRepository(
 
                 // Which dispensary the code belongs to decides what the phone is offered. Read after
                 // the claim, and allowed to fail: a claim that has succeeded must not be undone by a
-                // slow read, and the next verification fills this in anyway.
+                // slow read, and the next verification fills this in any way.
                 val dispensary = runCatching {
                     database.reference.child(CODES).child(code).child(FIELD_DISPENSARY).get()
                         .awaitResult().getValue(String::class.java)
@@ -231,12 +233,12 @@ class ActivationRepository(
                 // fresh slip -- and without this the new claim would inherit the old one's
                 // revocation and the gate would refuse every notice for a code that is perfectly
                 // good.
-                prefs.edit()
-                    .putString(KEY_CODE, code)
-                    .putString(KEY_UID, uid)
-                    .putString(KEY_DISPENSARY, dispensary)
-                    .putBoolean(KEY_REVOKED, false)
-                    .apply()
+                prefs.edit {
+                    putString(KEY_CODE, code)
+                        .putString(KEY_UID, uid)
+                        .putString(KEY_DISPENSARY, dispensary)
+                        .putBoolean(KEY_REVOKED, false)
+                }
                 _revoked.value = false
 
                 // A fresh claim is known-good, so record it rather than leaving the gate to answer
@@ -274,7 +276,7 @@ class ActivationRepository(
         val code = storedCode ?: return ActivationState.NotActivated
         val uid = storedUid ?: return ActivationState.NotActivated
 
-        return withTimeoutOrNull(VERIFY_TIMEOUT_MS) {
+        return withTimeoutOrNull(VERIFY_TIMEOUT_MS.milliseconds) {
             try {
                 // Forces a refresh against the server, which is the only way a deleted or disabled
                 // anonymous user is ever discovered. A cached ID token stays happily valid
@@ -293,13 +295,13 @@ class ActivationRepository(
                 val issued = snapshot.child(FIELD_ISSUED).exists()
 
                 snapshot.child(FIELD_DISPENSARY).getValue(String::class.java)?.let { id ->
-                    if (id != dispensaryId) prefs.edit().putString(KEY_DISPENSARY, id).apply()
+                    if (id != dispensaryId) prefs.edit { putString(KEY_DISPENSARY, id) }
                 }
 
                 val state = when {
                     revoked -> ActivationState.Revoked
                     // Every code the console prints carries `issued`. A node without it was never
-                    // issued by the NGO, so the claim on it is not one we honour -- this catches
+                    // issued by the NGO, so the claim on it is not one we honor -- this catches
                     // any self-minted code created before the rules refused to create them.
                     !issued -> ActivationState.Revoked
                     claimedBy == null -> ActivationState.Revoked   // claim erased by the NGO
@@ -335,18 +337,18 @@ class ActivationRepository(
      * Safe to call repeatedly: a second revoke broadcast for the same code changes nothing.
      */
     suspend fun suspendClaim() {
-        prefs.edit()
-            .putBoolean(KEY_REVOKED, true)
-            .putString(KEY_LAST_STATE, ActivationState.Revoked.name)
-            .putLong(KEY_LAST_VERIFIED_AT, System.currentTimeMillis())
-            .apply()
+        prefs.edit {
+            putBoolean(KEY_REVOKED, true)
+                .putString(KEY_LAST_STATE, ActivationState.Revoked.name)
+                .putLong(KEY_LAST_VERIFIED_AT, System.currentTimeMillis())
+        }
         _revoked.value = true
         syncSubscriptions()
     }
 
     /** The server says the claim stands again: clear the banner and start receiving once more. */
     suspend fun resumeClaim() {
-        prefs.edit().putBoolean(KEY_REVOKED, false).apply()
+        prefs.edit { putBoolean(KEY_REVOKED, false) }
         _revoked.value = false
         recordVerification(ActivationState.Active)
         syncSubscriptions()
@@ -360,7 +362,7 @@ class ActivationRepository(
      */
     fun acceptControl(at: Long): Boolean {
         if (!ControlMessage.isNewer(at, prefs.getLong(KEY_LAST_CONTROL_AT, 0L))) return false
-        prefs.edit().putLong(KEY_LAST_CONTROL_AT, at).apply()
+        prefs.edit { putLong(KEY_LAST_CONTROL_AT, at) }
         return true
     }
 
