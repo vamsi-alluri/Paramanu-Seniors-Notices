@@ -245,6 +245,38 @@ function t_sendNotice_(created) {
   t_eq_('sentBy is the caller', stored.sentBy, requireEditor_());
 }
 
+// ---------------------------------------------------------------- saved messages
+
+function t_labelOrder_() {
+  var labels = ['10. Landline not working', '2. Disp Closed', '1. Disp Open', '13. HelpDesk Hotline',
+                '9. Power Restored', 'Unnumbered', '11. Landline Working'];
+  t_eq_('labelOrder_ sorts by number, not by text', labels.sort(labelOrder_).join(' | '),
+    '1. Disp Open | 2. Disp Closed | 9. Power Restored | 10. Landline not working | ' +
+    '11. Landline Working | 13. HelpDesk Hotline | Unnumbered');
+  t_ok_('labelOrder_ ignores case', labelOrder_('b', 'A') > 0);
+  t_ok_('labelOrder_ handles a missing label', labelOrder_('', '1. x') < 0);
+}
+
+// ---------------------------------------------------------------- attachments from the message
+
+function t_messageLinks_() {
+  t_eq_('messageLinks_ finds nothing in plain text', messageLinks_('OPD reopens Friday.').length, 0);
+  var links = messageLinks_('Circular: https://a.org/c.pdf. Poster (www.b.org/p.jpg) and https://a.org/c.pdf again');
+  t_eq_('messageLinks_ finds each link once', links.length, 2);
+  t_eq_('messageLinks_ trims trailing punctuation', links[0], 'https://a.org/c.pdf');
+  t_eq_('messageLinks_ adds a scheme and trims the bracket', links[1], 'https://www.b.org/p.jpg');
+}
+
+function t_attachmentKind_() {
+  t_eq_('a declared PDF is a PDF', attachmentKind_('application/pdf', 'https://a.org/x'), 'pdf');
+  t_eq_('a declared JPEG with a charset is an image', attachmentKind_('image/jpeg; charset=binary', 'https://a.org/x'), 'image');
+  t_eq_('an SVG is not attached', attachmentKind_('image/svg+xml', 'https://a.org/x.svg'), '');
+  t_eq_('a page ending in .pdf is a page', attachmentKind_('text/html', 'https://a.org/view.pdf'), '');
+  t_eq_('a generic download falls back to the extension', attachmentKind_('application/octet-stream', 'https://a.org/c.PDF?dl=1'), 'pdf');
+  t_eq_('no type falls back to the extension', attachmentKind_('', 'https://a.org/p.webp#top'), 'image');
+  t_eq_('no type and no extension is nothing', attachmentKind_('', 'https://a.org/page'), '');
+}
+
 // ---------------------------------------------------------------- routing
 
 function t_doGet_() {
@@ -252,6 +284,31 @@ function t_doGet_() {
   // The daily open and closed route is gone. A bookmarked ?status= link opens the compose page.
   t_ok_('doGet ignores a leftover status link',
     doGet({ parameter: { status: 'open' } }).getContent().indexOf('Send a notice') > 0);
+}
+
+/** The admin link. Saves and restores ADMIN_URL, so a failed run does not lose the real one. */
+function t_adminUrl_() {
+  var props = PropertiesService.getScriptProperties();
+  var original = props.getProperty('ADMIN_URL');
+  var url = 'https://script.google.com/macros/s/selftest-admin/exec';
+
+  try {
+    props.setProperty('ADMIN_URL', '  ' + url + '  ');
+    t_eq_('adminUrl_ trims the property', adminUrl_(), url);
+    t_ok_('doGet links the admin console', doGet().getContent().indexOf(url) > 0);
+
+    props.deleteProperty('ADMIN_URL');
+    t_eq_('adminUrl_ is empty when unset', adminUrl_(), '');
+    t_ok_('doGet draws no admin link when unset', doGet().getContent().indexOf('Admin console') < 0);
+
+    ['javascript:alert(1)', 'http://example.com', 'script.google.com/macros/s/x/exec'].forEach(function (value) {
+      props.setProperty('ADMIN_URL', value);
+      t_eq_('adminUrl_ refuses ' + JSON.stringify(value), adminUrl_(), '');
+    });
+  } finally {
+    if (original === null || original === undefined) props.deleteProperty('ADMIN_URL');
+    else props.setProperty('ADMIN_URL', original);
+  }
 }
 
 // ---------------------------------------------------------------- control messages
@@ -401,7 +458,11 @@ function runAllTests() {
     t_controlDecide_();
     t_pushControl_();
     t_controlDrain_();
+    t_labelOrder_();
+    t_messageLinks_();
+    t_attachmentKind_();
     t_doGet_();
+    t_adminUrl_();
     t_testConnection_();
   } catch (e) {
     T_RESULTS.push({ name: 'SUITE ABORTED', pass: false, detail: String(e) });

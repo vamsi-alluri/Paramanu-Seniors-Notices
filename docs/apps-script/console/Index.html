@@ -20,6 +20,8 @@
   .topbar a { font-size: 14px; color: #4a5162; text-decoration: none; padding: 4px 0;
               border-bottom: 2px solid transparent; cursor: pointer; }
   .topbar a:hover { color: #14315c; border-bottom-color: #14315c; }
+  /* Leaves this page rather than jumping within it, so it sits apart at the far end. */
+  .topbar a.away { margin-left: auto; }
 
   /* Each section is its own card, so it is obvious where one job ends and the next begins. */
   .card { background: #fff; border: 1px solid #e0e4ee; border-radius: 14px;
@@ -141,6 +143,10 @@
       <a onclick="goTo('codes')">Activation codes</a>
       <a onclick="goTo('messages')">Saved messages</a>
       <a onclick="goTo('banner-section')">Dispensary banner</a>
+      <? if (senderUrl) { ?>
+        <!-- SENDER_URL in Script Properties. A new tab, so a half-done edit here is not lost. -->
+        <a class="away" href="<?= senderUrl ?>" target="_blank" rel="noopener">Send a notice &rarr;</a>
+      <? } ?>
     </div>
   </div>
 

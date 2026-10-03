@@ -9,7 +9,8 @@
  *   - the PDF field is `pdfUrl`, not `imageUrl` (this app ignores `imageUrl` entirely);
  *   - `level` and `color` are gone; the severity system was a server-monitoring idea.
  *
- * Text only for now: title and body. Attachments come later.
+ * Title and body, plus an attachment when the body links to a PDF or a picture: see
+ * messageAttachment_. Nothing is uploaded; the phones fetch the file from where the link points.
  *
  * SETUP (once)
  *  1. New Apps Script project. Paste this as Code.gs and Index.html as "Index".
@@ -22,6 +23,8 @@
  *       STAFF_PIN            = <at least six digits; required for every send>
  *       REQUIRE_STAFF_PIN    = 'false' to drop the PIN and rely on the Google allowlist alone
  *                              (optional; anything else, or absent, means the PIN is required)
+ *       ADMIN_URL            = the admin console's /exec URL, linked from the top of the page
+ *                              (optional; absent, or not https, means no link)
  *  3. Deploy -> Web app.
  *       Execute as:     User accessing the web app   <- REQUIRED, see requireEditor_
  *       Who has access: Anyone with a Google account
@@ -191,8 +194,32 @@ function listTemplates() {
     if (!all.hasOwnProperty(id)) continue;
     rows.push({ id: id, label: all[id].label || all[id].title || '(untitled)', title: all[id].title || '', body: all[id].body || '' });
   }
-  rows.sort(function (a, b) { return a.label.localeCompare(b.label); });
+  rows.sort(function (a, b) { return labelOrder_(a.label, b.label); });
   return rows;
+}
+
+/**
+ * Orders labels the way people number them: "2. Disp Closed" before "10. Landline not working".
+ * Pure.
+ *
+ * Staff number the saved messages to fix their order on the page, and a plain text comparison put
+ * 10 to 13 between 1 and 2. Runs of digits compare by value and everything else case-insensitively.
+ * Written out rather than left to localeCompare's numeric option, which depends on the ICU data the
+ * runtime happens to carry.
+ */
+function labelOrder_(a, b) {
+  var x = String(a || '').toLowerCase().match(/\d+|\D+/g) || [];
+  var y = String(b || '').toLowerCase().match(/\d+|\D+/g) || [];
+  for (var i = 0; i < Math.min(x.length, y.length); i++) {
+    var xNum = /^\d/.test(x[i]), yNum = /^\d/.test(y[i]);
+    if (xNum && yNum) {
+      var diff = Number(x[i]) - Number(y[i]);
+      if (diff) return diff;
+    } else if (x[i] !== y[i]) {
+      return x[i] < y[i] ? -1 : 1;
+    }
+  }
+  return (x.length - y.length) || String(a || '').localeCompare(String(b || ''));
 }
 
 // ---------------------------------------------------------------- Sending
@@ -298,6 +325,113 @@ function dispensaryTopic_() {
   return topic;
 }
 
+// ---------------------------------------------------------------- Attachments from the message
+
+/**
+ * How many links in a message are asked about. Each is one HEAD request against the account-wide
+ * UrlFetch quota, and a message that lists more links than this is a reading list, not a notice
+ * with an attachment.
+ */
+var ATTACHMENT_LINKS_CHECKED = 3;
+
+/** The image types the app can decode. SVG and HEIC are left as plain links. */
+var ATTACHMENT_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
+
+/**
+ * Every link in [text], in order, with no repeats. Pure.
+ *
+ * Word by word through pollerFirstLink_, so where a link ends is decided by exactly the rule the
+ * poller and the app use -- a URL never contains whitespace, so no link is split by doing it this way.
+ */
+function messageLinks_(text) {
+  var links = [];
+  String(text || '').split(/\s+/).forEach(function (word) {
+    var found = pollerFirstLink_(word);
+    if (!found) return;
+    var url = pollerNormaliseUrl_(found);
+    if (links.indexOf(url) < 0) links.push(url);
+  });
+  return links;
+}
+
+/**
+ * 'pdf', 'image' or '' for a link, from the type its server declared. Pure.
+ *
+ * The declared type wins when there is one: a page that merely ends in .pdf but serves text/html is
+ * a viewer, not a document. Only a missing or generic download type falls back to the extension,
+ * which is how a file host that labels everything application/octet-stream still works.
+ */
+function attachmentKind_(contentType, url) {
+  var type = String(contentType || '').split(';')[0].trim().toLowerCase();
+  if (type === 'application/pdf') return 'pdf';
+  if (ATTACHMENT_IMAGE_TYPES.indexOf(type) >= 0) return 'image';
+  if (type && type !== 'application/octet-stream' && type !== 'binary/octet-stream') return '';
+
+  var path = String(url || '').split(/[?#]/)[0].toLowerCase();
+  if (/\.pdf$/.test(path)) return 'pdf';
+  if (/\.(jpe?g|png|webp|gif)$/.test(path)) return 'image';
+  return '';
+}
+
+/**
+ * Asks [url]'s server what it is, without downloading it. Returns { kind, bytes }.
+ *
+ * A server that refuses HEAD, or cannot be reached from Apps Script, is judged by the extension
+ * alone. One that says the file is gone is not attached at all: a dead link sent as an attachment
+ * would sit on every phone as a download glyph that never succeeds.
+ */
+function probeAttachment_(url) {
+  var response;
+  try {
+    response = UrlFetchApp.fetch(url, { method: 'head', muteHttpExceptions: true, followRedirects: true });
+  } catch (e) {
+    return { kind: attachmentKind_('', url), bytes: null };
+  }
+
+  var code = response.getResponseCode();
+  if (code === 404 || code === 410) return { kind: '', bytes: null };
+  if (code >= 300) return { kind: attachmentKind_('', url), bytes: null };
+
+  // Header names keep whatever case the server sent.
+  var headers = response.getHeaders();
+  var type = '', length = null;
+  for (var name in headers) {
+    if (!headers.hasOwnProperty(name)) continue;
+    var lower = name.toLowerCase();
+    if (lower === 'content-type') type = String(headers[name]);
+    if (lower === 'content-length') length = parseInt(headers[name], 10);
+  }
+  return { kind: attachmentKind_(type, url), bytes: (length > 0) ? length : null };
+}
+
+/**
+ * The payload fields for the first PDF or picture linked in [body], or {} when there is none.
+ *
+ * The link stays in the text as well. The app shows the attachment above it, and the text still
+ * reads correctly on a phone whose copy of the attachment has not arrived.
+ *
+ * Never throws: an attachment is an addition to a notice, and failing to work one out must not stop
+ * the notice itself from going.
+ */
+function messageAttachment_(body) {
+  var links = messageLinks_(body).slice(0, ATTACHMENT_LINKS_CHECKED);
+  for (var i = 0; i < links.length; i++) {
+    try {
+      var probe = probeAttachment_(links[i]);
+      if (probe.kind === 'pdf') {
+        // pdfBytes lets a phone on mobile data decide without a request of its own.
+        var pdf = { pdfUrl: links[i] };
+        if (probe.bytes) pdf.pdfBytes = probe.bytes;
+        return pdf;
+      }
+      if (probe.kind === 'image') return { imageUrl: links[i] };
+    } catch (e) {
+      Logger.log('Could not check %s for an attachment (%s); left as a plain link.', links[i], e.message);
+    }
+  }
+  return {};
+}
+
 function sendNotice(title, body, pin) {
   var by = requireEditor_();
   // The compose page sends arbitrary text to every phone, so it is the path that needs the PIN.
@@ -311,10 +445,20 @@ function sendNotice(title, body, pin) {
   if (body.length > 900) throw new Error('Body is too long (' + body.length + '); keep it under 900 characters.');
 
   var topic = dispensaryTopic_();
+  var attachment = messageAttachment_(body);
   var logId = nextLogId_();
   var sentAt = new Date().toISOString();
 
-  firebase_('put', '/sent/' + logId + '.json', { title: title, body: body, topic: topic, dispensary: dispensaryId_(), sentAt: sentAt, sentBy: by, scriptVersion: SCRIPT_VERSION });
+  var record = { title: title, body: body, topic: topic, dispensary: dispensaryId_(), sentAt: sentAt, sentBy: by, scriptVersion: SCRIPT_VERSION };
+  var data = { logId: logId, title: title, body: body, topic: topic };
+  for (var field in attachment) {
+    if (!attachment.hasOwnProperty(field)) continue;
+    record[field] = attachment[field];
+    // FCM data values must be strings.
+    data[field] = String(attachment[field]);
+  }
+
+  firebase_('put', '/sent/' + logId + '.json', record);
 
   // Data-only. A `notification` block here would make the FCM SDK draw the tray notification
   // itself while the app is backgrounded: onMessageReceived would never run, the entitlement check
@@ -322,7 +466,7 @@ function sendNotice(title, body, pin) {
   //
   // `topic` travels in the data as well as the envelope: the phone checks it against what its
   // dispensary offers and what the user has switched on, and picks the notification channel from it.
-  var message = { message: { topic: TOPIC_OVERRIDE || topic, android: { priority: 'high' }, data: { logId: logId, title: title, body: body, topic: topic } } };
+  var message = { message: { topic: TOPIC_OVERRIDE || topic, android: { priority: 'high' }, data: data } };
 
   var response = UrlFetchApp.fetch( 'https://fcm.googleapis.com/v1/projects/' + property_('PROJECT_ID') + '/messages:send', { method: 'post', contentType: 'application/json', headers: { Authorization: 'Bearer ' + accessToken_() }, payload: JSON.stringify(message), muteHttpExceptions: true } );
 
@@ -332,7 +476,8 @@ function sendNotice(title, body, pin) {
   }
 
   firebase_('patch', '/sent/' + logId + '.json', { fcmName: JSON.parse(response.getContentText()).name || '' });
-  return { logId: logId, sentAt: sentAt, title: title, topic: topic };
+  return { logId: logId, sentAt: sentAt, title: title, topic: topic,
+           attachment: attachment.pdfUrl ? 'pdf' : (attachment.imageUrl ? 'image' : '') };
 }
 
 /** The last [limit] notices sent, newest first. */
@@ -423,13 +568,27 @@ function pushControl_(data) {
 
 // ---------------------------------------------------------------- Web app
 
+/**
+ * The admin console's /exec URL, from the ADMIN_URL Script Property, or '' for no link.
+ *
+ * A property so a redeploy of the console, which can change its URL, is followed by editing one
+ * value here rather than by a redeploy of this project too. Only https is accepted: the value is
+ * written into an href, and anything else is more likely a paste mistake than a link.
+ */
+function adminUrl_() {
+  var value = String(PropertiesService.getScriptProperties().getProperty('ADMIN_URL') || '').trim();
+  return /^https:\/\//i.test(value) ? value : '';
+}
+
 function doGet() {
   try {
     requireEditor_();
   } catch (err) {
     return refusalPage_(err.message);
   }
-  return HtmlService.createTemplateFromFile('Index').evaluate().setTitle('Paramanu Seniors Notices - Send').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  var page = HtmlService.createTemplateFromFile('Index');
+  page.adminUrl = adminUrl_();
+  return page.evaluate().setTitle('Paramanu Seniors Notices - Send').addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 /** Run from the editor after setup to prove the credentials work without sending anything. */
