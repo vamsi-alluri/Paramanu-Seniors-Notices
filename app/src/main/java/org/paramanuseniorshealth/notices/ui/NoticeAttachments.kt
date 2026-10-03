@@ -1,5 +1,6 @@
 package org.paramanuseniorshealth.notices.ui
 
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -12,6 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -41,6 +43,7 @@ import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.fcm.NoticeImageStore
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * What a notice carries, below its text: pictures, the circular, and a link card.
@@ -196,7 +199,7 @@ fun LinkCard(
 }
 
 /**
- * Everything an expanded row shows below its body text.
+ * Everything a row shows below its body text.
  *
  * A notice carries at most one attachment -- a PDF or an image, never both, per the one-enclosure
  * rule `Poller.gs:105` already enforces upstream -- so [photo] and [pdfRender] resolve to a single
@@ -238,6 +241,12 @@ fun NoticeAttachments(
             val bytes = if (isPdf) notice.pdfBytes else attachment.length()
             val badgeText = AttachmentBadge.label(isPdf = isPdf, pages = notice.pdfPages, bytes = bytes)
 
+            // Known before Coil decodes anything, so the picture's space is reserved on the first
+            // frame. Without it the image measured zero tall until the decode landed, and every
+            // card grew under the reader's thumb as it scrolled into view -- the list disposes rows
+            // that leave the screen, so this happened on every pass, not only the first.
+            val aspect = remember(attachment.path, attachment.lastModified()) { imageAspect(attachment) }
+
             Box(modifier = Modifier.fillMaxWidth().padding(top = 12.dp)) {
                 AsyncImage(
                     model = attachment,
@@ -245,6 +254,7 @@ fun NoticeAttachments(
                     contentScale = ContentScale.FillWidth,
                     modifier = Modifier
                         .fillMaxWidth()
+                        .then(if (aspect != null) Modifier.aspectRatio(aspect) else Modifier)
                         .clip(RoundedCornerShape(8.dp))
                         .combinedClickable(
                             // Tapping the picture *is* opening it -- there is no separate Open
@@ -295,6 +305,24 @@ fun NoticeAttachments(
         LinkCard(notice = notice, modifier = Modifier.padding(top = 12.dp))
     }
 }
+
+/**
+ * Width over height of the picture in [file], or null if its header cannot be read.
+ *
+ * Bounds only: `inJustDecodeBounds` reads the header and allocates no pixels, so this is cheap
+ * enough to run during composition. Cached by path and modification time anyway, because a row
+ * re-enters composition every time it scrolls back into view.
+ */
+private fun imageAspect(file: File): Float? {
+    val key = "${file.path}@${file.lastModified()}"
+    aspectCache[key]?.let { return it }
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.path, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    return (bounds.outWidth.toFloat() / bounds.outHeight).also { aspectCache[key] = it }
+}
+
+private val aspectCache = ConcurrentHashMap<String, Float>()
 
 /** A placeholder so a card with no usable logo is still a card rather than a gap. */
 @Composable
