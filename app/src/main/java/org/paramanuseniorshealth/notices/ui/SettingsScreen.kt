@@ -177,7 +177,7 @@ fun SettingsScreen(
                     // Shown so the user can read it back over the phone if they ever call the
                     // dispensary for help. It is not a secret worth hiding: it is already spent.
                     //
-                    // Struck through and in the error colour once it has been stopped. Colour alone
+                    // Struck through and in the error color once it has been stopped. Color alone
                     // would not do it: this audience includes people who cannot distinguish it, and
                     // the strikethrough carries the same meaning without relying on sight of red.
                     Text(
