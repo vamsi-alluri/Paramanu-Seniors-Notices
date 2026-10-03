@@ -245,6 +245,18 @@ function t_sendNotice_(created) {
   t_eq_('sentBy is the caller', stored.sentBy, requireEditor_());
 }
 
+// ---------------------------------------------------------------- saved messages
+
+function t_labelOrder_() {
+  var labels = ['10. Landline not working', '2. Disp Closed', '1. Disp Open', '13. HelpDesk Hotline',
+                '9. Power Restored', 'Unnumbered', '11. Landline Working'];
+  t_eq_('labelOrder_ sorts by number, not by text', labels.sort(labelOrder_).join(' | '),
+    '1. Disp Open | 2. Disp Closed | 9. Power Restored | 10. Landline not working | ' +
+    '11. Landline Working | 13. HelpDesk Hotline | Unnumbered');
+  t_ok_('labelOrder_ ignores case', labelOrder_('b', 'A') > 0);
+  t_ok_('labelOrder_ handles a missing label', labelOrder_('', '1. x') < 0);
+}
+
 // ---------------------------------------------------------------- attachments from the message
 
 function t_messageLinks_() {
@@ -446,6 +458,7 @@ function runAllTests() {
     t_controlDecide_();
     t_pushControl_();
     t_controlDrain_();
+    t_labelOrder_();
     t_messageLinks_();
     t_attachmentKind_();
     t_doGet_();

@@ -194,8 +194,32 @@ function listTemplates() {
     if (!all.hasOwnProperty(id)) continue;
     rows.push({ id: id, label: all[id].label || all[id].title || '(untitled)', title: all[id].title || '', body: all[id].body || '' });
   }
-  rows.sort(function (a, b) { return a.label.localeCompare(b.label); });
+  rows.sort(function (a, b) { return labelOrder_(a.label, b.label); });
   return rows;
+}
+
+/**
+ * Orders labels the way people number them: "2. Disp Closed" before "10. Landline not working".
+ * Pure.
+ *
+ * Staff number the saved messages to fix their order on the page, and a plain text comparison put
+ * 10 to 13 between 1 and 2. Runs of digits compare by value and everything else case-insensitively.
+ * Written out rather than left to localeCompare's numeric option, which depends on the ICU data the
+ * runtime happens to carry.
+ */
+function labelOrder_(a, b) {
+  var x = String(a || '').toLowerCase().match(/\d+|\D+/g) || [];
+  var y = String(b || '').toLowerCase().match(/\d+|\D+/g) || [];
+  for (var i = 0; i < Math.min(x.length, y.length); i++) {
+    var xNum = /^\d/.test(x[i]), yNum = /^\d/.test(y[i]);
+    if (xNum && yNum) {
+      var diff = Number(x[i]) - Number(y[i]);
+      if (diff) return diff;
+    } else if (x[i] !== y[i]) {
+      return x[i] < y[i] ? -1 : 1;
+    }
+  }
+  return (x.length - y.length) || String(a || '').localeCompare(String(b || ''));
 }
 
 // ---------------------------------------------------------------- Sending
