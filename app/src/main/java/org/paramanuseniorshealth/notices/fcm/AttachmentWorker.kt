@@ -153,7 +153,7 @@ class AttachmentWorker(
         private const val CATCH_UP = "attachment-catch-up"
         private const val CATCH_UP_WIFI = "attachment-catch-up-wifi"
         /**
-         * Two minutes, not the hour this started as.
+         * One minute, not the hour this started as (and two minutes after that).
          *
          * The hour was sized against a thundering herd hitting an origin server. The attachments
          * are served from GitHub Pages, which is a CDN -- 400 requests for one cached file is a
@@ -168,10 +168,10 @@ class AttachmentWorker(
          * So the jitter is now only cheap insurance against ever moving off a CDN, and it is kept
          * short because a long one costs something real: [NoticeNotifications.updatePicture]
          * deliberately does nothing once the notification has left the tray, so a picture arriving
-         * an hour late lands in the app only and the notification never fills in at all. Two
-         * minutes is inside the window where the notice is still on screen.
+         * an hour late lands in the app only and the notification never fills in at all. One
+         * minute is well inside the window where the notice is still on screen.
          */
-        private const val MAX_JITTER_SECONDS = 2L * 60
+        private const val MAX_JITTER_SECONDS = 60L
 
         private fun connected() =
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()

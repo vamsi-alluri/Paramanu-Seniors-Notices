@@ -100,7 +100,7 @@ the circular without making any request at all.
   next finds wifi is worse than one that never arrives, because it cannot be
   explained without words. The metered and roaming questions are asked at
   execution, where they can produce a tappable glyph instead of a silent wait.
-- `setInitialDelay` to a uniform random **0–2 minutes**, injected rather than
+- `setInitialDelay` to a uniform random **0–1 minute** (0–2 until 2026-10-03), injected rather than
   computed inline so the range is testable.
 
   This began as 0–60 minutes, sized against a thundering herd hitting an origin
@@ -113,7 +113,7 @@ the circular without making any request at all.
 
   A long delay also costs something real: `updatePicture` deliberately does nothing
   once the notification has left the tray, so a picture arriving an hour late lands
-  in the app only and the notification never fills in. Two minutes keeps it inside
+  in the app only and the notification never fills in. One minute keeps it inside
   the window where the notice is still on screen. What remains of the jitter is
   cheap insurance against ever moving off a CDN.
 - No `requiresBatteryNotLow`. A notice attachment matters more than a few
