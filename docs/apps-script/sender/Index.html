@@ -49,11 +49,21 @@
            vertical-align: top; }
   th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #4a5162; }
   .failed { color: #b3261e; }
+
+  .head { display: flex; align-items: baseline; gap: 16px; }
+  .head a { margin-left: auto; font-size: 14px; color: #14315c; text-decoration: none; }
+  .head a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 
-<h1>Send a notice</h1>
+<div class="head">
+  <h1>Send a notice</h1>
+  <? if (adminUrl) { ?>
+    <!-- ADMIN_URL in Script Properties. A new tab, so a half-written notice here is not lost. -->
+    <a href="<?= adminUrl ?>" target="_blank" rel="noopener">Admin console &rarr;</a>
+  <? } ?>
+</div>
 <div class="sub">
   Goes to every phone that has activated the app. There is no way to unsend it.
 </div>

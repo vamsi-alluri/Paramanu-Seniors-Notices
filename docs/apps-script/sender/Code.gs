@@ -22,6 +22,8 @@
  *       STAFF_PIN            = <at least six digits; required for every send>
  *       REQUIRE_STAFF_PIN    = 'false' to drop the PIN and rely on the Google allowlist alone
  *                              (optional; anything else, or absent, means the PIN is required)
+ *       ADMIN_URL            = the admin console's /exec URL, linked from the top of the page
+ *                              (optional; absent, or not https, means no link)
  *  3. Deploy -> Web app.
  *       Execute as:     User accessing the web app   <- REQUIRED, see requireEditor_
  *       Who has access: Anyone with a Google account
@@ -423,13 +425,27 @@ function pushControl_(data) {
 
 // ---------------------------------------------------------------- Web app
 
+/**
+ * The admin console's /exec URL, from the ADMIN_URL Script Property, or '' for no link.
+ *
+ * A property so a redeploy of the console, which can change its URL, is followed by editing one
+ * value here rather than by a redeploy of this project too. Only https is accepted: the value is
+ * written into an href, and anything else is more likely a paste mistake than a link.
+ */
+function adminUrl_() {
+  var value = String(PropertiesService.getScriptProperties().getProperty('ADMIN_URL') || '').trim();
+  return /^https:\/\//i.test(value) ? value : '';
+}
+
 function doGet() {
   try {
     requireEditor_();
   } catch (err) {
     return refusalPage_(err.message);
   }
-  return HtmlService.createTemplateFromFile('Index').evaluate().setTitle('Paramanu Seniors Notices - Send').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  var page = HtmlService.createTemplateFromFile('Index');
+  page.adminUrl = adminUrl_();
+  return page.evaluate().setTitle('Paramanu Seniors Notices - Send').addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 /** Run from the editor after setup to prove the credentials work without sending anything. */

@@ -118,7 +118,8 @@ full history.
 
 Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `ALLOWED_EDITORS`, and optionally
 `PRINTING_ENABLED` (`false` disables the Print controls; the Printed status is still derived and
-shown). `Tests.gs` covers the pure helpers only. `purgeInstallTrigger()` installs the 30-day holder
+shown) and `SENDER_URL` (the sender's `/exec` URL, linked from the top bar; absent or not https
+means no link). `Tests.gs` covers the pure helpers only. `purgeInstallTrigger()` installs the 30-day holder
 purge; `purgeDryRun()` lists what it would erase.
 
 **Names on the page are not the stored names.** Staff see Disable, Enable and Unlink phone; `/codes`
@@ -142,7 +143,8 @@ digits, or note text) and a Status filter in the column header. Neither affects 
 
 `Code.gs`, `Index.html` (compose), `Poller.gs` (RSS trigger),
 `Control.gs` (control queue trigger), `Tests.gs`. Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `PROJECT_ID`, `STAFF_PIN`,
-`ALLOWED_EDITORS`, `DISPENSARY_ID`, optionally `REQUIRE_STAFF_PIN` and `ALERTS_FEED_URL`. Notices,
+`ALLOWED_EDITORS`, `DISPENSARY_ID`, optionally `REQUIRE_STAFF_PIN`, `ALERTS_FEED_URL` and
+`ADMIN_URL` (the console's `/exec` URL, linked beside the heading). Notices,
 from the compose page and the poller alike, go to the dispensary's first topic by `order` — read from
 `/dispensaries/{DISPENSARY_ID}/topics` at send time. There is no topic picker and no status route.
 

@@ -15,6 +15,8 @@
  *        ALLOWED_EDITORS       = <comma-separated Google account emails permitted to use this>
  *        DISPENSARY_ID         = barc-vashi   (the dispensary new codes belong to, whose banner this edits)
  *        PRINTING_ENABLED      = 'false' to turn slip printing off (optional; absent means on)
+ *        SENDER_URL            = the sender's /exec URL, linked from the top bar
+ *                                (optional; absent, or not https, means no link)
  *     Take DATABASE_URL from the Realtime Database page; it is region qualified.
  *  5. Deploy -> Web app.
  *       Execute as:     User accessing the web app   <- REQUIRED, see requireEditor_
@@ -1300,13 +1302,27 @@ function migrateToDispensaries_(dryRun) {
 
 // ---------------------------------------------------------------- Web app
 
+/**
+ * The sender's /exec URL, from the SENDER_URL Script Property, or '' for no link.
+ *
+ * A property so a redeploy of the sender, which can change its URL, is followed by editing one
+ * value here rather than by a redeploy of this project too. Only https is accepted: the value is
+ * written into an href, and anything else is more likely a paste mistake than a link.
+ */
+function senderUrl_() {
+  var value = String(PropertiesService.getScriptProperties().getProperty('SENDER_URL') || '').trim();
+  return /^https:\/\//i.test(value) ? value : '';
+}
+
 function doGet() {
   try {
     requireEditor_();
   } catch (err) {
     return refusalPage_(err.message);
   }
-  return HtmlService.createTemplateFromFile('Index').evaluate().setTitle('Paramanu Seniors Notices - Admin').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  var page = HtmlService.createTemplateFromFile('Index');
+  page.senderUrl = senderUrl_();
+  return page.evaluate().setTitle('Paramanu Seniors Notices - Admin').addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
 /** Run this from the editor once after setup to prove the credentials work. */

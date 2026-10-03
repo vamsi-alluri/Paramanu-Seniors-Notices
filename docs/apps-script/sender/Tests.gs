@@ -254,6 +254,31 @@ function t_doGet_() {
     doGet({ parameter: { status: 'open' } }).getContent().indexOf('Send a notice') > 0);
 }
 
+/** The admin link. Saves and restores ADMIN_URL, so a failed run does not lose the real one. */
+function t_adminUrl_() {
+  var props = PropertiesService.getScriptProperties();
+  var original = props.getProperty('ADMIN_URL');
+  var url = 'https://script.google.com/macros/s/selftest-admin/exec';
+
+  try {
+    props.setProperty('ADMIN_URL', '  ' + url + '  ');
+    t_eq_('adminUrl_ trims the property', adminUrl_(), url);
+    t_ok_('doGet links the admin console', doGet().getContent().indexOf(url) > 0);
+
+    props.deleteProperty('ADMIN_URL');
+    t_eq_('adminUrl_ is empty when unset', adminUrl_(), '');
+    t_ok_('doGet draws no admin link when unset', doGet().getContent().indexOf('Admin console') < 0);
+
+    ['javascript:alert(1)', 'http://example.com', 'script.google.com/macros/s/x/exec'].forEach(function (value) {
+      props.setProperty('ADMIN_URL', value);
+      t_eq_('adminUrl_ refuses ' + JSON.stringify(value), adminUrl_(), '');
+    });
+  } finally {
+    if (original === null || original === undefined) props.deleteProperty('ADMIN_URL');
+    else props.setProperty('ADMIN_URL', original);
+  }
+}
+
 // ---------------------------------------------------------------- control messages
 
 function t_utf8Length_() {
@@ -402,6 +427,7 @@ function runAllTests() {
     t_pushControl_();
     t_controlDrain_();
     t_doGet_();
+    t_adminUrl_();
     t_testConnection_();
   } catch (e) {
     T_RESULTS.push({ name: 'SUITE ABORTED', pass: false, detail: String(e) });
