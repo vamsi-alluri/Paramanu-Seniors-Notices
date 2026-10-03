@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.Lifecycle
@@ -129,13 +130,15 @@ private fun NoticesApp(
     val testingOn by viewModel.testingOn.collectAsStateWithLifecycle()
     val redeeming by viewModel.redeeming.collectAsStateWithLifecycle()
     val redeemError by viewModel.redeemError.collectAsStateWithLifecycle()
-    val expandedId by viewModel.expandedId.collectAsStateWithLifecycle()
     val highlightId by viewModel.highlightId.collectAsStateWithLifecycle()
     val officeInfo by viewModel.officeInfo.collectAsStateWithLifecycle()
     val testingUnlocked by viewModel.testingUnlocked.collectAsStateWithLifecycle()
     val revoked by viewModel.revoked.collectAsStateWithLifecycle()
     val checking by viewModel.checking.collectAsStateWithLifecycle()
     val downloadingPdf by viewModel.downloadingPdf.collectAsStateWithLifecycle()
+
+    // Held above the screen switch so the list keeps its place while the viewer or Settings is up.
+    val noticeListState = rememberLazyListState()
 
     val access = rememberNotificationAccessState()
     val context = LocalContext.current
@@ -146,7 +149,7 @@ private fun NoticesApp(
     val testTitle = stringResource(R.string.test_notification_title)
     val testBody = stringResource(R.string.test_notification_body)
 
-    // Opens the notice the user tapped: expand it, highlight it, scroll to it. Keyed on the id so
+    // Opens the notice the user tapped: highlight it, scroll to it. Keyed on the id so
     // tapping a second notification while the app is open moves to that one.
     LaunchedEffect(tappedLogId) {
         tappedLogId?.let { viewModel.openFromNotification(it) }
@@ -231,12 +234,10 @@ private fun NoticesApp(
             NoticeListScreen(
                 notices = notices,
                 selected = selected,
-                expandedId = expandedId,
                 highlightId = highlightId,
                 officeInfo = officeInfo,
                 notificationsBlocked = !access.isEnabled,
                 onOpenNotificationSettings = access::request,
-                onToggleExpanded = viewModel::toggleExpanded,
                 onOpenImage = { viewModel.show(Screen.Viewer(it.id)) },
                 downloadingPdf = downloadingPdf,
                 onOpenPdf = { notice ->
@@ -266,6 +267,7 @@ private fun NoticesApp(
                 onClearSelection = viewModel::clearSelection,
                 onDeleteSelected = viewModel::deleteSelected,
                 onOpenSettings = { viewModel.show(Screen.Settings) },
+                listState = noticeListState,
             )
         }
 

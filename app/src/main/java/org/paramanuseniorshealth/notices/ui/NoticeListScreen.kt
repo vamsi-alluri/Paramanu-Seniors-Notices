@@ -4,7 +4,6 @@ import android.content.Context
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -17,12 +16,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,22 +34,15 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import coil3.compose.AsyncImage
 import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.OfficeInfo
@@ -72,20 +62,6 @@ import java.time.format.DateTimeFormatter
 private val Stamp = DateTimeFormatter.ofPattern("EEE, d MMM yyyy, h:mm a")
 
 /**
- * How much of a notice a closed card shows.
- *
- * Four lines is enough that most notices say what they have to say without opening at all, while
- * still holding the list to rows of roughly one height. A notice that fits is therefore lean: it
- * draws open, carries no chevron, and ignores a tap, because there is nothing behind it. One that
- * does not fit keeps its chevron and stays closed until asked.
- *
- * Deliberately a line count rather than a fixed height. This audience runs large system fonts, and
- * a card pinned to a dp value would clip the first line for exactly the people who set the font
- * that way.
- */
-private const val COLLAPSED_BODY_LINES = 4
-
-/**
  * The notice history, with the standing dispensary information pinned above it.
  *
  * The settings cog is top-right and shown only when nothing is selected: in selection mode that
@@ -97,12 +73,10 @@ private const val COLLAPSED_BODY_LINES = 4
 fun NoticeListScreen(
     notices: List<NoticeEntity>,
     selected: Set<Long>,
-    expandedId: Long?,
     highlightId: Long?,
     officeInfo: OfficeInfo?,
     notificationsBlocked: Boolean,
     onOpenNotificationSettings: () -> Unit,
-    onToggleExpanded: (Long) -> Unit,
     onOpenImage: (NoticeEntity) -> Unit,
     /** Notices whose circular is downloading. Held by the view model so it survives scrolling. */
     downloadingPdf: Set<Long>,
@@ -115,10 +89,15 @@ fun NoticeListScreen(
     onClearSelection: () -> Unit,
     onDeleteSelected: () -> Unit,
     onOpenSettings: () -> Unit,
+    /**
+     * Owned by the caller, not created here. This screen leaves composition whenever the viewer or
+     * Settings replaces it, and state remembered inside it goes with it -- so coming back from a
+     * picture used to land at the top of the list instead of on the notice just looked at.
+     */
+    listState: LazyListState,
     modifier: Modifier = Modifier,
 ) {
     val inSelection = selected.isNotEmpty()
-    val listState = rememberLazyListState()
     val context = LocalContext.current
 
     // Scrolls to the notice the user tapped in the notification shade. The header occupies index 0,
@@ -205,13 +184,9 @@ fun NoticeListScreen(
                         NoticeRow(
                             notice = notice,
                             selected = notice.id in selected,
-                            expanded = notice.id == expandedId,
                             highlighted = notice.id == highlightId,
                             inSelection = inSelection,
-                            onClick = {
-                                if (inSelection) onToggleSelection(notice.id)
-                                else onToggleExpanded(notice.id)
-                            },
+                            onClick = { onToggleSelection(notice.id) },
                             onLongClick = { onToggleSelection(notice.id) },
                             onOpenImage = { onOpenImage(notice) },
                             downloading = notice.id in downloadingPdf,
@@ -327,7 +302,6 @@ private fun NotificationBanner(onOpen: () -> Unit) {
 private fun NoticeRow(
     notice: NoticeEntity,
     selected: Boolean,
-    expanded: Boolean,
     highlighted: Boolean,
     inSelection: Boolean,
     onClick: () -> Unit,
@@ -354,57 +328,19 @@ private fun NoticeRow(
     val photo: File? = NoticeImageStore.cachedImage(context, notice.logId)
     val pdfRender: File? = NoticeImageStore.cachedPdfRender(context, notice.logId)
     val linkImage: File? = NoticeImageStore.cachedLinkImage(context, notice.logId)
-    // Falls through to linkImage where NoticeAttachments (the expanded view) stops at
-    // photo ?: pdfRender. That gap is currently unreachable, not unused: it depends on
-    // Poller.gs only attaching a link card when `!item.pdfUrl && !item.imageUrl`, i.e. a notice
-    // with a link logo never also carries a circular. If that sender-side property ever changes,
-    // a notice with a landed link logo and a still-deferred circular would show the favicon as
-    // its thumbnail with awaiting == false -- and since the "Open circular" button is gone, offer
-    // no way to reach the PDF at all.
-    val thumbFile: File? = photo ?: pdfRender ?: linkImage
-
     // An attachment the notice says it has, which is not on the phone. One glyph, four causes.
-    val awaiting = thumbFile == null && (
+    //
+    // Counts linkImage as present where NoticeAttachments stops at photo ?: pdfRender. That gap is
+    // currently unreachable, not unused: it depends on Poller.gs only attaching a link card when
+    // `!item.pdfUrl && !item.imageUrl`, i.e. a notice with a link logo never also carries a
+    // circular. If that sender-side property ever changes, a notice with a landed link logo and a
+    // still-deferred circular would have awaiting == false -- and since the "Open circular" button
+    // is gone, offer no way to reach the PDF at all.
+    val awaiting = photo == null && pdfRender == null && linkImage == null && (
         !notice.imageUrl.isNullOrBlank() ||
             !notice.pdfUrl.isNullOrBlank() ||
             !notice.linkImage.isNullOrBlank()
         )
-
-    // A row expanding onto nothing.
-    //
-    // The body is shown in full whether the row is open or closed -- it is never truncated -- so
-    // with no picture, no circular, no link card and nothing awaited, expanding changes exactly one
-    // thing: the body becomes tappable text. That is not worth a gesture, and a chevron promising
-    // more where there is none is worse than no chevron at all. Such a row is simply drawn open and
-    // does not react to a tap. A row awaiting an attachment is never lean -- it has a download
-    // glyph to show and a tap to offer, whether or not the card is open.
-    // Whether the closed card's body is being cut off.
-    //
-    // Starts true -- assume there is more until the layout says otherwise -- because the two
-    // states feed each other: a lean row draws open, and an open row never renders the clipped
-    // Text that does the measuring. Guessing "it fits" would therefore open a long notice and
-    // never look again. Guessing "it does not" costs one frame on a short one, where the closed
-    // and open forms differ only by a rule and a chevron.
-    var bodyOverflows by remember(notice.id) { mutableStateOf(true) }
-
-    // A row expanding onto nothing.
-    //
-    // Two things have to be true: it carries no attachment, and its body already fits inside the
-    // closed card. The second half used to be free, because the body was never truncated -- so
-    // opening a text-only notice revealed literally nothing. Now that a long body is clipped to
-    // [COLLAPSED_BODY_LINES], such a notice does have more to show and must keep its chevron.
-    val lean = thumbFile == null && !awaiting &&
-        notice.pdfUrl.isNullOrBlank() &&
-        notice.linkUrl.isNullOrBlank() &&
-        !bodyOverflows
-    val open = expanded || lean
-
-    // Rotated rather than swapped for a second drawable, so the arrow travels between its two
-    // meanings instead of blinking from one to the other.
-    val chevronTurn by animateFloatAsState(
-        targetValue = if (open) 180f else 0f,
-        label = "row-chevron",
-    )
 
     val target = MaterialTheme.colorScheme.let {
         when {
@@ -421,34 +357,22 @@ private fun NoticeRow(
         colors = CardDefaults.cardColors(containerColor = container),
         modifier = modifier
             .fillMaxWidth()
-            // Long-press enters selection; once in it a plain tap selects rather than expands, so
-            // the gesture does not change meaning halfway through a multi-select. A lean row has
-            // nothing to expand, so its tap is inert -- except in selection mode, where every row
-            // must stay selectable regardless of what it carries.
+            // Every card is always open, so outside selection a plain tap has nothing to do and is
+            // inert. Long-press enters selection; once in it a plain tap selects, and every row
+            // stays selectable regardless of what it carries.
             .combinedClickable(
-                onClick = { if (!lean || inSelection) onClick() },
+                onClick = { if (inSelection) onClick() },
                 onLongClick = onLongClick,
             )
+            // Still worth having with nothing to expand: a deferred attachment landing grows the
+            // card, and it should ease open rather than jump.
             .animateContentSize(),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (thumbFile != null && !open) {
-                    // Hidden once the card is open: the expanded row shows this same file at full
-                    // width in NoticeAttachments, and a second small copy above it would be clutter.
-                    AsyncImage(
-                        model = thumbFile,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(RoundedCornerShape(8.dp)),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                } else if (awaiting) {
-                    // Not gated on `!open`: an attachment that has not arrived is the one thing an
-                    // expanded row must still show, since NoticeAttachments below renders local
-                    // files only and would otherwise show nothing at all for a failed download.
+                if (awaiting) {
+                    // NoticeAttachments below renders local files only and would otherwise show
+                    // nothing at all for an attachment that has not arrived.
                     AttachmentPlaceholder(
                         isPdf = !notice.pdfUrl.isNullOrBlank(),
                         downloading = downloading,
@@ -460,78 +384,39 @@ private fun NoticeRow(
                 Text(
                     text = notice.title,
                     style = MaterialTheme.typography.titleLarge,
-                    // Capped even when open. A headline running past two lines is a badly written
-                    // headline, and letting one stretch the card defeats the point of a list whose
-                    // rows are meant to scan at a glance.
+                    // A headline running past two lines is a badly written headline, and letting one
+                    // stretch the card defeats the point of a list whose rows scan at a glance.
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f),
                 )
-                if (!lean) {
-                    // Not an IconButton: the whole card already handles the tap, and a nested
-                    // clickable here would swallow it and give the arrow a different meaning from
-                    // the card it sits on. This is the sign, not a second control.
-                    Icon(
-                        painter = painterResource(R.drawable.ic_expand_more),
-                        contentDescription = stringResource(
-                            if (open) R.string.action_collapse else R.string.action_expand
-                        ),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .padding(start = 8.dp)
-                            .size(32.dp)
-                            .rotate(chevronTurn),
-                    )
-                }
             }
 
-            // Rules the title off from the notice once the card is open, so an expanded card reads
-            // as three bands -- who it is from, what it says, when it arrived -- rather than as a
-            // wall of text with an arrow floating over it. Closed, the card stays a single block.
-            if (open) {
-                HorizontalDivider(modifier = Modifier.padding(top = 12.dp))
-            }
+            // Rules the title off from the notice, so a card reads as three bands -- who it is
+            // from, what it says, when it arrived -- rather than as a wall of text.
+            HorizontalDivider(modifier = Modifier.padding(top = 12.dp))
 
-            if (open) {
-                if (notice.body.isNotBlank()) {
-                    LinkedText(
-                        text = notice.body,
-                        modifier = Modifier.padding(top = 12.dp),
-                        onOpenUrl = { context.openUrl(it) },
-                    )
-                }
-
-                NoticeAttachments(
-                    notice = notice,
-                    photo = photo,
-                    pdfRender = pdfRender,
-                    // The same text a multi-select share produces, so a notice passed on from here
-                    // and one passed on from there read identically to whoever receives it.
-                    shareText = ShareText.build(listOf(notice)),
-                    downloading = downloading,
-                    onOpenImage = onOpenImage,
-                    onOpenPdf = onOpenPdf,
-                    onFetchPdfFile = onFetchPdfFile,
-                    onLongClick = onLongClick,
-                )
-            } else if (notice.body.isNotBlank()) {
-                // Clipped, so a wordy notice does not tower over a terse one. A closed card used
-                // to show its body in full, which made the list a column of wildly uneven blocks
-                // and made a long notice look as though it had opened itself.
-                //
-                // Plain Text rather than LinkedText on purpose: in a closed card a tap means
-                // "open this", and a tappable web address sitting in the middle of it would
-                // sometimes mean "leave the app" instead. Links become live once the card is open.
-                Text(
+            if (notice.body.isNotBlank()) {
+                LinkedText(
                     text = notice.body,
-                    style = MaterialTheme.typography.bodyLarge,
-                    maxLines = COLLAPSED_BODY_LINES,
-                    overflow = TextOverflow.Ellipsis,
-                    // The only place the body is measured. See [bodyOverflows].
-                    onTextLayout = { bodyOverflows = it.hasVisualOverflow },
-                    modifier = Modifier.padding(top = 8.dp),
+                    modifier = Modifier.padding(top = 12.dp),
+                    onOpenUrl = { context.openUrl(it) },
                 )
             }
+
+            NoticeAttachments(
+                notice = notice,
+                photo = photo,
+                pdfRender = pdfRender,
+                // The same text a multi-select share produces, so a notice passed on from here
+                // and one passed on from there read identically to whoever receives it.
+                shareText = ShareText.build(listOf(notice)),
+                downloading = downloading,
+                onOpenImage = onOpenImage,
+                onOpenPdf = onOpenPdf,
+                onFetchPdfFile = onFetchPdfFile,
+                onLongClick = onLongClick,
+            )
 
             // The date sits below a rule at the foot of the card, apart from the notice itself, so
             // the title and body read as the message and the stamp as a detail about it.

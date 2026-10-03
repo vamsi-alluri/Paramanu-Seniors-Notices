@@ -88,10 +88,6 @@ class NoticeViewModel(
     private val _selected = MutableStateFlow<Set<Long>>(emptySet())
     val selected: StateFlow<Set<Long>> = _selected.asStateFlow()
 
-    /** The one open row, or null with everything collapsed. */
-    private val _expandedId = MutableStateFlow<Long?>(null)
-    val expandedId: StateFlow<Long?> = _expandedId.asStateFlow()
-
     /**
      * Briefly tinted after arriving from a notification tap, then cleared.
      *
@@ -267,14 +263,10 @@ class NoticeViewModel(
         }
     }
 
-    fun toggleExpanded(id: Long) {
-        _expandedId.value = if (_expandedId.value == id) null else id
-    }
-
     /**
      * Entry point for a notification tap: open the notice the user actually tapped.
      *
-     * The row is expanded and highlighted here; the list scrolls to it. Resolution is by `logId`
+     * The row is highlighted here; the list scrolls to it. Resolution is by `logId`
      * because that is what the notification carries, and the row may not have existed when the
      * intent was created -- the tap and the database write race, so this retries briefly rather
      * than giving up and dropping the user at the top of the list.
@@ -285,7 +277,6 @@ class NoticeViewModel(
                 val match = notices.byLogId(logId)
                 if (match != null) {
                     _screen.value = Screen.Notices
-                    _expandedId.value = match.id
                     _highlightId.value = match.id
                     delay(HIGHLIGHT_MS)
                     if (_highlightId.value == match.id) _highlightId.value = null
