@@ -245,6 +245,26 @@ function t_sendNotice_(created) {
   t_eq_('sentBy is the caller', stored.sentBy, requireEditor_());
 }
 
+// ---------------------------------------------------------------- attachments from the message
+
+function t_messageLinks_() {
+  t_eq_('messageLinks_ finds nothing in plain text', messageLinks_('OPD reopens Friday.').length, 0);
+  var links = messageLinks_('Circular: https://a.org/c.pdf. Poster (www.b.org/p.jpg) and https://a.org/c.pdf again');
+  t_eq_('messageLinks_ finds each link once', links.length, 2);
+  t_eq_('messageLinks_ trims trailing punctuation', links[0], 'https://a.org/c.pdf');
+  t_eq_('messageLinks_ adds a scheme and trims the bracket', links[1], 'https://www.b.org/p.jpg');
+}
+
+function t_attachmentKind_() {
+  t_eq_('a declared PDF is a PDF', attachmentKind_('application/pdf', 'https://a.org/x'), 'pdf');
+  t_eq_('a declared JPEG with a charset is an image', attachmentKind_('image/jpeg; charset=binary', 'https://a.org/x'), 'image');
+  t_eq_('an SVG is not attached', attachmentKind_('image/svg+xml', 'https://a.org/x.svg'), '');
+  t_eq_('a page ending in .pdf is a page', attachmentKind_('text/html', 'https://a.org/view.pdf'), '');
+  t_eq_('a generic download falls back to the extension', attachmentKind_('application/octet-stream', 'https://a.org/c.PDF?dl=1'), 'pdf');
+  t_eq_('no type falls back to the extension', attachmentKind_('', 'https://a.org/p.webp#top'), 'image');
+  t_eq_('no type and no extension is nothing', attachmentKind_('', 'https://a.org/page'), '');
+}
+
 // ---------------------------------------------------------------- routing
 
 function t_doGet_() {
@@ -426,6 +446,8 @@ function runAllTests() {
     t_controlDecide_();
     t_pushControl_();
     t_controlDrain_();
+    t_messageLinks_();
+    t_attachmentKind_();
     t_doGet_();
     t_adminUrl_();
     t_testConnection_();

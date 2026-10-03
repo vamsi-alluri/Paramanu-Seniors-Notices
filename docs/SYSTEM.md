@@ -572,7 +572,8 @@ counters. See section 6a on where they should live if they are built.
 15. Dark-mode logo treatment (the transparent PNG helps, but the mark still assumes a light ground).
 16. The banner's plain `heading` and `lines` are still hand-edited in the data viewer; only the rich
     banner has a console editor. A dispensary editor waits for a second dispensary.
-17. Sender cannot yet attach an image or PDF; text only.
+17. ~~Sender cannot yet attach an image or PDF~~ — the first link in the message to a PDF or a
+    picture is sent as `pdfUrl` / `imageUrl` (`messageAttachment_`); nothing is uploaded.
 18. Wrap each Apps Script test in its own try/catch so one failure does not abort the suite.
 
 ---
