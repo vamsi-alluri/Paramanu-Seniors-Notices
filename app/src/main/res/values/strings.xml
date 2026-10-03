@@ -112,6 +112,6 @@
     <string name="settings_version">Version %1$s</string>
 
     <!-- The first entry in a new install's list, written locally when a code is redeemed. -->
-    <string name="welcome_title">Your app is ready</string>
-    <string name="welcome_body">Notices from Paramanu Seniors Health will appear here. You can open this app at any time to read one again.</string>
+    <string name="welcome_title">Your code has been accepted</string>
+    <string name="welcome_body">Closures, timing changes and circulars for your dispensary will now arrive as notifications. Every notice is saved in this app, so you can read it whenever you want.</string>
 </resources>
