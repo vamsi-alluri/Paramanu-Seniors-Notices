@@ -1346,7 +1346,7 @@ function doGet() {
   }
   var page = HtmlService.createTemplateFromFile('Index');
   page.senderUrl = senderUrl_();
-  return page.evaluate().setTitle('Paramanu Seniors Notices - Admin').addMetaTag('viewport', 'width=device-width, initial-scale=1');
+  return page.evaluate().setTitle('Admin - Paramanu Seniors Health').addMetaTag('viewport', 'width=device-width, initial-scale=1').setFaviconUrl('https://paramanuseniorshealth.org/favicon.ico');
 }
 
 /** Run this from the editor once after setup to prove the credentials work. */

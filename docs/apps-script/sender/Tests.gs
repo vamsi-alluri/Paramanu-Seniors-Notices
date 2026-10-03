@@ -14,14 +14,17 @@
  *    real PIN out for fifteen minutes.
  *  - The REQUIRE_STAFF_PIN property is flipped and put back. Left on 'false' it would silently
  *    drop the PIN from every send, and nothing would look wrong.
- *  - Sends go to TEST_TOPIC, a topic no phone subscribes to. The credentials, the payload and the
- *    FCM response are all real; only the audience is empty.
+ *  - Sends go to TEST_TOPIC, the test dispensary's attachment topic (see TestSends.gs), so a phone
+ *    holding a test-disp code shows the [selftest] notices and nobody else hears them. The
+ *    credentials, the payload and the FCM response are all real. The control tests' revoke names
+ *    the made-up code ZZZZZZZZ, which no phone holds, so it is ignored wherever it lands.
  *
  * To send to the real audience instead, set SEND_FOR_REAL to true. That reaches every activated
  * phone and cannot be undone, so it is off by default and should be turned back off afterwards.
  */
 
-var TEST_TOPIC = 'zz-selftest-no-subscribers';
+// var TEST_TOPIC = 'zz-selftest-no-subscribers';
+var TEST_TOPIC = 'test-notices-v1';
 var SEND_FOR_REAL = false;
 
 var T_RESULTS = [];
@@ -367,7 +370,8 @@ function t_controlDecide_() {
 }
 
 function t_pushControl_() {
-  // TOPIC_OVERRIDE is TEST_TOPIC for the whole suite, so this reaches no real phone.
+  // TOPIC_OVERRIDE is TEST_TOPIC for the whole suite, so this reaches only test phones -- and names
+  // a code none of them holds.
   var name = pushControl_({ type: 'revoke', code: 'ZZZZZZZZ', at: Date.now() });
   t_ok_('pushControl_ returns an FCM name', String(name).indexOf('projects/') === 0, String(name));
 }
@@ -380,7 +384,7 @@ function t_pushControl_() {
  * claims a released code next, so a test that bypassed it would be testing nothing.
  *
  * Like the drain itself, this broadcasts anything genuinely queued at the moment it runs -- to
- * TEST_TOPIC, where no phone hears it -- and clears it. Run it when nobody is using the console.
+ * TEST_TOPIC, where only test phones hear it -- and clears it. Run it when nobody is using the console.
  */
 function t_controlDrain_() {
   var live = 'ZZZZZZZZ';       // disabled: should be broadcast and cleared
