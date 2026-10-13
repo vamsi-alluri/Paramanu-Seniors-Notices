@@ -11,14 +11,15 @@
   body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
          background: #f4f6fb; color: #10131a; font-size: 1rem; line-height: 1.5; }
 
-  /* Narrower than the admin console on purpose: this page is one form, not nine columns. */
-  .page { max-width: 860px; margin: 0 auto; padding: 0 20px 60px; }
+  /* The window, like the admin console. The sent list is what wants the room; the fields and the
+     prose are capped on their own below, so widening the page does not stretch them. */
+  .page { max-width: 1760px; margin: 0 auto; padding: 0 24px 60px; }
 
   /* Sticky so the section links stay reachable from anywhere on a long page. */
   .topbar { position: sticky; top: 0; z-index: 10; background: #fcfcffee;
             backdrop-filter: blur(6px); border-bottom: 1px solid #e0e4ee;
             padding: 12px 20px; margin-bottom: 24px; }
-  .topbar .inner { max-width: 860px; margin: 0 auto; display: flex; gap: 18px;
+  .topbar .inner { max-width: 1760px; margin: 0 auto; display: flex; gap: 18px;
                    align-items: baseline; flex-wrap: wrap; }
   .topbar .brand { font-weight: 600; font-size: 1.05rem; color: #14315c; margin-right: 4px; }
   .topbar a { font-size: 1rem; color: #3c4455; text-decoration: none; padding: 4px 0;
@@ -37,7 +38,7 @@
   h2 { font-size: 1.15rem; margin: 0 0 4px; color: #10131a; }
   /* Darker than it was: this text carries real instructions, not decoration, and #4a5162 on white
      was being read as greyed-out. */
-  .sub { color: #3c4455; font-size: .95rem; margin-bottom: 18px; line-height: 1.55; }
+  .sub { color: #3c4455; font-size: .95rem; margin-bottom: 18px; line-height: 1.55; max-width: 90ch; }
   .divider { height: 1px; background: #e6e9f0; margin: 22px 0; }
 
   .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
@@ -47,7 +48,9 @@
   button:disabled { opacity: .5; cursor: default; }
   input, textarea { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
                     background: #fff; color: #10131a; }
-  .wide { width: 100%; box-sizing: border-box; }
+  /* A notice is short prose. Typing it across a 1700px line is no easier to read back than a
+     table row is, so the fields keep a measure even when the card does not. */
+  .wide { width: 100%; max-width: 80ch; box-sizing: border-box; }
   textarea.wide { min-height: 120px; resize: vertical; line-height: 1.5; }
 
   label { display: block; font-size: 1rem; color: #3c4455; margin: 16px 0 6px; }
@@ -69,16 +72,19 @@
   .preview .b { font-size: 1.1rem; margin-top: 4px; white-space: pre-wrap; word-wrap: break-word;
                 line-height: 1.55; }
 
-  /* The sent list is blocks, not a table: a 900-character message in a quarter of the width was
-     a six-line cell beside three one-line cells, and reading across it meant counting rows. */
-  .item { border: 1px solid #e0e4ee; border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
-  .item:nth-child(even) { background: #f7f9fc; }
-  .item .when { color: #3c4455; font-size: .95rem; margin-bottom: 4px; }
-  .item .what { font-weight: 600; margin-bottom: 4px; }
-  /* A real measure. Long lines are the other half of losing your place. */
-  .item .body { color: #3c4455; white-space: pre-wrap; max-width: 62ch; }
-  .item.failed { border-color: #e5c3c0; }
-  .item.failed .when { color: #8c1d18; }
+  table { border-collapse: collapse; width: 100%; font-size: 1rem; }
+  /* Tall rows. Space between lines does more for reading across a wide row than any rule drawn
+     down it. */
+  th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e6e9f0;
+           vertical-align: top; line-height: 1.55; }
+  /* Sentence case, not capitals: word shape is one of the strongest cues a reader has. */
+  th { font-size: .95rem; font-weight: 600; color: #3c4455; }
+  /* A tinted band binds a row together, where a line only separates it from the next one. The
+     class is set in script, matching how the admin console does it. */
+  tr.alt > td { background: #f7f9fc; }
+  tbody tr:hover > td { background: #eef3fb; }
+  .tablewrap { overflow-x: auto; }
+  .failed { color: #b3261e; }
 
   /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
   .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
@@ -168,7 +174,12 @@
   <div class="card" id="sent">
     <h2>Recently sent</h2>
     <div class="sub">The last 25 notices, newest first.</div>
-    <div id="sentRows" class="sub">Loading...</div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>When</th><th>By</th><th>Title</th><th>Message</th></tr></thead>
+        <tbody id="sentRows"><tr><td colspan="4">Loading...</td></tr></tbody>
+      </table>
+    </div>
   </div>
 
 </div>
@@ -242,18 +253,14 @@
   }
 
   function renderSent(rows) {
-    var box = el('sentRows');
-    if (!rows.length) {
-      box.innerHTML = '<div class="sub" style="margin:0">Nothing sent yet.</div>';
-      return;
-    }
-    box.innerHTML = rows.map(function (r) {
+    var body = el('sentRows');
+    if (!rows.length) { body.innerHTML = '<tr><td colspan="4">Nothing sent yet.</td></tr>'; return; }
+    body.innerHTML = rows.map(function (r, i) {
       var when = r.sentAt ? new Date(r.sentAt).toLocaleString() : '';
-      return '<div class="item' + (r.failed ? ' failed' : '') + '">' +
-             '<div class="when">' + esc(when) + (r.sentBy ? ' &mdash; ' + esc(r.sentBy) : '') +
-             (r.failed ? ' &mdash; failed, nothing was delivered' : '') + '</div>' +
-             '<div class="what">' + esc(r.title) + '</div>' +
-             '<div class="body">' + esc(r.body) + '</div></div>';
+      return '<tr class="' + (i % 2 ? 'alt ' : '') + (r.failed ? 'failed' : '') + '"><td>' + esc(when) +
+             '</td><td>' + esc(r.sentBy || '') +
+             '</td><td>' + esc(r.title) + (r.failed ? ' (failed)' : '') +
+             '</td><td>' + esc(r.body) + '</td></tr>';
     }).join('');
   }
 

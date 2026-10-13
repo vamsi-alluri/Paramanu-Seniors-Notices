@@ -118,31 +118,6 @@
   .toggle { font: inherit; font-size: .95rem; background: none; border: 0; padding: 0;
             color: #14315c; cursor: pointer; text-decoration: underline; white-space: nowrap; }
 
-  /* One saved message per block instead of a table row. The message itself runs to 900
-     characters, which in a third of the table's width came out as a six-line cell beside two
-     one-line cells, with nothing lining up and no way to read across. */
-  .item { border: 1px solid #e0e4ee; border-radius: 12px; padding: 16px 18px; margin-bottom: 12px;
-          display: flex; gap: 16px; align-items: flex-start; }
-  .item:nth-child(even) { background: #f7f9fc; }
-  .item .text { flex: 1; min-width: 0; }
-  .item .name { font-weight: 600; margin-bottom: 2px; }
-  .item .title { margin-bottom: 6px; }
-  /* A real measure. Long lines are the other half of losing your place. */
-  .item .body { color: #3c4455; white-space: pre-wrap; max-width: 62ch; }
-
-  /*
-    The editor is the preview. It carries the app's own banner colours, width and type, so what is
-    typed here is what appears on the phone -- there is no second box further down that could drift
-    out of step with this one, and no gap between what the author approves and what is saved.
-
-    420px is a phone's width. Writing a banner on a line twice that long is how a two-line note
-    turns into five lines on the device.
-  */
-  .bannerbox { background: #faf4e6; border: 1px solid #e0e4ee; border-radius: 12px; padding: 16px;
-               min-height: 120px; max-width: 420px; font-size: 1rem; line-height: 1.55;
-               color: #10131a; }
-  .bannerbox:focus { outline: 2px solid #14315c; outline-offset: 2px; }
-
   /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
   .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
          margin-bottom: 16px; display: none; }
@@ -329,20 +304,17 @@
 
       <div class="divider"></div>
 
-      <div class="bar">
-        <label class="sub" style="margin:0">Sort by
-          <select id="tSortKey" onchange="setTemplateSort(this.value)">
-            <option value="label">Name</option>
-            <option value="title">Title</option>
-          </select>
-        </label>
-        <!-- Arrows, not "A to Z": these names are numbered, so the direction is up or down the
-             list, not through the alphabet. The filled one is the direction in force. -->
-        <button id="tSortUp" onclick="setTemplateDir(1)" aria-label="Sort ascending">&#9650;</button>
-        <button id="tSortDown" onclick="setTemplateDir(-1)" aria-label="Sort descending">&#9660;</button>
-      </div>
-
-      <div id="templates" class="sub">Loading...</div>
+      <table>
+        <thead>
+          <tr>
+            <th class="sort" onclick="sortTemplates('label')">Name<span class="arrow" id="at-label"></span></th>
+            <th class="sort" onclick="sortTemplates('title')">Title<span class="arrow" id="at-title"></span></th>
+            <th class="sort" onclick="sortTemplates('body')">Message<span class="arrow" id="at-body"></span></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="templates"><tr><td colspan="4">Loading...</td></tr></tbody>
+      </table>
     </div>
 
     <div class="card" id="banner-section">
@@ -1150,17 +1122,12 @@
   // ---- saved messages ----
 
   var TEMPLATES = [];
-  // By name, the order the server sends and the order the sender shows the buttons in. Sorted from
-  // a pair of controls rather than column headers, because the list has no columns to click.
+  // By name, the order the server sends and the order the sender shows the buttons in.
   var TEMPLATE_SORT = { key: 'label', dir: 1 };
+  var TEMPLATE_KEYS = ['label', 'title', 'body'];
 
-  function setTemplateSort(key) {
-    TEMPLATE_SORT.key = key;
-    renderTemplateRows();
-  }
-
-  function setTemplateDir(dir) {
-    TEMPLATE_SORT.dir = dir;
+  function sortTemplates(key) {
+    turnSort(TEMPLATE_SORT, key, []);
     renderTemplateRows();
   }
 
@@ -1170,25 +1137,23 @@
   }
 
   function renderTemplateRows() {
-    // The direction in force is the solid button; the other is outlined. Neither is disabled --
-    // pressing the one already chosen should do nothing, not look broken.
-    document.getElementById('tSortUp').className = TEMPLATE_SORT.dir > 0 ? '' : 'ghost';
-    document.getElementById('tSortDown').className = TEMPLATE_SORT.dir > 0 ? 'ghost' : '';
+    markSort('at-', TEMPLATE_KEYS, TEMPLATE_SORT);
 
-    var box = document.getElementById('templates');
+    var body = document.getElementById('templates');
     if (!TEMPLATES.length) {
-      box.innerHTML = '<div class="sub" style="margin:0">No saved messages yet. Write one above.</div>';
+      body.innerHTML = '<tr><td colspan="4">No saved messages yet.</td></tr>';
       return;
     }
     var rows = TEMPLATES.slice().sort(function (a, b) {
       return compareValues(a[TEMPLATE_SORT.key] || '', b[TEMPLATE_SORT.key] || '', TEMPLATE_SORT.dir);
     });
-    box.innerHTML = rows.map(function (r) {
-      return '<div class="item"><div class="text">' +
-             '<div class="name">' + escapeHtml(r.label) + '</div>' +
-             '<div class="title">' + escapeHtml(r.title) + '</div>' +
-             '<div class="body">' + escapeHtml(r.body) + '</div></div>' +
-             '<button class="ghost" onclick="editTemplate(\'' + r.id + '\')">Edit</button></div>';
+    // Striped in script rather than with :nth-child, as everywhere else here, so the class is set
+    // in one way across the console.
+    body.innerHTML = rows.map(function (r, i) {
+      return '<tr class="' + (i % 2 ? 'alt' : '') + '"><td>' + escapeHtml(r.label) +
+             '</td><td>' + escapeHtml(r.title) +
+             '</td><td>' + escapeHtml(r.body) +
+             '</td><td><button class="ghost" onclick="editTemplate(\'' + r.id + '\')">Edit</button></td></tr>';
     }).join('');
   }
 
