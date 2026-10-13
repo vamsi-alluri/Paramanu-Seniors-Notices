@@ -4,126 +4,192 @@
 <base target="_top">
 <style>
   :root { color-scheme: light; }
-  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px;
-         background: #fcfcff; color: #10131a; max-width: 780px; }
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .04em; color: #4a5162;
-       margin: 26px 0 10px; }
-  .sub { color: #4a5162; font-size: 13px; margin-bottom: 18px; }
+  html { scroll-behavior: smooth; }
+  body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
+         background: #f4f6fb; color: #10131a; }
 
-  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+  /* Narrower than the admin console on purpose: this page is one form, not nine columns. */
+  .page { max-width: 860px; margin: 0 auto; padding: 0 20px 60px; }
+
+  /* Sticky so the section links stay reachable from anywhere on a long page. */
+  .topbar { position: sticky; top: 0; z-index: 10; background: #fcfcffee;
+            backdrop-filter: blur(6px); border-bottom: 1px solid #e0e4ee;
+            padding: 12px 20px; margin-bottom: 24px; }
+  .topbar .inner { max-width: 860px; margin: 0 auto; display: flex; gap: 18px;
+                   align-items: baseline; flex-wrap: wrap; }
+  .topbar .brand { font-weight: 600; font-size: 15px; color: #14315c; margin-right: 4px; }
+  .topbar a { font-size: 14px; color: #4a5162; text-decoration: none; padding: 4px 0;
+              border-bottom: 2px solid transparent; cursor: pointer; }
+  .topbar a:hover { color: #14315c; border-bottom-color: #14315c; }
+  /* Leaves this page rather than jumping within it, so it sits apart at the far end. */
+  .topbar a.away { margin-left: auto; }
+
+  /* Each section is its own card, so it is obvious where one job ends and the next begins. */
+  .card { background: #fff; border: 1px solid #e0e4ee; border-radius: 14px;
+          padding: 22px 24px; margin-bottom: 22px; }
+  /* Clears the sticky bar when a section is jumped to. */
+  .card { scroll-margin-top: 76px; }
+
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 4px; color: #10131a; }
+  .sub { color: #4a5162; font-size: 13px; margin-bottom: 18px; line-height: 1.5; }
+  .divider { height: 1px; background: #e6e9f0; margin: 22px 0; }
+
+  .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 1px solid #14315c;
+           background: #14315c; color: #fff; cursor: pointer; }
+  button.ghost { background: #fff; color: #14315c; }
+  button:disabled { opacity: .5; cursor: default; }
+  input, textarea { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
+                    background: #fff; color: #10131a; }
+  .wide { width: 100%; box-sizing: border-box; }
+  textarea.wide { min-height: 120px; resize: vertical; line-height: 1.5; }
+
+  label { display: block; font-size: 13px; color: #4a5162; margin: 14px 0 5px; }
+  .count { font-size: 12px; color: #4a5162; text-align: right; margin-top: 4px; }
+  .count.over { color: #b3261e; font-weight: 600; }
+
+  /* One-tap saved messages. Dashed means "start from nothing" rather than from a saved wording. */
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
   .chip { font: inherit; font-size: 13px; padding: 7px 13px; border-radius: 999px;
           border: 1px solid #c3c9d6; background: #fff; color: #14315c; cursor: pointer; }
   .chip:hover { border-color: #14315c; }
   .chip.blank { border-style: dashed; }
 
-  label { display: block; font-size: 13px; color: #4a5162; margin: 14px 0 5px; }
-  input, textarea { font: inherit; width: 100%; padding: 11px; border-radius: 8px;
-                    border: 1px solid #c3c9d6; box-sizing: border-box; background: #fff;
-                    color: #10131a; }
-  textarea { min-height: 110px; resize: vertical; }
-  .count { font-size: 12px; color: #4a5162; text-align: right; margin-top: 4px; }
-  .count.over { color: #b3261e; font-weight: 600; }
-
-  .actions { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
-  button.send { font: inherit; padding: 12px 22px; border-radius: 8px; border: 1px solid #14315c;
-                background: #14315c; color: #fff; cursor: pointer; }
-  button.send:disabled { opacity: .45; cursor: default; }
-  button.ghost { font: inherit; padding: 10px 16px; border-radius: 8px; border: 1px solid #c3c9d6;
-                 background: #fff; color: #14315c; cursor: pointer; }
-
-  .msg { padding: 11px 13px; border-radius: 8px; margin: 14px 0; display: none; }
-  .msg.err { background: #f9dedc; color: #410e0b; display: block; }
-  .msg.ok { background: #d6e2f5; color: #03152e; display: block; }
-
   /* Deliberately styled like the phone's notification, so what you approve is what they see. */
   .preview { border: 1px solid #e6e9f0; border-radius: 12px; padding: 14px 16px; background: #fff;
-             margin-top: 10px; }
+             max-width: 420px; }
   .preview .who { font-size: 11px; color: #4a5162; text-transform: uppercase;
                   letter-spacing: .06em; }
   .preview .t { font-size: 17px; font-weight: 600; margin-top: 4px; word-wrap: break-word; }
   .preview .b { font-size: 15px; margin-top: 3px; white-space: pre-wrap; word-wrap: break-word; }
 
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid #e6e9f0;
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e6e9f0;
            vertical-align: top; }
-  th { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: #4a5162; }
+  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #4a5162; }
+  .tablewrap { overflow-x: auto; }
   .failed { color: #b3261e; }
 
-  .head { display: flex; align-items: baseline; gap: 16px; }
-  .head a { margin-left: auto; font-size: 14px; color: #14315c; text-decoration: none; }
-  .head a:hover { text-decoration: underline; }
+  /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
+  .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
+         margin-bottom: 16px; display: none; }
+  .msg.err { background: #f9dedc; color: #410e0b; display: block; }
+  .msg.ok { background: #d6e2f5; color: #03152e; display: block; }
 </style>
 </head>
 <body>
 
-<div class="head">
-  <h1>Send a notice</h1>
-  <? if (adminUrl) { ?>
-    <!-- ADMIN_URL in Script Properties. A new tab, so a half-written notice here is not lost. -->
-    <a href="<?= adminUrl ?>" target="_blank" rel="noopener">Admin console &rarr;</a>
-  <? } ?>
-</div>
-<div class="sub">
-  Goes to every phone that has activated the app. There is no way to unsend it.
-</div>
-
-<div id="msg" class="msg"></div>
-
-<h2>Saved messages</h2>
-<div class="chips" id="chips"><span class="sub">Loading...</span></div>
-<div class="sub">Pick one to fill the fields below, then edit it if you need to. Saved messages are managed in the code console.</div>
-
-<label for="title">Title</label>
-<input type="text" id="title" maxlength="120" oninput="onEdit()"
-       placeholder="Dispensary closed on Thursday 28 August">
-<div class="count" id="titleCount"></div>
-
-<label for="body">Message</label>
-<textarea id="body" maxlength="900" oninput="onEdit()"
-          placeholder="OPD will reopen at 9 am on Friday."></textarea>
-<div class="count" id="bodyCount"></div>
-<div class="sub">
-  A link to a PDF or a picture in the message is shown in the app as well, as an attachment.
-  Only the first such link is used.
+<div class="topbar">
+  <div class="inner">
+    <span class="brand">Paramanu Seniors Notices &mdash; Sender</span>
+    <a onclick="goTo('compose')">Write a notice</a>
+    <a onclick="goTo('preview-section')">How it will look</a>
+    <a onclick="goTo('sent')">Recently sent</a>
+    <? if (adminUrl) { ?>
+      <!-- ADMIN_URL in Script Properties. A new tab, so a half-written notice here is not lost. -->
+      <a class="away" href="<?= adminUrl ?>" target="_blank" rel="noopener">Admin console &rarr;</a>
+    <? } ?>
+  </div>
 </div>
 
-<h2>How it will look</h2>
-<div class="preview">
-  <div class="who">Paramanu Seniors Notices</div>
-  <div class="t" id="pvTitle">Title</div>
-  <div class="b" id="pvBody"></div>
-</div>
+<div class="page">
 
-<label for="pin">Staff PIN</label>
-<input type="password" id="pin" inputmode="numeric" autocomplete="off" oninput="onEdit()"
-       placeholder="Required for every send">
-<div class="sub" style="margin-top:6px">
-  Typed each time on purpose. It is never saved in this browser, so a page left open on a shared
-  computer cannot be used to send.
-</div>
+  <div id="msg" class="msg"></div>
 
-<div class="actions">
-  <button class="send" id="send" onclick="send()" disabled>Send to everyone</button>
-  <button class="ghost" onclick="clearFields()">Clear</button>
-</div>
+  <div class="card" id="compose">
+    <h1>Send a notice</h1>
+    <div class="sub">
+      Goes to every phone that has activated the app. There is no way to unsend it.
+    </div>
 
-<h2>Recently sent</h2>
-<table>
-  <thead><tr><th>When</th><th>By</th><th>Title</th><th>Message</th></tr></thead>
-  <tbody id="sent"><tr><td colspan="4">Loading...</td></tr></tbody>
-</table>
+    <h2>Saved messages</h2>
+    <div class="sub" style="margin-bottom: 10px">
+      Pick one to fill the fields below, then edit it if you need to. Saved messages are managed in
+      the admin console.
+    </div>
+    <div class="chips" id="chips"><span class="sub" style="margin:0">Loading...</span></div>
+
+    <div class="divider"></div>
+
+    <label for="title">Title</label>
+    <input type="text" id="title" class="wide" maxlength="120" oninput="onEdit()"
+           placeholder="Dispensary closed on Thursday 28 August">
+    <div class="count" id="titleCount"></div>
+
+    <label for="body">Message</label>
+    <textarea id="body" class="wide" maxlength="900" oninput="onEdit()"
+              placeholder="OPD will reopen at 9 am on Friday."></textarea>
+    <div class="count" id="bodyCount"></div>
+    <div class="sub">
+      A link to a PDF or a picture in the message is shown in the app as well, as an attachment.
+      Only the first such link is used.
+    </div>
+  </div>
+
+  <div class="card" id="preview-section">
+    <h2>How it will look</h2>
+    <div class="sub">
+      The title is mandatory because of this: an A4 notice shrunk into a notification is unreadable,
+      so the title is the message for most people.
+    </div>
+
+    <div class="preview">
+      <div class="who">Paramanu Seniors Notices</div>
+      <div class="t" id="pvTitle">Title</div>
+      <div class="b" id="pvBody"></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <label for="pin">Staff PIN</label>
+    <input type="password" id="pin" maxlength="40" inputmode="numeric" autocomplete="off"
+           oninput="onEdit()" placeholder="Required for every send" style="min-width:280px">
+    <div class="sub" style="margin-top:6px">
+      Typed each time on purpose. It is never saved in this browser, so a page left open on a shared
+      computer cannot be used to send.
+    </div>
+
+    <div class="bar" style="margin-bottom:0">
+      <button id="send" onclick="send()" disabled>Send to everyone</button>
+      <button class="ghost" onclick="clearFields()">Clear</button>
+    </div>
+  </div>
+
+  <div class="card" id="sent">
+    <h2>Recently sent</h2>
+    <div class="sub">The last 25 notices, newest first.</div>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>When</th><th>By</th><th>Title</th><th>Message</th></tr></thead>
+        <tbody id="sentRows"><tr><td colspan="4">Loading...</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
 
 <script>
   var TITLE_MAX = 120, BODY_MAX = 900;
   var sending = false;
 
   function el(id) { return document.getElementById(id); }
+
+  // Apps Script serves this page inside a sandboxed iframe, and <base target="_top"> means a plain
+  // href="#compose" is resolved against the inner googleusercontent URL and loaded into the top
+  // window -- which throws the browser out to /userCodeAppPanel. Scrolling in script keeps the
+  // navigation inside the frame, where it belongs.
+  function goTo(id) {
+    var section = document.getElementById(id);
+    if (section) section.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
   function esc(s) {
     return String(s || '').replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+
   function show(text, isError) {
     var m = el('msg');
     m.textContent = text;
@@ -138,8 +204,6 @@
     el('titleCount').className = 'count' + (t.length > TITLE_MAX ? ' over' : '');
     el('bodyCount').className = 'count' + (b.length > BODY_MAX ? ' over' : '');
 
-    // The preview is the whole point of the title being mandatory: an A4 notice shrunk into a
-    // notification is unreadable, so the text is the message.
     el('pvTitle').textContent = t || 'Title';
     el('pvBody').textContent = b;
 
@@ -168,13 +232,13 @@
         JSON.stringify(r.body).replace(/"/g, '&quot;') + ')">' + esc(r.label) + '</button>');
     });
     if (!rows.length) {
-      chips.push('<span class="sub">No saved messages yet. Add them in the code console.</span>');
+      chips.push('<span class="sub" style="margin:0">No saved messages yet. Add them in the admin console.</span>');
     }
     box.innerHTML = chips.join('');
   }
 
   function renderSent(rows) {
-    var body = el('sent');
+    var body = el('sentRows');
     if (!rows.length) { body.innerHTML = '<tr><td colspan="4">Nothing sent yet.</td></tr>'; return; }
     body.innerHTML = rows.map(function (r) {
       var when = r.sentAt ? new Date(r.sentAt).toLocaleString() : '';
@@ -209,6 +273,7 @@
         // Cleared on success as well as failure: the next send is a fresh decision, and an unlocked
         // page on the counter should not be able to broadcast.
         el('pin').value = '';
+        onEdit();
         loadSent();
       })
       .withFailureHandler(function (e) {

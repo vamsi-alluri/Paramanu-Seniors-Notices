@@ -82,6 +82,8 @@
   .actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 150px; }
   .actions button { padding: 6px 10px; font-size: 13px; }
   .locked { color: #5a6478; font-size: 13px; }
+  /* Takes its own line, so it reads as a note about the button above it rather than a label beside it. */
+  .actions .locked { flex: 1 0 100%; }
   .gone { color: #5a6478; font-style: italic; }
 
   dialog { border: 1px solid #c3c9d6; border-radius: 12px; padding: 20px 22px; max-width: 420px;
@@ -141,6 +143,7 @@
     <div class="inner">
       <span class="brand">Paramanu Seniors Notices &mdash; Admin</span>
       <a onclick="goTo('codes')">Activation codes</a>
+      <a onclick="goTo('holders')">Holders</a>
       <a onclick="goTo('messages')">Saved messages</a>
       <a onclick="goTo('banner-section')">Dispensary banner</a>
       <? if (senderUrl) { ?>
@@ -158,7 +161,6 @@
       <h1>Activation codes</h1>
       <div class="sub">
         Each code works once. Hand one slip to each person at the counter.
-        Codes never contain the letters I, L, O or U.
         <br>Printing covers every code that has not been used or printed yet, not only the page
         shown below. Printed codes are marked as such, so the next run does not repeat them.
       </div>
@@ -166,7 +168,7 @@
       <div class="bar">
         <div class="group" role="group" aria-label="Generate codes">
           <input type="number" id="count" value="10" min="1" max="200" oninput="labelGenerate()">
-          <input type="text" id="note" maxlength="120" placeholder="Note (optional) e.g. printed for 12 Sep counter">
+          <input type="text" id="note" maxlength="120" placeholder="Note [Optional Field] e.g. Printed for 12 Sep counter">
           <button id="make" onclick="makeCodes()">Generate 10</button>
         </div>
       </div>
@@ -219,6 +221,7 @@
         <span class="sub" id="pageInfo" style="margin: 0"></span>
         <label class="sub" style="margin: 0 0 0 auto">Show
           <select id="pageSize" onchange="setPageSize(this.value)">
+            <option value="10">10</option>
             <option value="25">25</option>
             <option value="50">50</option>
             <option value="100">100</option>
@@ -228,22 +231,34 @@
         </label>
       </div>
 
-      <div id="removedSection" hidden>
-        <div class="divider"></div>
-        <h2>Removed holders</h2>
-        <div class="sub">
-          Their codes are On hold. Restore holder takes the code off hold and puts it back as it was.
-          After 30 days a removed holder is erased for good and the code goes back to Unused.
-        </div>
-        <div class="tablewrap">
-          <table>
-            <thead>
-              <tr><th>Name</th><th>CHSS number</th><th>Telephone</th><th>Code</th><th>Removed</th>
-                  <th>Erased after</th><th></th></tr>
-            </thead>
-            <tbody id="removedRows"></tbody>
-          </table>
-        </div>
+    </div>
+
+    <div class="card" id="holders">
+      <h2>Holders</h2>
+      <div class="sub" id="holderCount">
+        Everyone who has been given a code, including those who have been removed. Adding a holder
+        is done from the code's own row above; everything else can be done from here.
+      </div>
+
+      <div class="bar">
+        <input type="search" id="holderSearch" oninput="setHolderSearch(this.value)"
+               placeholder="Search by name, CHSS number, telephone or code">
+      </div>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="sort" onclick="sortHolders('name')">Name<span class="arrow" id="ah-name"></span></th>
+              <th class="sort" onclick="sortHolders('chss')">CHSS number<span class="arrow" id="ah-chss"></span></th>
+              <th class="sort" onclick="sortHolders('phone')">Telephone<span class="arrow" id="ah-phone"></span></th>
+              <th class="sort" onclick="sortHolders('code')">Code<span class="arrow" id="ah-code"></span></th>
+              <th class="sort" onclick="sortHolders('status')">Status<span class="arrow" id="ah-status"></span></th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="holderRows"><tr><td colspan="6">Loading...</td></tr></tbody>
+        </table>
       </div>
     </div>
 
@@ -412,7 +427,7 @@
   // paged. The list itself is small enough to hold in full, so paging is done here rather than
   // asking the server for a slice: refreshing after an action keeps you on the page you were on.
   var PAGE = 1;
-  var PAGE_SIZE = 25;
+  var PAGE_SIZE = 10;
   // Newest first, matching the order the server hands them over in.
   var CODE_SORT = { key: 'issued', dir: -1 };
 
@@ -455,10 +470,16 @@
     var h = row.holder || {};
     if ([row.note, h.name, h.chss].join('\n').toLowerCase().indexOf(text) >= 0) return true;
 
+    // A removed holder's name is still worth finding: their code is sitting On hold in this table
+    // and their name is the only thing staff remember about it.
+    var gone = REMOVED_BY_CODE[row.code];
+    if (gone && [gone.name, gone.chss].join('\n').toLowerCase().indexOf(text) >= 0) return true;
+
     // A telephone number is matched on its digits alone, so "98765 43210" finds 9876543210. Three
     // digits at least, or "ward 3" would match every number with a 3 in it.
     var digits = text.replace(/\D/g, '');
     if (digits.length >= 3 && String(h.phone || '').replace(/\D/g, '').indexOf(digits) >= 0) return true;
+    if (digits.length >= 3 && gone && String(gone.phone || '').replace(/\D/g, '').indexOf(digits) >= 0) return true;
 
     var code = squashCode(text);
     return code.length > 0 && row.code.indexOf(code) >= 0;
@@ -554,9 +575,11 @@
     if (key === 'status') return row.onHold ? 4 : row.revoked ? 3 : row.claimed ? 2 : row.printed ? 1 : 0;
     if (key === 'issued') return row.issued || 0;
     if (key === 'note') return row.note || '';
-    if (key === 'name') return row.holder ? row.holder.name : '';
-    if (key === 'chss') return row.holder ? row.holder.chss : '';
-    if (key === 'phone') return row.holder ? row.holder.phone : '';
+    // An On hold code has no holder of its own, so it sorts under the name of the holder it is
+    // waiting for -- the same name the Name column shows.
+    if (key === 'name') return row.holder ? row.holder.name : removedOf(row) ? removedOf(row).name : '';
+    if (key === 'chss') return row.holder ? row.holder.chss : removedOf(row) ? removedOf(row).chss : '';
+    if (key === 'phone') return row.holder ? row.holder.phone : removedOf(row) ? removedOf(row).phone : '';
     // Codes issued before the audit existed have no history and are not backfilled, so they carry
     // a zero and settle at one end rather than being treated as blank.
     if (key === 'lastChange') return row.lastChange ? row.lastChange.at : 0;
@@ -587,6 +610,11 @@
   var REMOVED = [];
   var REMOVED_BY_CODE = {};
 
+  /** The removed holder a code is on hold for, or null. */
+  function removedOf(row) {
+    return row.onHold ? (REMOVED_BY_CODE[row.code] || null) : null;
+  }
+
   function render(data) {
     LAST = data;
     CODES = data.codes;
@@ -596,7 +624,7 @@
     REMOVED.forEach(function (h) { REMOVED_BY_CODE[h.code] = h; });
     PRINTING_ENABLED = data.printingEnabled !== false;
     renderPage();
-    renderRemoved();
+    renderHolders();
 
     // Only codes nobody holds are worth printing; the rest already belong to somebody. Already
     // printed ones are left out too, or generating fifty more and printing again would reprint the
@@ -667,9 +695,25 @@
       // What each status offers. The server refuses the same things, so a stale page cannot do what
       // this hides; the buttons only keep staff from being told no.
       var h = r.holder;
+      // An On hold code has no active holder, but staff looking at it need to know whose it was.
+      var gone = removedOf(r);
       var actions = [];
       if (r.onHold) {
-        actions.push('<span class="locked">Locked until the holder is restored</span>');
+        // Restoring is the one thing an On hold code will accept, and this row is where staff are
+        // when they want it, so the button is offered here as well as in the Holders table below.
+        // The note stays: it says why every other action is missing, and names the deadline, so
+        // nobody has to scroll down to find out what happens if they leave it.
+        if (gone) {
+          actions.push(actionButton('Restore holder', 'restoreHolder', gone.id));
+          actions.push('<span class="locked">Everything else is locked until ' + escapeHtml(gone.name) +
+                       ' is restored. Erased after ' + new Date(gone.purgeAfter).toLocaleDateString() +
+                       ', and then this code goes back to Unused.</span>');
+        } else {
+          // On hold with nobody in the removed list: the holder was erased between the two reads,
+          // or the lists disagree. Refreshing is the only honest offer.
+          actions.push('<span class="locked">Locked until the holder is restored. ' +
+                       'Refresh to see whether they are still there.</span>');
+        }
       } else {
         if (r.revoked) actions.push(actionButton('Enable', 'enable', r.code));
         else if (r.claimed) actions.push(actionButton('Disable', 'disable', r.code));
@@ -686,9 +730,11 @@
         if (!r.claimed && !h) actions.push(actionButton('Delete code', 'removeCode', r.code, true));
       }
 
-      // An On hold code has no active holder, but staff looking at it need to know whose it was.
-      var gone = r.onHold ? REMOVED_BY_CODE[r.code] : null;
+      // The removed holder's details stay in the row, greyed, so an On hold code is not a blank
+      // line that staff have to match up against the table further down the page.
       var nameCell = h ? escapeHtml(h.name) : gone ? '<span class="gone">' + escapeHtml(gone.name) + ' (removed)</span>' : '';
+      var chssCell = h ? escapeHtml(h.chss) : gone ? '<span class="gone">' + escapeHtml(gone.chss) + '</span>' : '';
+      var phoneCell = h ? escapeHtml(h.phone) : gone ? '<span class="gone">' + escapeHtml(gone.phone) + '</span>' : '';
 
       var open = !!OPEN_HISTORY[r.code];
       var last = r.lastChange
@@ -697,8 +743,8 @@
         : '<span class="sub">&mdash;</span>';
 
       var html = '<tr><td class="mono">' + r.formatted + '</td><td>' + state +
-                 '</td><td>' + nameCell + '</td><td>' + escapeHtml(h ? h.chss : '') +
-                 '</td><td>' + escapeHtml(h ? h.phone : '') +
+                 '</td><td>' + nameCell + '</td><td>' + chssCell +
+                 '</td><td>' + phoneCell +
                  '</td><td>' + escapeHtml(r.note) + '</td><td>' + stamp(r.issued) +
                  '</td><td>' + last +
                  '</td><td><div class="actions">' + actions.join('') + '</div></td></tr>';
@@ -920,16 +966,21 @@
       'Remove ' + name + ' from ' + formatCode(code) + '?\n\n' +
       formatCode(code) + ' goes On hold: its phone stops receiving notices, and nothing can be done to ' +
       'the code until the holder is restored.\n\n' +
-      'You can restore ' + name + ' from Removed holders for 30 days. After that their details are ' +
-      'erased for good and the code goes back to Unused.'
+      'You can restore ' + name + ' from the code\'s own row, or from Holders, for 30 days. ' +
+      'After that their details are erased for good and the code goes back to Unused.'
     )) return;
-    run(name + ' removed. ' + formatCode(code) + ' is On hold.').removeHolder(row.holder.id);
+    run(name + ' removed. ' + formatCode(code) + ' is On hold. Restore is on its row.').removeHolder(row.holder.id);
+  }
+
+  /** Looks a removed holder up by id, wherever the Restore button was pressed. */
+  function findRemoved(id) {
+    for (var i = 0; i < REMOVED.length; i++) if (REMOVED[i].id === id) return REMOVED[i];
+    return null;
   }
 
   function restoreHolder(id) {
-    var holder = null;
-    REMOVED.forEach(function (h) { if (h.id === id) holder = h; });
-    if (!holder) return;
+    var holder = findRemoved(id);
+    if (!holder) { show('That removed holder is no longer listed. Refresh to see the current list.', true); return; }
     if (!confirm(
       'Restore ' + holder.name + ' to ' + formatCode(holder.code) + '?\n\n' +
       'The code comes off hold' + (holder.wasDisabled
@@ -939,14 +990,116 @@
     run(holder.name + ' restored to ' + formatCode(holder.code) + '.').restoreHolder(id);
   }
 
-  function renderRemoved() {
-    document.getElementById('removedSection').hidden = REMOVED.length === 0;
-    document.getElementById('removedRows').innerHTML = REMOVED.map(function (h) {
-      return '<tr><td>' + escapeHtml(h.name) + '</td><td>' + escapeHtml(h.chss) + '</td><td>' + escapeHtml(h.phone) +
-             '</td><td class="mono">' + escapeHtml(formatCode(h.code)) +
-             '</td><td>' + stamp(h.removedAt) + ' <span class="who">' + escapeHtml(h.removedBy) + '</span>' +
-             '</td><td>' + new Date(h.purgeAfter).toLocaleDateString() +
-             '</td><td><button class="ghost" onclick="restoreHolder(\'' + h.id + '\')">Restore holder</button></td></tr>';
+  // ---- the holders table ----
+  //
+  // One list for everybody who has a code, removed or not. A removed holder is not a different kind
+  // of thing, only a holder in a different state, and keeping them in separate tables meant staff
+  // searching for a name had to know in advance which table to look in.
+
+  var HOLDER_SORT = { key: 'name', dir: 1 };
+  var HOLDER_KEYS = ['name', 'chss', 'phone', 'code', 'status'];
+  var HOLDER_SEARCH = '';
+
+  // Removed sorts last whichever way the other statuses run: it is the end of a holder's life here,
+  // and these rows are the ones with the fewest actions on them.
+  var HOLDER_STATUS_RANK = { unused: 0, printed: 1, used: 2, disabled: 3, removed: 5 };
+
+  /**
+   * Every holder, from two places: live ones hang off their code, removed ones are listed on their
+   * own because their code no longer points at them.
+   */
+  function holderRows() {
+    var rows = [];
+    CODES.forEach(function (r) {
+      if (!r.holder) return;
+      rows.push({ person: r.holder, code: r.code, status: statusOf(r), removed: null });
+    });
+    REMOVED.forEach(function (h) {
+      rows.push({ person: h, code: h.code, status: 'removed', removed: h });
+    });
+    return rows;
+  }
+
+  function holderValue(row, key) {
+    if (key === 'status') return HOLDER_STATUS_RANK[row.status];
+    if (key === 'code') return row.code;
+    return row.person[key] || '';
+  }
+
+  function holderMatches(row) {
+    var text = HOLDER_SEARCH.trim().toLowerCase();
+    if (!text) return true;
+    var p = row.person;
+    if ([p.name, p.chss].join('\n').toLowerCase().indexOf(text) >= 0) return true;
+
+    var digits = text.replace(/\D/g, '');
+    if (digits.length >= 3 && String(p.phone || '').replace(/\D/g, '').indexOf(digits) >= 0) return true;
+
+    var code = squashCode(text);
+    return code.length > 0 && row.code.indexOf(code) >= 0;
+  }
+
+  function setHolderSearch(value) {
+    HOLDER_SEARCH = value;
+    renderHolders();
+  }
+
+  function sortHolders(key) {
+    turnSort(HOLDER_SORT, key, []);
+    renderHolders();
+  }
+
+  function renderHolders() {
+    markSort('ah-', HOLDER_KEYS, HOLDER_SORT);
+
+    var all = holderRows();
+    var rows = all.filter(holderMatches).sort(function (a, b) {
+      return compareValues(holderValue(a, HOLDER_SORT.key), holderValue(b, HOLDER_SORT.key), HOLDER_SORT.dir);
+    });
+
+    var removedCount = all.filter(function (r) { return r.status === 'removed'; }).length;
+    document.getElementById('holderCount').innerHTML =
+      'Everyone who has been given a code, including those who have been removed. Adding a holder is ' +
+      'done from the code\'s own row above; everything else can be done from here.' +
+      (all.length ? '<br>' + (all.length - removedCount) + ' holding a code' +
+        (removedCount ? ', ' + removedCount + ' removed and waiting to be restored or erased.' : '.') : '');
+
+    var body = document.getElementById('holderRows');
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="6">' +
+        (all.length ? 'No holders match. Clear the search.'
+                    : 'Nobody has a code yet. Add a holder from a code\'s row above.') + '</td></tr>';
+      return;
+    }
+
+    body.innerHTML = rows.map(function (r) {
+      var p = r.person;
+      var state;
+      var actions;
+
+      if (r.removed) {
+        // Their code is On hold underneath, which is the code's word for the same situation. The
+        // holder's own word is Removed, and the date says how long the choice stays open.
+        state = '<span class="pill hold">Removed</span>' +
+                '<div class="sub" style="margin:4px 0 0">' + stamp(r.removed.removedAt) +
+                ' <span class="who">' + escapeHtml(r.removed.removedBy) + '</span>' +
+                '<br>Erased after ' + new Date(r.removed.purgeAfter).toLocaleDateString() + '</div>';
+        actions = actionButton('Restore holder', 'restoreHolder', p.id);
+      } else {
+        // The code's status, not a status of their own: what staff want to know about a holder is
+        // whether their phone is receiving anything.
+        state = '<span class="pill ' + STATUS_PILL[r.status] + '">' + STATUS_LABEL[r.status] + '</span>';
+        // Both call the same handlers the code's row does, so there is one Remove in the console
+        // and not two that could drift apart.
+        actions = actionButton('Edit holder', 'editHolder', r.code) +
+                  actionButton('Remove holder', 'removeHolder', r.code, true);
+      }
+
+      return '<tr><td>' + escapeHtml(p.name) + '</td><td>' + escapeHtml(p.chss) +
+             '</td><td>' + escapeHtml(p.phone) +
+             '</td><td class="mono">' + escapeHtml(formatCode(r.code)) +
+             '</td><td>' + state +
+             '</td><td><div class="actions">' + actions + '</div></td></tr>';
     }).join('');
   }
 
