@@ -198,6 +198,7 @@
       <h1>Activation codes</h1>
       <div class="sub">
         Each code works once. Hand one slip to each person at the counter.
+        Codes never contain the letters I, L, O or U.
         <br>Printing covers every code that has not been used or printed yet, not only the page
         shown below. Printed codes are marked as such, so the next run does not repeat them.
       </div>
@@ -1097,8 +1098,10 @@
     document.getElementById('holderCount').innerHTML =
       'Everyone who has been given a code, including those who have been removed. Adding a holder is ' +
       'done from the code\'s own row above; everything else can be done from here.' +
-      (all.length ? '<br>' + (all.length - removedCount) + ' holding a code' +
-        (removedCount ? ', ' + removedCount + ' removed and waiting to be restored or erased.' : '.') : '');
+      (all.length ? '<br> Status: ' + (all.length - removedCount) + ' holding a code' +
+        (removedCount ? ', ' + removedCount + ' removed.' : '.') : '') +
+      '<br>Removed holders are erased for good on the 1st of each month, once they have been ' +
+      'removed for at least 30 days. Until then they can be restored.'
 
     var body = document.getElementById('holderRows');
     if (!rows.length) {
@@ -1119,7 +1122,7 @@
         state = '<span class="pill hold">Removed</span>' +
                 '<div class="sub" style="margin:4px 0 0">' + stamp(r.removed.removedAt) +
                 ' <span class="who">' + escapeHtml(r.removed.removedBy) + '</span>' +
-                '<br>Erased after ' + new Date(r.removed.purgeAfter).toLocaleDateString() + '</div>';
+                '<br>Restorable until ' + new Date(r.removed.purgeAfter).toLocaleDateString() + '</div>';
         actions = actionButton('Restore holder', 'restoreHolder', p.id);
       } else {
         // The code's status, not a status of their own: what staff want to know about a holder is
