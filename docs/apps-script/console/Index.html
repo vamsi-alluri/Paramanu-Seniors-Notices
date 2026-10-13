@@ -336,7 +336,10 @@
             <option value="title">Title</option>
           </select>
         </label>
-        <button class="ghost" id="tSortDir" onclick="flipTemplateSort()">A to Z</button>
+        <!-- Arrows, not "A to Z": these names are numbered, so the direction is up or down the
+             list, not through the alphabet. The filled one is the direction in force. -->
+        <button id="tSortUp" onclick="setTemplateDir(1)" aria-label="Sort ascending">&#9650;</button>
+        <button id="tSortDown" onclick="setTemplateDir(-1)" aria-label="Sort descending">&#9660;</button>
       </div>
 
       <div id="templates" class="sub">Loading...</div>
@@ -1156,8 +1159,8 @@
     renderTemplateRows();
   }
 
-  function flipTemplateSort() {
-    TEMPLATE_SORT.dir = -TEMPLATE_SORT.dir;
+  function setTemplateDir(dir) {
+    TEMPLATE_SORT.dir = dir;
     renderTemplateRows();
   }
 
@@ -1167,7 +1170,10 @@
   }
 
   function renderTemplateRows() {
-    document.getElementById('tSortDir').textContent = TEMPLATE_SORT.dir > 0 ? 'A to Z' : 'Z to A';
+    // The direction in force is the solid button; the other is outlined. Neither is disabled --
+    // pressing the one already chosen should do nothing, not look broken.
+    document.getElementById('tSortUp').className = TEMPLATE_SORT.dir > 0 ? '' : 'ghost';
+    document.getElementById('tSortDown').className = TEMPLATE_SORT.dir > 0 ? 'ghost' : '';
 
     var box = document.getElementById('templates');
     if (!TEMPLATES.length) {
