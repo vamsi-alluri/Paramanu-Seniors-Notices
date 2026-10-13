@@ -3,10 +3,13 @@
 <head>
 <base target="_top">
 <style>
-  :root { color-scheme: light; }
+  /* 100% on the root means the browser's own default text size, and every size below is in rem,
+     so a reader who has set a larger default -- or pressed Ctrl and + -- gets the whole page
+     larger, tables included. Nothing here may be set in px, or it will ignore them. */
+  :root { color-scheme: light; font-size: 100%; }
   html { scroll-behavior: smooth; }
   body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
-         background: #f4f6fb; color: #10131a; }
+         background: #f4f6fb; color: #10131a; font-size: 1rem; line-height: 1.5; }
 
   /* Narrower than the admin console on purpose: this page is one form, not nine columns. */
   .page { max-width: 860px; margin: 0 auto; padding: 0 20px 60px; }
@@ -17,8 +20,8 @@
             padding: 12px 20px; margin-bottom: 24px; }
   .topbar .inner { max-width: 860px; margin: 0 auto; display: flex; gap: 18px;
                    align-items: baseline; flex-wrap: wrap; }
-  .topbar .brand { font-weight: 600; font-size: 15px; color: #14315c; margin-right: 4px; }
-  .topbar a { font-size: 14px; color: #4a5162; text-decoration: none; padding: 4px 0;
+  .topbar .brand { font-weight: 600; font-size: 1.05rem; color: #14315c; margin-right: 4px; }
+  .topbar a { font-size: 1rem; color: #3c4455; text-decoration: none; padding: 4px 0;
               border-bottom: 2px solid transparent; cursor: pointer; }
   .topbar a:hover { color: #14315c; border-bottom-color: #14315c; }
   /* Leaves this page rather than jumping within it, so it sits apart at the far end. */
@@ -30,9 +33,11 @@
   /* Clears the sticky bar when a section is jumped to. */
   .card { scroll-margin-top: 76px; }
 
-  h1 { font-size: 20px; margin: 0 0 4px; }
-  h2 { font-size: 16px; margin: 0 0 4px; color: #10131a; }
-  .sub { color: #4a5162; font-size: 13px; margin-bottom: 18px; line-height: 1.5; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  h2 { font-size: 1.15rem; margin: 0 0 4px; color: #10131a; }
+  /* Darker than it was: this text carries real instructions, not decoration, and #4a5162 on white
+     was being read as greyed-out. */
+  .sub { color: #3c4455; font-size: .95rem; margin-bottom: 18px; line-height: 1.55; }
   .divider { height: 1px; background: #e6e9f0; margin: 22px 0; }
 
   .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
@@ -45,13 +50,13 @@
   .wide { width: 100%; box-sizing: border-box; }
   textarea.wide { min-height: 120px; resize: vertical; line-height: 1.5; }
 
-  label { display: block; font-size: 13px; color: #4a5162; margin: 14px 0 5px; }
-  .count { font-size: 12px; color: #4a5162; text-align: right; margin-top: 4px; }
+  label { display: block; font-size: 1rem; color: #3c4455; margin: 16px 0 6px; }
+  .count { font-size: .85rem; color: #3c4455; text-align: right; margin-top: 4px; }
   .count.over { color: #b3261e; font-weight: 600; }
 
   /* One-tap saved messages. Dashed means "start from nothing" rather than from a saved wording. */
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
-  .chip { font: inherit; font-size: 13px; padding: 7px 13px; border-radius: 999px;
+  .chip { font: inherit; font-size: 1rem; padding: 9px 16px; border-radius: 999px;
           border: 1px solid #c3c9d6; background: #fff; color: #14315c; cursor: pointer; }
   .chip:hover { border-color: #14315c; }
   .chip.blank { border-style: dashed; }
@@ -59,17 +64,21 @@
   /* Deliberately styled like the phone's notification, so what you approve is what they see. */
   .preview { border: 1px solid #e6e9f0; border-radius: 12px; padding: 14px 16px; background: #fff;
              max-width: 420px; }
-  .preview .who { font-size: 11px; color: #4a5162; text-transform: uppercase;
-                  letter-spacing: .06em; }
-  .preview .t { font-size: 17px; font-weight: 600; margin-top: 4px; word-wrap: break-word; }
-  .preview .b { font-size: 15px; margin-top: 3px; white-space: pre-wrap; word-wrap: break-word; }
+  .preview .who { font-size: .85rem; color: #3c4455; }
+  .preview .t { font-size: 1.2rem; font-weight: 600; margin-top: 4px; word-wrap: break-word; }
+  .preview .b { font-size: 1.1rem; margin-top: 4px; white-space: pre-wrap; word-wrap: break-word;
+                line-height: 1.55; }
 
-  table { border-collapse: collapse; width: 100%; font-size: 14px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #e6e9f0;
-           vertical-align: top; }
-  th { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #4a5162; }
-  .tablewrap { overflow-x: auto; }
-  .failed { color: #b3261e; }
+  /* The sent list is blocks, not a table: a 900-character message in a quarter of the width was
+     a six-line cell beside three one-line cells, and reading across it meant counting rows. */
+  .item { border: 1px solid #e0e4ee; border-radius: 12px; padding: 16px 18px; margin-bottom: 12px; }
+  .item:nth-child(even) { background: #f7f9fc; }
+  .item .when { color: #3c4455; font-size: .95rem; margin-bottom: 4px; }
+  .item .what { font-weight: 600; margin-bottom: 4px; }
+  /* A real measure. Long lines are the other half of losing your place. */
+  .item .body { color: #3c4455; white-space: pre-wrap; max-width: 62ch; }
+  .item.failed { border-color: #e5c3c0; }
+  .item.failed .when { color: #8c1d18; }
 
   /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
   .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
@@ -159,12 +168,7 @@
   <div class="card" id="sent">
     <h2>Recently sent</h2>
     <div class="sub">The last 25 notices, newest first.</div>
-    <div class="tablewrap">
-      <table>
-        <thead><tr><th>When</th><th>By</th><th>Title</th><th>Message</th></tr></thead>
-        <tbody id="sentRows"><tr><td colspan="4">Loading...</td></tr></tbody>
-      </table>
-    </div>
+    <div id="sentRows" class="sub">Loading...</div>
   </div>
 
 </div>
@@ -238,14 +242,18 @@
   }
 
   function renderSent(rows) {
-    var body = el('sentRows');
-    if (!rows.length) { body.innerHTML = '<tr><td colspan="4">Nothing sent yet.</td></tr>'; return; }
-    body.innerHTML = rows.map(function (r) {
+    var box = el('sentRows');
+    if (!rows.length) {
+      box.innerHTML = '<div class="sub" style="margin:0">Nothing sent yet.</div>';
+      return;
+    }
+    box.innerHTML = rows.map(function (r) {
       var when = r.sentAt ? new Date(r.sentAt).toLocaleString() : '';
-      return '<tr class="' + (r.failed ? 'failed' : '') + '"><td>' + esc(when) +
-             '</td><td>' + esc(r.sentBy || '') +
-             '</td><td>' + esc(r.title) + (r.failed ? ' (failed)' : '') +
-             '</td><td>' + esc(r.body) + '</td></tr>';
+      return '<div class="item' + (r.failed ? ' failed' : '') + '">' +
+             '<div class="when">' + esc(when) + (r.sentBy ? ' &mdash; ' + esc(r.sentBy) : '') +
+             (r.failed ? ' &mdash; failed, nothing was delivered' : '') + '</div>' +
+             '<div class="what">' + esc(r.title) + '</div>' +
+             '<div class="body">' + esc(r.body) + '</div></div>';
     }).join('');
   }
 
