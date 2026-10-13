@@ -113,14 +113,20 @@ at a counter by someone in their eighties.
 
 Generates codes, prints cut-out slips, disables, enables and unlinks phones, per-code notes, holders
 (name, CHSS number, telephone), the office-hours banner, and the saved messages the sender offers.
-The codes table sorts on every column, pages locally, and shows each code's last change with its
-full history.
+The codes table sorts on every column, pages locally ten rows at a time, and shows each code's last
+change with its full history.
+
+Every size on the page is in `rem` off a `100%` root, so a reader's browser text size or Ctrl-+
+enlarges everything, tables included; nothing may be set in `px`. The page takes the window (up to
+1760px) so the nine-column codes table does not scroll sideways, and blocks of prose are capped on
+their own. Table rows are striped from script rather than `:nth-child`, because an open history row
+would otherwise flip the stripes beneath it.
 
 Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `ALLOWED_EDITORS`, and optionally
 `PRINTING_ENABLED` (`false` disables the Print controls; the Printed status is still derived and
 shown) and `SENDER_URL` (the sender's `/exec` URL, linked from the top bar; absent or not https
-means no link). `Tests.gs` covers the pure helpers only. `purgeInstallTrigger()` installs the 30-day holder
-purge; `purgeDryRun()` lists what it would erase.
+means no link). `Tests.gs` covers the pure helpers only. `purgeInstallTrigger()` installs the holder purge, which
+runs on the 1st of each month; `purgeDryRun()` lists what it would erase.
 
 **Names on the page are not the stored names.** Staff see Disable, Enable and Unlink phone; `/codes`
 still carries `revoked`, the audit still records `revoked`, `restored` and `released`, and the push
@@ -128,8 +134,17 @@ is still `revoke` / `resume`. Only words changed, so the app and the rules did n
 
 **Statuses:** Unused, Printed, In use, Disabled, **On hold**. On hold means the holder was removed:
 the code is stopped (`revoked: true`, so to the phone it is simply revoked) and the console refuses
-every action on it until the holder is restored. Restore puts the code back as it was, Disabled
-included. The purge erases a holder 30–60 days after removal and returns the code to Unused.
+every action on it but **Restore holder** until the holder is restored. The row keeps the removed
+holder's name, CHSS number and telephone, greyed, and sorts and searches under them. Restore puts the
+code back as it was, Disabled included. The purge erases a holder on the first 1st of the month at
+least 30 days after removal (30 to about 61 days) and returns the code to Unused.
+
+**Holders** is a section of its own, below the codes: everyone who has been given a code, removed
+ones included, in one sortable, searchable table. A live holder shows their code's status and offers
+Edit and Remove, which call the same handlers as the code's row. A removed holder shows Removed, when
+and by whom, and the date they stay restorable until, with Restore. Adding a holder is still done
+from the code's row. It replaced the separate Removed holders table, which made staff know in advance
+which table a name was in.
 
 Disable, Enable, removing or restoring a holder, and banner changes write `/controlQueue`; the
 sender's trigger broadcasts them on `control-v1` (§2.3). Unlink phone, Delete code and the purge
@@ -137,14 +152,22 @@ clear anything pending, so nothing fires at the next phone to type the code. If 
 database, and phones catch up at their next daily check or app open. Only the speed depends on it.
 
 The codes table has a search box (a code with or without its dash, a name, CHSS number, telephone
-digits, or note text) and a Status filter in the column header. Neither affects printing, which always covers every eligible code.
+digits, or note text — and a removed holder's details, for an On hold code) and a Status filter
+beside it. The filter used to sit inside the Status header, where it set the column's width. Neither
+affects printing, which always covers every eligible code.
+
+**The banner editor is its own preview.** The box carries the app's banner colours, type and a
+phone's 420px width, so what is typed is what the phone shows; there is no second preview box. It is
+sanitised on blur rather than on every keystroke — rewriting it moves the caret — except when focus
+moves to the card's own colour controls, which would otherwise lose the selection they apply to.
+After a save the box shows what the server stored, not what was typed.
 
 ### 2.3 Sender (Apps Script) — `docs/apps-script/sender/`
 
 `Code.gs`, `Index.html` (compose), `Poller.gs` (RSS trigger),
 `Control.gs` (control queue trigger), `Tests.gs`. Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `PROJECT_ID`, `STAFF_PIN`,
 `ALLOWED_EDITORS`, `DISPENSARY_ID`, optionally `REQUIRE_STAFF_PIN`, `ALERTS_FEED_URL` and
-`ADMIN_URL` (the console's `/exec` URL, linked beside the heading). Notices,
+`ADMIN_URL` (the console's `/exec` URL, linked at the far end of the top bar). Notices,
 from the compose page and the poller alike, go to the dispensary's first topic by `order` — read from
 `/dispensaries/{DISPENSARY_ID}/topics` at send time. There is no topic picker and no status route.
 
@@ -165,6 +188,15 @@ An earlier design had the console POST here with the staff member's OAuth token.
 on every request — `ScriptApp.getOAuthToken()` cannot authorize a call into another project's web
 app — and no manifest scope fixes it. **Do not re-investigate the 401**; the evidence is in
 `docs/decisions.md`.
+
+The compose page is laid out like the console: a sticky top bar with Write a notice, How it will
+look and Recently sent, each a card, sizes in `rem`. Section links scroll in script (`goTo`), since
+with `<base target="_top">` a plain `#anchor` throws the browser out to `/userCodeAppPanel`. The
+title, message and their counters share one container per field, so the counter ends where the box
+does without any width kept in step. The send result appears between the PIN and the Send button,
+not at the top: Apps Script serves the page in an auto-height iframe, so nothing inside it can stick
+to the screen, and a message at the top was written where nobody was looking. A failed send clears
+the PIN and puts the cursor back in it. Recently sent lists the last 25.
 
 Separate project from the console so issuing codes and sending messages are separate jobs.
 
@@ -487,11 +519,12 @@ the code screen.
 - Welcome notice written locally on activation, so the list is never empty.
 - "Check notifications" button, contact section, privacy policy link.
 - Analytics and `AD_ID` removed; six permissions in the release manifest.
-- Console: codes, slips, notes, disable, enable, unlink phone, holders with their own history, On
-  hold, the 30-day purge, search and a status filter, saved messages, sortable paged table, per-code
-  audit history.
+- Console: codes, slips, notes, disable, enable, unlink phone, holders with their own history and
+  their own table, On hold, the monthly purge, search and a status filter, saved messages, sortable
+  paged table, per-code audit history, a banner editor that is its own preview.
 - Sender: compose with live notification preview, saved-message chips, PIN, `sentBy` attribution,
-  sends to the dispensary's topic, and the control queue drain the console relies on.
+  sends to the dispensary's topic, and the control queue drain the console relies on. Same layout
+  as the console.
 - Pushed revocation applied on receipt; entitlement verification moved off the message path into
   WorkManager; a revoked device keeps its notices behind a banner and recovers on Restore.
 - 67 Android unit tests. Apps Script tests run from the editor (`runAllTests` in the sender,
@@ -525,9 +558,10 @@ the code screen.
      still listed, and a notice sent while disabled does not appear. Then Enable and confirm
      delivery resumes within a minute, without opening the app, and the banner and its history row
      both disappear.
-   - Add a holder to that code, Remove it: the code shows On hold, every button is gone, and the
-     phone stops. Restore it from Removed holders: the code comes back as it was. Repeat with the
-     code Disabled first, and confirm Restore leaves it Disabled.
+   - Add a holder to that code, Remove it: the code shows On hold, every button but Restore holder
+     is gone, and the phone stops. Restore it from the code's row, and once more from Holders: the
+     code comes back as it was. Repeat with the code Disabled first, and confirm Restore leaves it
+     Disabled.
    - Move a holder to a fresh code: the old code shows no holder and, once its phone is unlinked,
      offers Delete code.
    - Confirm a *fresh* code can still be claimed. Nothing here touches `/codes` or the rules, but
@@ -636,12 +670,12 @@ leading +91 or 0. Edit holder changes them, and every change is in the row's his
 is left with no holder. If a phone is still on it, Unlink phone; it then offers Delete code.
 
 **Someone stops using the service** — Remove holder. The code goes On hold: its phone stops within a
-minute and every action on the code is locked. A mistake is undone from **Removed holders**, below
-the codes table, with Restore holder — for 30 days. Restore puts the code back exactly as it was,
-including Disabled if it was.
+minute and every action on the code but Restore holder is locked. A mistake is undone with
+**Restore holder**, on the code's own row or in **Holders** — for at least 30 days. Restore puts the code back
+exactly as it was, including Disabled if it was.
 
-**The purge** — `purgeInstallTrigger()` once, from the editor. Every 30 days it erases holders
-removed at least 30 days earlier: the `/holders` record goes, the code is unlinked and un-stopped
+**The purge** — `purgeInstallTrigger()` once, from the editor. On the 1st of each month it erases
+holders removed at least 30 days earlier: the `/holders` record goes, the code is unlinked and un-stopped
 and goes back to Unused, Printed is cleared, and the note stays. `purgeDryRun()` lists what is due
 and changes nothing.
 

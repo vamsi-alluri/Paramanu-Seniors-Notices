@@ -1003,8 +1003,9 @@
       'Remove ' + name + ' from ' + formatCode(code) + '?\n\n' +
       formatCode(code) + ' goes On hold: its phone stops receiving notices, and nothing can be done to ' +
       'the code until the holder is restored.\n\n' +
-      'You can restore ' + name + ' from the code\'s own row, or from Holders, for 30 days. ' +
-      'After that their details are erased for good and the code goes back to Unused.'
+      'You can restore ' + name + ' from the code\'s own row, or from Holders, for at least 30 days. ' +
+      'On the 1st of the month after that, their details are erased for good and the code goes ' +
+      'back to Unused.'
     )) return;
     run(name + ' removed. ' + formatCode(code) + ' is On hold. Restore is on its row.').removeHolder(row.holder.id);
   }
@@ -1122,7 +1123,9 @@
         state = '<span class="pill hold">Removed</span>' +
                 '<div class="sub" style="margin:4px 0 0">' + stamp(r.removed.removedAt) +
                 ' <span class="who">' + escapeHtml(r.removed.removedBy) + '</span>' +
-                '<br>Restorable until ' + new Date(r.removed.purgeAfter).toLocaleDateString() + '</div>';
+                // purgeAfter is the promise, not the day: the purge only runs on the 1st, so the
+                // holder is erased on the first 1st after it.
+                '<br>Restorable until at least ' + new Date(r.removed.purgeAfter).toLocaleDateString() + '</div>';
         actions = actionButton('Restore holder', 'restoreHolder', p.id);
       } else {
         // The code's status, not a status of their own: what staff want to know about a holder is

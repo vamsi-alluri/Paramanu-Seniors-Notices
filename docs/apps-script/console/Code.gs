@@ -21,8 +21,8 @@
  *  5. Deploy -> Web app.
  *       Execute as:     User accessing the web app   <- REQUIRED, see requireEditor_
  *       Who has access: Anyone with a Google account
- *  6. Run purgeInstallTrigger() once from the editor. Every 30 days it erases holders removed more
- *     than 30 days ago; purgeDryRun() lists what it would erase and changes nothing.
+ *  6. Run purgeInstallTrigger() once from the editor. On the 1st of each month it erases holders
+ *     removed more than 30 days ago; purgeDryRun() lists what it would erase and changes nothing.
  *
  * This console never gets FCM credentials and cannot broadcast anything itself; issuing codes and
  * reaching four hundred phones stay separate jobs. Disable, Enable, removing or restoring a holder,
@@ -989,16 +989,19 @@ function purgeDryRun() {
 }
 
 /**
- * Creates the purge trigger, every 30 days. Safe to run twice: it removes any existing one first.
+ * Creates the purge trigger, on the 1st of each month. Safe to run twice: it removes any existing
+ * one first.
  *
- * With a 30-day run and 30-day retention, a removed holder is erased between 30 and 60 days after
- * removal. At least 30 is the promise; the rest is only how long the trigger sleeps between runs.
+ * A fixed day rather than every 30 days, so the console can name the day and staff can tell the
+ * person on the phone when it happens. With 30-day retention a removed holder is erased on the
+ * first 1st of the month after those 30 days are up, between 30 and about 61 days after removal.
+ * At least 30 is the promise; the rest is only the wait for the next 1st.
  */
 function purgeInstallTrigger() {
   requireEditor_();
   purgeRemoveTriggers_();
-  ScriptApp.newTrigger('purgeRun').timeBased().everyDays(30).create();
-  Logger.log('Trigger installed: purgeRun every 30 days.');
+  ScriptApp.newTrigger('purgeRun').timeBased().onMonthDay(1).create();
+  Logger.log('Trigger installed: purgeRun on the 1st of each month.');
 }
 
 function purgeStopTrigger() {

@@ -56,7 +56,8 @@ happens to them when someone leaves, and how do the buttons stop being confused 
   refused every action. Restore puts the code back as it was, Disabled included (kept as
   `wasDisabled`). On hold is derived from the audit, like Printed, so `/codes` and the rules are
   untouched.
-- A trigger every 30 days erases holders removed at least 30 days earlier and returns their codes to
+- A trigger on the 1st of each month (every 30 days until 2026-10-13, changed so the console can
+  name the day) erases holders removed at least 30 days earlier and returns their codes to
   Unused.
 - Unlink phone no longer clears Printed; the slip stays with its holder.
 - A code with a holder, a phone, or On hold cannot be deleted. Move the holder first.
