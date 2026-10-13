@@ -6,7 +6,12 @@
   /* 100% on the root means the browser's own default text size, and every size below is in rem,
      so a reader who has set a larger default -- or pressed Ctrl and + -- gets the whole page
      larger, tables included. Nothing here may be set in px, or it will ignore them. */
-  :root { color-scheme: light; font-size: 100%; }
+  :root { color-scheme: light; font-size: 100%;
+          /* The width of a field and of anything that has to line up with one. In rem, not ch:
+             ch is the width of a "0" in the element's own font, so the counters at .85rem came out
+             a good deal narrower than the fields they sit under and stopped short of the edge.
+             rem is the same length everywhere, and still scales with the reader's text size. */
+          --measure: 42rem; }
   html { scroll-behavior: smooth; }
   body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
          background: #f4f6fb; color: #10131a; font-size: 1rem; line-height: 1.5; }
@@ -48,15 +53,19 @@
   button:disabled { opacity: .5; cursor: default; }
   input, textarea { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
                     background: #fff; color: #10131a; }
-  /* A notice is short prose. Typing it across a 1700px line is no easier to read back than a
-     table row is, so the fields keep a measure even when the card does not. */
-  .wide { width: 100%; max-width: 80ch; box-sizing: border-box; }
-  textarea.wide { min-height: 120px; resize: vertical; line-height: 1.5; }
+  /*
+    A field is its label, its box and its counter in one container, and the container holds the
+    measure. Everything inside fills it, so the counter ends exactly where the box ends however the
+    type is sized -- nothing has a width of its own to keep in step with anything else.
 
-  label { display: block; font-size: 1rem; color: #3c4455; margin: 16px 0 6px; }
-  /* Capped to the same measure as the field it counts, or the right-aligned number drifts off to
-     the far edge of a full-width page and stops reading as belonging to anything. */
-  .count { font-size: .85rem; color: #3c4455; text-align: right; margin-top: 4px; max-width: 80ch; }
+    A notice is short prose, so the column keeps a measure even when the card does not.
+  */
+  .field { max-width: var(--measure); margin-bottom: 18px; }
+  .field input, .field textarea { width: 100%; box-sizing: border-box; }
+  .field textarea { min-height: 120px; resize: vertical; line-height: 1.55; }
+
+  label { display: block; font-size: 1rem; color: #3c4455; margin: 0 0 6px; }
+  .count { font-size: .85rem; color: #3c4455; text-align: right; margin-top: 4px; }
   .count.over { color: #b3261e; font-weight: 600; }
 
   /* One-tap saved messages. Dashed means "start from nothing" rather than from a saved wording. */
@@ -88,9 +97,16 @@
   .tablewrap { overflow-x: auto; }
   .failed { color: #b3261e; }
 
-  /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
-  .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
-         margin-bottom: 16px; display: none; }
+  /*
+    Sits with the Send button rather than at the top of the page.
+
+    Sticky is no use here: Apps Script serves this page in an auto-height iframe, so the inner
+    document never scrolls -- the parent window does. Nothing inside can pin itself to the reader's
+    screen, which is why a message at the top of the page was being written somewhere nobody was
+    looking. Next to the button that caused it, it cannot be missed.
+  */
+  .msg { padding: 10px 12px; border-radius: 8px; margin: 0 0 14px; display: none;
+         max-width: var(--measure); box-sizing: border-box; }
   .msg.err { background: #f9dedc; color: #410e0b; display: block; }
   .msg.ok { background: #d6e2f5; color: #03152e; display: block; }
 </style>
@@ -112,8 +128,6 @@
 
 <div class="page">
 
-  <div id="msg" class="msg"></div>
-
   <div class="card" id="compose">
     <h1>Send a notice</h1>
     <div class="sub">
@@ -129,15 +143,19 @@
 
     <div class="divider"></div>
 
-    <label for="title">Title</label>
-    <input type="text" id="title" class="wide" maxlength="120" oninput="onEdit()"
-           placeholder="Dispensary closed on Thursday 28 August">
-    <div class="count" id="titleCount"></div>
+    <div class="field">
+      <label for="title">Title</label>
+      <input type="text" id="title" maxlength="120" oninput="onEdit()"
+             placeholder="Dispensary closed on Thursday 28 August">
+      <div class="count" id="titleCount"></div>
+    </div>
 
-    <label for="body">Message</label>
-    <textarea id="body" class="wide" maxlength="900" oninput="onEdit()"
-              placeholder="OPD will reopen at 9 am on Friday."></textarea>
-    <div class="count" id="bodyCount"></div>
+    <div class="field">
+      <label for="body">Message</label>
+      <textarea id="body" maxlength="900" oninput="onEdit()"
+                placeholder="OPD will reopen at 9 am on Friday."></textarea>
+      <div class="count" id="bodyCount"></div>
+    </div>
     <div class="sub">
       A link to a PDF or a picture in the message is shown in the app as well, as an attachment.
       Only the first such link is used.
@@ -159,13 +177,17 @@
 
     <div class="divider"></div>
 
-    <label for="pin">Staff PIN</label>
-    <input type="password" id="pin" maxlength="40" inputmode="numeric" autocomplete="off"
-           oninput="onEdit()" placeholder="Required for every send" style="min-width:280px">
-    <div class="sub" style="margin-top:6px">
-      Typed each time on purpose. It is never saved in this browser, so a page left open on a shared
-      computer cannot be used to send.
+    <div class="field">
+      <label for="pin">Staff PIN</label>
+      <input type="password" id="pin" maxlength="40" inputmode="numeric"
+             autocomplete="off" oninput="onEdit()" placeholder="Required for every send">
+      <div class="sub" style="margin: 6px 0 0">
+        Typed each time on purpose. It is never saved in this browser, so a page left open on a
+        shared computer cannot be used to send.
+      </div>
     </div>
+
+    <div id="msg" class="msg"></div>
 
     <div class="bar" style="margin-bottom:0">
       <button id="send" onclick="send()" disabled>Send to everyone</button>
@@ -298,6 +320,9 @@
         el('pin').value = '';
         onEdit();
         show(e.message, true);
+        // Straight back into the box that has to be retyped, so the next try starts where the
+        // message says it should.
+        el('pin').focus();
       })
       .sendNotice(t, b, el('pin').value);
   }
