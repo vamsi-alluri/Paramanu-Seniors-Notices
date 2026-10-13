@@ -60,17 +60,19 @@
   .group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; flex: 1;
            border: 1px solid #c3c9d6; border-radius: 10px; padding: 10px 12px; background: #f8f9fc; }
 
-  /* A filter inside a sortable header. It must not inherit the header's capitals and spacing. */
-  th select.thfilter { display: block; margin-top: 5px; font-size: .9rem; padding: 4px 6px;
-                       font-weight: normal; }
   input[type=color] { padding: 2px; width: 38px; }
   .wide { width: 100%; box-sizing: border-box; }
 
   table { border-collapse: collapse; width: 100%; font-size: 1rem; }
   /* Tall rows. Space between lines does more for reading across a wide row than any rule drawn
      down it, and the eye losing its place mid-row was the actual complaint. */
-  th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e6e9f0;
+  th, td { text-align: left; padding: 11px 8px; border-bottom: 1px solid #e6e9f0;
            vertical-align: top; line-height: 1.55; }
+  /* A dotted rule between columns rather than a solid one. Enough to hold the eye inside a column
+     on a nine-column row, faint enough that the row still reads across as one thing -- a solid
+     grid chops it into boxes, which is the opposite of what reading a row needs. Left-hand border
+     only, so the first column and a full-width history cell keep a clean edge. */
+  th + th, td + td { border-left: 1px dotted #cdd3e0; }
   /* Sentence case, not capitals: word shape is one of the strongest cues a reader has and
      uppercase throws it away. */
   th { font-size: .95rem; font-weight: 600; color: #3c4455; }
@@ -84,7 +86,10 @@
   th .arrow { font-size: .7rem; margin-left: 5px; color: #14315c; }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
           font-size: 1.15rem; letter-spacing: .06em; }
-  .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: .9rem; }
+  /* nowrap matters now the column is sized by its content: "On hold" broke over two lines and the
+     999px radius turned the pill into a circle. The words set the column's width instead. */
+  .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: .9rem;
+          white-space: nowrap; }
   .free { background: #d6e2f5; color: #03152e; }
   /* Between free and used: a slip exists, but nobody has activated it yet. */
   .printed { background: #dff0e2; color: #0d2f16; }
@@ -117,6 +122,19 @@
   .who { color: #5a6478; }
   .toggle { font: inherit; font-size: .95rem; background: none; border: 0; padding: 0;
             color: #14315c; cursor: pointer; text-decoration: underline; white-space: nowrap; }
+
+  /*
+    The banner editor is its own preview. It carries the app's own banner colours, width and type,
+    so what is typed here is what appears on the phone -- there is no second box further down that
+    could drift out of step with it.
+
+    420px is a phone's width. Writing a banner on a line twice that long is how a two-line note
+    turns into five lines on the device.
+  */
+  .bannerbox { background: #faf4e6; border: 1px solid #e0e4ee; border-radius: 12px; padding: 16px;
+               min-height: 120px; max-width: 420px; font-size: 1rem; line-height: 1.55;
+               color: #10131a; }
+  .bannerbox:focus { outline: 2px solid #14315c; outline-offset: 2px; }
 
   /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
   .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
@@ -207,6 +225,12 @@
       <div class="bar">
         <input type="search" id="search" oninput="setSearch(this.value)"
                placeholder="Search by code, name, CHSS number, telephone or note">
+        <!-- Out of the Status header and in beside the search: a select inside a column heading
+             sets that column's width, and it was the widest thing in it by far. -->
+        <label class="sub" style="margin:0">Status
+          <select id="statusFilter" aria-label="Show only codes with this status"
+                  onchange="setStatusFilter(this.value)"></select>
+        </label>
       </div>
 
       <div class="tablewrap">
@@ -214,11 +238,7 @@
         <thead>
           <tr>
             <th class="sort" onclick="sortCodes('code')">Code<span class="arrow" id="ac-code"></span></th>
-            <th class="sort" onclick="sortCodes('status')">Status<span class="arrow" id="ac-status"></span>
-              <!-- stopPropagation: choosing a filter must not also re-sort the column. -->
-              <select id="statusFilter" class="thfilter" aria-label="Show only codes with this status"
-                      onclick="event.stopPropagation()" onchange="setStatusFilter(this.value)"></select>
-            </th>
+            <th class="sort" onclick="sortCodes('status')">Status<span class="arrow" id="ac-status"></span></th>
             <th class="sort" onclick="sortCodes('name')">Name<span class="arrow" id="ac-name"></span></th>
             <th class="sort" onclick="sortCodes('chss')">CHSS number<span class="arrow" id="ac-chss"></span></th>
             <th class="sort" onclick="sortCodes('phone')">Telephone<span class="arrow" id="ac-phone"></span></th>
@@ -720,15 +740,15 @@
         // The note stays: it says why every other action is missing, and names the deadline, so
         // nobody has to scroll down to find out what happens if they leave it.
         if (gone) {
+          // The deadline and what happens at it live in Holders, where the removed person is the
+          // subject. Here the row only has to say why the other buttons are missing.
           actions.push(actionButton('Restore holder', 'restoreHolder', gone.id));
-          actions.push('<span class="locked">Everything else is locked until ' + escapeHtml(gone.name) +
-                       ' is restored. Erased after ' + new Date(gone.purgeAfter).toLocaleDateString() +
-                       ', and then this code goes back to Unused.</span>');
+          actions.push('<span class="locked">Locked until ' + escapeHtml(gone.name) +
+                       ' is restored</span>');
         } else {
           // On hold with nobody in the removed list: the holder was erased between the two reads,
           // or the lists disagree. Refreshing is the only honest offer.
-          actions.push('<span class="locked">Locked until the holder is restored. ' +
-                       'Refresh to see whether they are still there.</span>');
+          actions.push('<span class="locked">Locked. Refresh to see the holder.</span>');
         }
       } else {
         if (r.revoked) actions.push(actionButton('Enable', 'enable', r.code));
@@ -1313,7 +1333,14 @@
     if (clean !== box.innerHTML) box.innerHTML = clean;
   }
 
-  document.getElementById('banner').addEventListener('blur', tidyBanner);
+  document.getElementById('banner').addEventListener('blur', function (e) {
+    // Clicking a colour picker blurs the box. Rewriting innerHTML at that moment would throw away
+    // the selection the colour is about to be applied to, which looked like the colour buttons
+    // doing nothing, so a blur into this card's own controls is left alone.
+    var to = e.relatedTarget;
+    if (to && to.closest && to.closest('#banner-section')) return;
+    tidyBanner();
+  });
 
   // onmousedown, not onclick: the editor must not lose its selection before the command runs.
   function fmt(event, command, value) {

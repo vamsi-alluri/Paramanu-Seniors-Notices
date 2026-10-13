@@ -54,7 +54,9 @@
   textarea.wide { min-height: 120px; resize: vertical; line-height: 1.5; }
 
   label { display: block; font-size: 1rem; color: #3c4455; margin: 16px 0 6px; }
-  .count { font-size: .85rem; color: #3c4455; text-align: right; margin-top: 4px; }
+  /* Capped to the same measure as the field it counts, or the right-aligned number drifts off to
+     the far edge of a full-width page and stops reading as belonging to anything. */
+  .count { font-size: .85rem; color: #3c4455; text-align: right; margin-top: 4px; max-width: 80ch; }
   .count.over { color: #b3261e; font-weight: 600; }
 
   /* One-tap saved messages. Dashed means "start from nothing" rather than from a saved wording. */
