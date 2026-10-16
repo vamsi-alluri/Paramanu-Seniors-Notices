@@ -295,18 +295,22 @@ confident wrong answer.
 
 **What the dataset cannot see**
 
-4. **Whether `first_open` is recorded is not established.** The manifest default does not appear
-   to discard the install: a device capture of this build with collection off logged
-   `FA: Persisting first open: 1792143140354` and `App measurement setting deferred collection:
-   true`, and left `deferred_analytics_collection=true` in
-   `com.google.android.gms.measurement.prefs.xml` (`task-12-report.md`). So the SDK seems to hold
-   the first-open instant rather than drop it. Nothing is sent while the gate is shut, so the
-   privacy position does not depend on this. What it leaves open is the dataset: whether
-   `first_open` arrives on the first *enabled* session, and with what timestamp, is not known, so
-   do not read acquisition counts as starting at either install or the first enabled session. What
-   would settle it is observing the first enabled session on a device that was installed while the
-   switch was off. Our own events are not retroactive: nothing the app logs while the switch is
-   off is sent later.
+4. **`first_open` does arrive on the first enabled session.** Settled on device 2026-10-16, on a
+   fresh install made with `/config/analytics/enabled` already `true`. In order, from the app's own
+   process: `Persisting first open: 1792162548106` and `App measurement setting deferred
+   collection: true` with the gate still shut; then, 752 ms later, `Setting app measurement enabled
+   (FE): true`, `Recording app launch after enabling measurement for the first time (FE)`, and
+   `origin=auto,name=first_open(_f)` carrying `deferred_analytics_collection(_dac)=1` and
+   `previous_first_open_count(_pfo)=3`. `session_start` and `ga_campaign` (`medium=organic,
+   source=google-play`) followed, and the batch uploaded under `app_id:
+   org.paramanuseniorshealth.notices`. So the SDK replays the deferred install rather than
+   discarding it, and **acquisition counts begin at the first enabled session, not at install**.
+   Our own events remain non-retroactive: nothing the app logs while the switch is off is sent
+   later.
+
+   What that capture still cannot separate is whether the `first_open` timestamp is the install
+   instant or the enabling instant — here they were 861 ms apart. A phone installed while the
+   switch is off and enabled days later would answer it. No query below depends on which it is.
 5. **`delivery_lag_ms` can be negative**, meaning that handset's clock is behind FCM's. Filter
    `>= 0` before any transit-time percentile. Absence means FCM supplied no `sentTime`, not a bad
    one.
@@ -382,6 +386,32 @@ confident wrong answer.
 17. **`activation_submitted` is an upper bound on attempts.** A submit with no result is possible
     if the ViewModel is cleared mid-flight. The reverse — a result with no submit — cannot happen.
 
+**Found on device, 2026-10-16**
+
+22. **The first launch after an install logs nothing.** The gate opens only when the config read
+    returns, measured at 752 ms after process start, which is after the first screen has composed.
+    On that one launch `app_open_source`, `network_state_on_open` and `activation_shown` are
+    dropped — observed, not inferred: all three fired on the next launch, from the cached value,
+    and none on the first. Every later launch is unaffected, because `cached()` is read before
+    composition. The cost falls on exactly the row that matters most: **a user who installs and
+    activates in the same sitting contributes `activation_submitted` and `activation_result` with
+    no `activation_shown`**, so the funnel's first step is understated and
+    `submitted / shown` can exceed 1. Count the funnel from `activation_submitted`, or accept
+    `shown` as a lower bound. Nothing is lost for a user who comes back later.
+23. **`notice_card_visible` keeps accruing behind a fully covering surface.** The notification
+    shade, a permission dialog and the task switcher do not stop the activity, so dwell continues
+    while the list is invisible. A 77-second row in the verification run was mostly shade. Treat
+    long rows as attention *plus* whatever sat on top of them, and prefer medians to means.
+24. **`attachment_fetch_end` can report `size_bytes = 0` with `outcome = fetched`.** Caused by a
+    pre-existing race in the PDF path, not by the instrumentation: `NoticeImageStore.kt:302` names
+    its scratch file `notice_$logId-doc.part` with no uniqueness, so two concurrent fetches of one
+    notice's PDF — a tap-time fetch racing the catch-up sweep, which is what a notification tap
+    produces — share it, and the winner's `moveInto` leaves the loser's `target.length()` at 0
+    while `completed` is still true. Observed twice in one sitting. Until that is fixed, **filter
+    `size_bytes > 0` on `kind = 'pdf'` rows**; the comment at `NoticeImageStore.kt:481` promising
+    "otherwise absent, never zero" does not hold. The same race also discards the downloaded file,
+    so the user pays for those bytes twice — see `docs/analytics-device-verification.md`.
+
 ### Where logging must never go
 
 `NoticeRow`'s body performs three `listFiles()` disk scans on **every recomposition**, deliberately
@@ -437,7 +467,16 @@ stops a full-dataset scan against the 1 TiB monthly allowance. Dry-run every que
 
 Actions only the account owner can take. Order matters where stated: Data Safety is declared
 app-wide and the open-testing track is public, so **items 4 and 5 must be live before a collecting
-build reaches open testing**, not alongside it. Item 10 is what starts collection, so do it last.
+build reaches open testing**, not alongside it.
+
+> **Changed 2026-10-16: items 9 and 10 are done.** The `config/analytics` read rule is deployed and
+> `/config/analytics/enabled` is `true`, for the on-device verification. Nothing collects today,
+> because the only build in open testing is 0.7.2 / versionCode 13, which has no analytics code.
+> But **the gate is already open**, so the switch is no longer the thing that starts collection —
+> the *build* is. Uploading a collecting build now begins collection on first launch, with no
+> further action. Items 1–8 are therefore blocking on that upload. If any of them will not be
+> ready, set `/config/analytics/enabled` back to `false` before the build goes up, and treat
+> turning it on again as the last step.
 
 1. **GA4 retention.** Admin, Data settings, Data retention: 2 months, and turn OFF "Reset user data
    on new activity". Skipped: the policy's "two months" is false.

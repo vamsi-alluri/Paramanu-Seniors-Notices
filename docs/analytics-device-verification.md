@@ -21,10 +21,68 @@ DebugView is the only thing that tests that belief. Two failures can only be cau
 For every event, check the name appears and every parameter listed below is present with a sensible
 value.
 
-## What has already been verified, and its limits
+## Result of the 2026-10-16 walk: all thirteen events observed
 
-Only the **OFF path** has been observed, on the current debug build (versionCode 13, versionName
-0.7.2, fresh install). Decisive lines, all from the app's own process:
+Run on `f0d9797`, debug build, `SM_S928U1` / Android 16, fresh install, switch `true`, every line
+attributed to `app_id: org.paramanuseniorshealth.notices` via the upload records. **All thirteen
+event names arrive with their parameter sets intact** — no name was silently dropped, which was the
+one failure this walk existed to rule out. Observed values:
+
+| # | Event | Observed |
+|---|---|---|
+| 1 | `fetch_policy_decision` | `kind=img\|pdf\|pdf_thumb`, `probe=reachable`, `decision=fetch`, `size_known=1`, `size_bytes=5804…13374538` |
+| 2 | `network_state_on_open` | `metered=0, roaming=0` (×11) |
+| 3 | `attachment_fetch_start` | both shapes: `jitter_seconds=5…32` + `enqueued_at_ms` on jitter-enqueued rows, both absent on sweep and tap rows; `attempt=0` |
+| 4 | `attachment_fetch_end` | `outcome=fetched`, `duration_ms=14…1014`, `http_status=200`, `size_bytes` — and twice `size_bytes=0`, see the race below |
+| 5 | `notice_received` | all four `has_image`/`has_pdf` combinations, `is_new=1`, `delivery_lag_ms=43…388680` (the large values are a genuine FCM queue delay) |
+| 6 | `notification_tapped` | `cold_start=1`, `ms_since_shown=31879`, `ms_since_process_start=34023` |
+| 7 | `app_open_source` | all three values: `launcher`, `link`, `notification` — and correctly silent on warm returns |
+| 8 | `notice_card_visible` | `notice_id` 1, 8–13; `position` 1–6; `visible_ms=101…265953` |
+| 9 | `image_viewer_closed` | `notice_id=8`, `duration_ms=11340`, `max_scale=1.0` |
+| 10 | `pdf_opened` | `notice_id=10`, `was_cached=0` then `1`, `size_bytes=13374538` |
+| 11 | `activation_shown` | `has_code=0` |
+| 12 | `activation_submitted` | no params |
+| 13 | `activation_result` | `mistyped`, `notaccepted`, `success` — never carrying the code |
+
+Also confirmed: `first_open`, `session_start` and `ga_campaign` arrive on the first *enabled*
+session, settling spec §9's item 4.
+
+**Parameter values still unobserved.** None risks a silently dropped event name, so these are
+lower-stakes than the above, but no device has produced them:
+
+- `max_scale` above 1.0 — needs a real two-finger pinch; `adb input` cannot do multi-touch, and the
+  viewer has no double-tap zoom.
+- `activation_result = offline` with `offline_cause`, and `= samecode`. The offline arm needs the
+  phone genuinely off the network; note that a "wifi off" automation may switch mobile data on,
+  which is what defeated the attempt on 2026-10-16. Use airplane mode, and keep adb on **USB** so
+  the connection survives.
+- `decision = defer`, `probe = skipped|sender|unreachable`, `metered=1`, `roaming=1` — all need a
+  metered or roaming network, or an unreachable host.
+- `outcome = failed`, `attempt > 0` — need a download interrupted mid-flight.
+- `is_new = 0` — needs the same `logId` delivered twice.
+
+### The defect this walk found
+
+`attachment_fetch_end` twice reported `size_bytes=0` with `outcome=fetched` and `http_status=200`.
+Cause, pre-existing and not from the analytics work (`1013305`, 2026-09-09):
+`NoticeImageStore.kt:302` names its scratch file `notice_$logId-doc.part` with no uniqueness, while
+the image path at `:237` correctly uses `File.createTempFile`. Two concurrent fetches of one
+notice's PDF — a tap-time fetch racing the catch-up sweep, which is exactly what tapping a
+notification produces — share that path, and the winner's `moveInto` leaves the loser's
+`target.length()` at 0 while `completed` is still true.
+
+The analytics consequence is a 0 that reads as a real measurement. The product consequence is
+worse: the file is lost, so nothing is cached. After the sweep had already downloaded a 13,374,538-byte
+PDF, tapping it logged `was_cached=0` and downloaded the same 13 MB again — verified by the
+`attachment_fetch_start`/`end` pair at 10:23:59. Only 3 of the 6 PDFs delivered that sitting were
+on disk afterwards. On a 5.6 MB circular over mobile data this is a real cost to the reader, and it
+also defeats the stated purpose of the scratch name at `:304` ("an interrupted download cannot
+leave a truncated file that looks cached").
+
+## Appendix: the OFF path, verified earlier
+
+Observed before the switch was turned on, on the same build. Decisive lines, all from the app's own
+process:
 
 ```
 I FA : App measurement disabled via the manifest
@@ -40,7 +98,15 @@ The merged and installed manifests carry `google_analytics_adid_collection_enabl
 The Crashlytics preference file holds `firebase_crashlytics_collection_enabled = false`. The capture
 contained no `Uploading data`, `Network upload` or `Logging event` lines.
 
-Limits, stated plainly:
+**The fail-safe was then verified for real.** Before the `config/analytics` read rule was deployed,
+a fresh install logged `AnalyticsConfig: Could not read the analytics switch: Permission denied`
+twice, wrote no `analytics.xml`, and left `Setting app measurement enabled (FE): false` — no
+`Logging event`, no `Uploading data`, no `Network upload` from our process. An unreachable switch
+leaves collection off rather than falling open, and a phone that has never reached the node reads
+off. The two denials 0 ms apart are the `onCreate` read plus the first `ON_RESUME` re-read, which
+incidentally confirms the foreground re-read landed.
+
+Limits of the original capture, stated plainly:
 
 - The capture covered a **48 ms foreground behind a locked screen, with the phone in Doze**, then
   about 90 seconds in the background. It is not a test of the gate under use.
@@ -105,6 +171,35 @@ adb logcat -v threadtime > partB.log
 
 The app's pid, for filtering: `adb shell pidof org.paramanuseniorshealth.notices`.
 
+## Warning: never `am force-stop` during a push test
+
+`am force-stop` puts the package in the **stopped state** (`dumpsys package … | grep stopped=`),
+and **FCM does not deliver to a stopped app**. In the 2026-10-16 sitting this silently swallowed
+about 26 of 31 test sends: the only ones that arrived were those that happened to land while a
+process was alive. There is no error anywhere — the sends simply never appear.
+
+Only a launch clears the flag; `am set-stopped-state` and `cmd package set-stopped-state` do not
+exist on this device's build. So, for anything involving a real push:
+
+```
+adb shell am start -n org.paramanuseniorshealth.notices/.MainActivity   # clears stopped=true
+adb shell am kill org.paramanuseniorshealth.notices                     # drops the process, flag stays clear
+```
+
+`am kill` is the right tool for a cold-start test: the process dies, FCM still delivers, and the
+next push starts a fresh process, so `cold_start=1` is still reachable. Confirm with
+`dumpsys package org.paramanuseniorshealth.notices | grep -oE "stopped=[a-z]+"` before asking the
+sender for anything.
+
+## Warning: test notices are silent and easy to miss
+
+With the Testing switch on, test notices post to channel `notices_testing` at **importance 2**
+(low): no sound, no heads-up, filed in the collapsed silent section of the shade. They are easy to
+read as "nothing arrived" — this happened during the 2026-10-16 sitting. Confirm with
+`adb shell dumpsys notification --noredact | grep -c "pkg=org.paramanuseniorshealth.notices"`
+rather than by looking at the phone. Real notices use `notices_default` at importance 4 and are
+unaffected.
+
 ## Warning: other apps share the logcat
 
 The phone carries other apps whose measurement traffic appears in the same logcat, and a capture on
@@ -144,7 +239,7 @@ mode, `Logging event (FE): ...`.
 | 8 | `notice_card_visible` | On the notice list, scroll so a card is on screen, hold, then scroll away or background the app (the stretch is reported when it ends or the activity stops). | `notice_id`, `visible_ms`, `has_image`, `has_pdf`, `position` (1-based, excludes the info header). Needs at least one notice. |
 | 9 | `image_viewer_closed` | Open a notice's image, pinch to zoom, press Back. | `notice_id`, `duration_ms`, `max_scale` as a double above 1.0 after pinching. Needs a notice with a cached image. |
 | 10 | `pdf_opened` | Tap a notice's PDF. Tap once uncached (preceded by `attachment_fetch_start/end` with `kind=pdf`), then again. | `notice_id`, `was_cached` (0 then 1), `size_bytes`. Logged before the external viewer launches. Needs a notice with a PDF. |
-| 11 | `activation_shown` | Reach the activation screen. Only in the unactivated state, so do this **before** redeeming. Fires once per appearance. | `has_code` is 0, or 1 when you arrive through a link carrying `?code=`. |
+| 11 | `activation_shown` | Reach the activation screen. Fires once per appearance. | `has_code` is **0 on a fresh install and 1 on re-entry from Settings** — it means the phone already holds a working code, *not* that a link carried one. A link with `?code=` still gives `has_code=0` on a fresh install (verified 2026-10-16). A revoked phone counts as 0. So `has_code=1` needs an activated phone, and cannot be reached before redeeming. |
 | 12 | `activation_submitted` | Press the activate button. | No params. |
 | 13 | `activation_result` | The outcome of that submit. | `result` string (never the code); `offline_cause` only when the result is Offline. |
 
