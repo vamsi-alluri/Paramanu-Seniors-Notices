@@ -49,6 +49,7 @@
     <string name="toast_saved">Saved.</string>
     <string name="toast_save_failed">Could not save that. Try another folder.</string>
     <string name="toast_pdf_opening_online">Opening it on the website instead.</string>
+    <string name="toast_already_activated">This phone is already activated.</string>
 
     <!-- Link preview card -->
     <string name="link_open">Open link</string>

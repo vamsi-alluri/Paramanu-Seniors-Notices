@@ -52,10 +52,16 @@ fun ActivationScreen(
     error: RedeemResult?,
     onErrorDismissed: () -> Unit,
     modifier: Modifier = Modifier,
+    prefill: String = "",
 ) {
     // Held unpunctuated. The dash is painted by CodeDashTransformation, so it cannot be deleted,
     // retyped, or land in the middle of a paste.
-    var code by remember { mutableStateOf("") }
+    //
+    // [prefill] arrives from an activation link and goes through the same clean() as typing and
+    // pasting, so a link cannot put anything in the field that a user could not have typed. It is
+    // never submitted for them: the button still has to be pressed, which keeps the code visible
+    // before it is spent and means a stale link fails where it can be seen.
+    var code by remember(prefill) { mutableStateOf(CodeDashTransformation.clean(prefill)) }
     val complete = code.length == ActivationCode.LENGTH
 
     Column(

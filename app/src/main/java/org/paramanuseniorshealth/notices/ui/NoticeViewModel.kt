@@ -296,6 +296,18 @@ class NoticeViewModel(
      * delivery gate permits it: locking someone out of notices they have already received because
      * their phone had no signal at launch would be indefensible.
      */
+    /**
+     * An activation link arrived on a phone that is already working.
+     *
+     * Says so rather than doing nothing. A silent drop is right for a notification the app cannot
+     * resolve, but this one follows a deliberate tap on a link, and a tap that appears to do
+     * nothing at all reads as the app being broken -- the reading this app can least afford from
+     * someone who was handed a slip at a counter and told it would work.
+     */
+    fun noteAlreadyActivated() {
+        _messages.tryEmit(R.string.toast_already_activated)
+    }
+
     fun refreshActivation() {
         viewModelScope.launch { applyVerification() }
     }

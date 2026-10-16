@@ -31,6 +31,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
+import org.paramanuseniorshealth.notices.activation.ActivationLink
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
@@ -57,18 +58,33 @@ class MainActivity : ComponentActivity() {
      */
     private val tappedLogId = MutableStateFlow<String?>(null)
 
+    /**
+     * The code from an activation link, if the app was opened by one.
+     *
+     * A flow for the same reason as [tappedLogId]: the link can arrive through onNewIntent while
+     * the code screen is already up, and that has to reach the field rather than be dropped
+     * because the first value was consumed.
+     */
+    private val deepLinkCode = MutableStateFlow<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
         persistFromNotificationIntent(intent)
+        readActivationLink(intent)
 
         setContent {
             ParamanuNoticesTheme {
                 // Recomposes when a new intent arrives while the app is already open, which is the
                 // common case: the user taps a notice while the app sits in the background.
                 val tapped by tappedLogId.collectAsStateWithLifecycle()
-                NoticesApp(tappedLogId = tapped)
+                val linkCode by deepLinkCode.collectAsStateWithLifecycle()
+                NoticesApp(
+                    tappedLogId = tapped,
+                    deepLinkCode = linkCode,
+                    onDeepLinkConsumed = { deepLinkCode.value = null },
+                )
             }
         }
     }
@@ -77,6 +93,19 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         persistFromNotificationIntent(intent)
+        readActivationLink(intent)
+    }
+
+    /**
+     * Picks the code out of an `https://paramanuseniorshealth.org/activation?code=...` intent.
+     *
+     * Only ever prefills. Redeeming a code spends it against this phone and cannot be undone from
+     * here, so that stays behind the button the user presses -- a link forwarded on to someone
+     * else must not be able to claim a code merely by being opened.
+     */
+    private fun readActivationLink(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_VIEW) return
+        ActivationLink.codeFrom(intent.data?.toString())?.let { deepLinkCode.value = it }
     }
 
     /**
@@ -120,6 +149,8 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun NoticesApp(
     tappedLogId: String?,
+    deepLinkCode: String?,
+    onDeepLinkConsumed: () -> Unit,
     viewModel: NoticeViewModel = viewModel(factory = NoticeViewModel.Factory),
 ) {
     val screen by viewModel.screen.collectAsStateWithLifecycle()
@@ -153,6 +184,17 @@ private fun NoticesApp(
     // tapping a second notification while the app is open moves to that one.
     LaunchedEffect(tappedLogId) {
         tappedLogId?.let { viewModel.openFromNotification(it) }
+    }
+
+    // An activation link on a phone that already holds a working code says so and goes no further.
+    // Revoked is deliberately excluded: that phone still holds a code but is not activated, and it
+    // is exactly the phone a replacement link is meant for, so its link must reach the field.
+    val alreadyActivated = viewModel.activationCode != null && !revoked
+    LaunchedEffect(deepLinkCode, alreadyActivated) {
+        if (deepLinkCode != null && alreadyActivated) {
+            viewModel.noteAlreadyActivated()
+            onDeepLinkConsumed()
+        }
     }
 
     // A toast rather than a snackbar: the screen is about to be replaced by the code gate, and a
@@ -226,6 +268,7 @@ private fun NoticesApp(
                 busy = redeeming,
                 error = redeemError,
                 onErrorDismissed = viewModel::dismissRedeemError,
+                prefill = deepLinkCode.orEmpty(),
             )
         }
 
