@@ -70,6 +70,15 @@
             android:value="notices_default" />
 
         <!--
+          Belt and braces with the AD_ID permission removal above: this tells the Analytics SDK
+          itself never to collect the advertising identifier, so the guarantee does not rest on
+          dependency resolution alone.
+        -->
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
+            android:value="false" />
+
+        <!--
           Lets the photo viewer read a cached image without the app copying it into shared storage.
           The grant is read-only and per-Intent: the viewer receives a content:// URI it can display
           and pass onward to a share target, and loses access when the task ends.
