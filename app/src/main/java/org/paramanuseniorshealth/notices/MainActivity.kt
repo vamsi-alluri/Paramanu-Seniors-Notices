@@ -32,6 +32,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import org.paramanuseniorshealth.notices.activation.ActivationLink
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
@@ -73,6 +74,9 @@ class MainActivity : ComponentActivity() {
 
         persistFromNotificationIntent(intent)
         readActivationLink(intent)
+        // A recreated activity (rotation, process death) is handed the same intent again, with the
+        // same tap in it. That is the one action being replayed, not a second open.
+        if (savedInstanceState == null) logOpen(intent, coldStart = true)
 
         setContent {
             ParamanuNoticesTheme {
@@ -94,6 +98,40 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         persistFromNotificationIntent(intent)
         readActivationLink(intent)
+        logOpen(intent, coldStart = false)
+    }
+
+    /**
+     * Records how the app was opened and, for a tap, how long after posting it happened.
+     *
+     * Called from exactly one of [onCreate] and [onNewIntent] for any one launch intent: the system
+     * delivers an intent to a new instance or to a running one, never both. [coldStart] says which,
+     * so it means "this tap created the activity", not "the process was not running".
+     *
+     * Intents the system replays from recents carry their original extras, and with them an
+     * instant from some earlier tap. They are counted as a launcher open instead.
+     */
+    private fun logOpen(intent: Intent?, coldStart: Boolean) {
+        val app = application as NoticesApplication
+        val replayed = (intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0
+        val extras = intent?.extras.takeUnless { replayed }
+        val logId = extras?.getString(NoticeNotifications.EXTRA_LOG_ID)
+        val source = when {
+            logId != null -> "notification"
+            !replayed && intent?.action == Intent.ACTION_VIEW -> "link"
+            else -> "launcher"
+        }
+        app.analytics.log(AnalyticsEvent.AppOpen(source))
+        if (logId != null) {
+            val postedAt = extras?.getLong(NoticeNotifications.EXTRA_POSTED_AT, 0L) ?: 0L
+            app.analytics.log(
+                AnalyticsEvent.NotificationTapped(
+                    msSinceShown = postedAt.takeIf { it > 0 }
+                        ?.let { System.currentTimeMillis() - it },
+                    coldStart = coldStart,
+                )
+            )
+        }
     }
 
     /**

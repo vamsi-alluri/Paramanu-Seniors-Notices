@@ -9,6 +9,7 @@ import org.paramanuseniorshealth.notices.activation.ActivationRefreshWorker
 import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.activation.ActivationState
 import org.paramanuseniorshealth.notices.activation.Importance
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 
 class NoticeMessagingService : FirebaseMessagingService() {
 
@@ -89,6 +90,21 @@ class NoticeMessagingService : FirebaseMessagingService() {
                 pdfThumbUrl = pdfThumbUrl,
                 pdfPages = pdfPages,
                 pdfBytes = pdfBytes,
+            )
+
+            app.analytics.log(
+                AnalyticsEvent.NoticeReceived(
+                    hasImage = imageUrl != null,
+                    hasPdf = pdfUrl != null,
+                    isNew = isNew,
+                    // message.sentTime is the sender's clock, so this is the only honest source
+                    // for delivery lag. The receivedAt stored on a notice is not: it is parsed from
+                    // the logId and is the same on every phone. Zero means FCM did not say, which
+                    // is a missing measurement rather than a lag of nothing.
+                    deliveryLagMs = message.sentTime.takeIf { it > 0 }
+                        ?.let { System.currentTimeMillis() - it },
+                    msSinceProcessStart = System.currentTimeMillis() - app.processStartedAt,
+                )
             )
 
             // Nothing is downloaded here any more.

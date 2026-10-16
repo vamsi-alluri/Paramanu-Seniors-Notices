@@ -10,6 +10,7 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -101,6 +102,10 @@ object NoticeNotifications {
      * [hasPdf]/[hasImage] say what kind of attachment is coming, for the placeholder glyph used
      * when [image] is null -- either because it has not been fetched yet, or because [updatePicture]
      * is not what posted this notification. A real [image] always wins over the placeholder.
+     *
+     * [postedAt] is when the user was first shown this notice, which a tap later measures against.
+     * It defaults to now, so only a caller replacing an existing notification should pass it, and
+     * null means the original instant is unknown.
      */
     fun post(
         context: Context,
@@ -111,6 +116,7 @@ object NoticeNotifications {
         hasPdf: Boolean = false,
         hasImage: Boolean = false,
         channel: NoticeChannel = NoticeChannel.HIGH,
+        postedAt: Long? = System.currentTimeMillis(),
     ) {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
@@ -125,7 +131,11 @@ object NoticeNotifications {
             putExtra(EXTRA_LOG_ID, logId)
             putExtra(EXTRA_TITLE, title)
             putExtra(EXTRA_BODY, body)
+            postedAt?.let { putExtra(EXTRA_POSTED_AT, it) }
         }
+        // FLAG_UPDATE_CURRENT is what makes the extra above current: PendingIntents are matched
+        // without regard to extras, so a later post for the same logId would otherwise be handed
+        // the first one's intent.
         val pendingIntent = PendingIntent.getActivity(
             context,
             logId.hashCode(),
@@ -179,6 +189,9 @@ object NoticeNotifications {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
+            // A PendingIntent cannot be read back, so the instant is also kept where
+            // [updatePicture] can find it on the notification it is about to replace.
+            .apply { postedAt?.let { addExtras(Bundle().apply { putLong(EXTRA_POSTED_AT, it) }) } }
             // The worker re-posts this same id when the picture lands, up to an hour later. Without
             // this the phone would buzz a second time for a notice the user already read.
             .setOnlyAlertOnce(true)
@@ -290,9 +303,16 @@ object NoticeNotifications {
             // have buzzed a phone for a delivery check.
             channel = NoticeChannel.entries.firstOrNull { it.id == posted.notification.channelId }
                 ?: NoticeChannel.HIGH,
+            // The original instant, not now: this is a replacement of a notification the user may
+            // have been looking at for an hour, and stamping it afresh would shorten every
+            // shown-to-tapped interval for any notice whose picture arrived late. Absent when the
+            // notification being replaced carries none, so the interval is then left unmeasured.
+            postedAt = posted.notification.extras.getLong(EXTRA_POSTED_AT, 0L).takeIf { it > 0 },
         )
     }
 
+    /** When this phone posted the notification; see [post]. */
+    const val EXTRA_POSTED_AT = "postedAt"
     const val EXTRA_LOG_ID = "logId"
     const val EXTRA_TITLE = "title"
     const val EXTRA_BODY = "body"
