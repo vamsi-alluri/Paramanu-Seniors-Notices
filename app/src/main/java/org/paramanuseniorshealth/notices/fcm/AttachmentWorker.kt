@@ -136,9 +136,11 @@ class AttachmentWorker(
      * the connection, and counting it as a decline would inflate the deferral ratio.
      *
      * A size is reported only when one was measured or supplied, and is otherwise sent as absent
-     * rather than as zero. On the roaming short-circuit nothing is probed, so its size is present
-     * only when the sender supplied one (in practice a `pdf` with `pdfBytes`); a null there means
-     * the sender said nothing, not that we did not look. An unreachable probe is likewise absent.
+     * rather than as zero. What a null means depends on the branch the row came from:
+     *  - roaming short-circuit: nothing was probed, so a present size is always the sender's own
+     *    (only `pdf` carries one, from `pdfBytes`) and a null says nothing about the file's size;
+     *  - reachable: a probe did happen, so a null means the server withheld `Content-Length`;
+     *  - unreachable: no answer came back, so the size is always null.
      */
     private suspend fun decide(
         kind: String,
