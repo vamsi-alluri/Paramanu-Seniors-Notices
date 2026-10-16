@@ -14,7 +14,7 @@ class AnalyticsEventTest {
      * deliberately, and the size check below is what makes forgetting it fail.
      */
     private val allEvents: List<AnalyticsEvent> = listOf(
-        AnalyticsEvent.FetchPolicyDecision("pdf", true, false, 1L, true),
+        AnalyticsEvent.FetchPolicyDecision("pdf", true, false, 1L, "reachable", true),
         AnalyticsEvent.NetworkStateOnOpen(metered = true, roaming = false),
         AnalyticsEvent.AttachmentFetchStart("pdf", 1L, 30L, 1L, 2L, 0),
         AnalyticsEvent.AttachmentFetchEnd("pdf", 1L, 250L, "fetched", 200),
@@ -38,7 +38,8 @@ class AnalyticsEventTest {
     @Test
     fun `fetch policy decision carries the network facts`() {
         val event = AnalyticsEvent.FetchPolicyDecision(
-            kind = "pdf", metered = true, roaming = false, sizeBytes = 5_600_000, fetched = false,
+            kind = "pdf", metered = true, roaming = false, sizeBytes = 5_600_000,
+            probe = "reachable", fetched = false,
         )
         assertEquals("fetch_policy_decision", event.name)
         assertEquals("pdf", event.params["kind"])
@@ -54,7 +55,8 @@ class AnalyticsEventTest {
         // A server that sends no Content-Length must not be recorded as a zero-byte file: zero is
         // a measurement, and this is the absence of one.
         val event = AnalyticsEvent.FetchPolicyDecision(
-            kind = "img", metered = true, roaming = false, sizeBytes = null, fetched = false,
+            kind = "img", metered = true, roaming = false, sizeBytes = null,
+            probe = "reachable", fetched = false,
         )
         assertFalse(event.params.containsKey("size_bytes"))
         assertEquals(0L, event.params["size_known"])
@@ -96,6 +98,9 @@ class AnalyticsEventTest {
             "kind" to setOf("img", "link", "pdf_thumb", "pdf"),
             // FetchPolicyDecision itself: `fetched` true -> "fetch", false -> "defer".
             "decision" to setOf("fetch", "defer"),
+            // FetchPolicyDecision, set by AttachmentWorker.decide: the roaming short-circuit
+            // attempts no probe (skipped); otherwise the probe's own Reachable / Unreachable.
+            "probe" to setOf("skipped", "reachable", "unreachable"),
             // AppOpen, derived at launch: a logId extra present -> notification, else action
             // ACTION_VIEW -> link, else launcher.
             "source" to setOf("notification", "link", "launcher"),
@@ -133,7 +138,7 @@ class AnalyticsEventTest {
         // Each pair is a variant built with its nullable parameters null, and the keys that must
         // then be missing -- not present as 0, and not present as null.
         val cases = listOf(
-            AnalyticsEvent.FetchPolicyDecision("pdf", true, false, null, false) to listOf("size_bytes"),
+            AnalyticsEvent.FetchPolicyDecision("pdf", true, false, null, "reachable", false) to listOf("size_bytes"),
             AnalyticsEvent.AttachmentFetchStart("pdf", null, 30L, 1L, 2L, 0) to listOf("size_bytes"),
             AnalyticsEvent.AttachmentFetchEnd("pdf", null, 250L, "fetched", null) to listOf("size_bytes", "http_status"),
             AnalyticsEvent.NoticeReceived(hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = null, msSinceProcessStart = 20L) to listOf("delivery_lag_ms"),

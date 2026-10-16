@@ -20,11 +20,16 @@ sealed interface AnalyticsEvent {
         val metered: Boolean,
         val roaming: Boolean,
         val sizeBytes: Long?,
+        val probe: String,
         val fetched: Boolean,
     ) : AnalyticsEvent {
         override val name = "fetch_policy_decision"
         override val params = buildMap {
             put("kind", kind)
+            // Without this, a null size_bytes cannot tell a server that withheld Content-Length
+            // from a probe that never got an answer -- and the latter would be counted as a
+            // policy deferral, so the deferral ratio would rise with network flakiness.
+            put("probe", probe)
             put("metered", metered.asParam())
             put("roaming", roaming.asParam())
             put("decision", if (fetched) "fetch" else "defer")
