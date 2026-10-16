@@ -1,6 +1,7 @@
 package org.paramanuseniorshealth.notices
 
 import android.app.Application
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -90,8 +91,21 @@ class NoticesApplication : Application() {
 
         // The cached value applies immediately so a launch while offline behaves as the last known
         // state -- which on a first install is off. The live read then corrects it.
-        analytics.setEnabled(analyticsConfig.cached())
+        applyCollectionSwitch(analyticsConfig.cached())
         refreshAnalyticsSwitch()
+    }
+
+    /**
+     * The one place the switch is applied, so analytics and crash reporting cannot disagree.
+     *
+     * Crashlytics is set separately from [analytics] because it is a different SDK with its own
+     * flag; guarding one would leave the other reporting while the app called itself off. Its
+     * failure is swallowed for the same reason [Analytics.setEnabled] swallows the sink's: nothing
+     * here may be able to break app start.
+     */
+    private fun applyCollectionSwitch(enabled: Boolean) {
+        analytics.setEnabled(enabled)
+        runCatching { FirebaseCrashlytics.getInstance().isCrashlyticsCollectionEnabled = enabled }
     }
 
     /**
@@ -102,7 +116,7 @@ class NoticesApplication : Application() {
      */
     fun refreshAnalyticsSwitch() {
         appScope.launch {
-            analytics.setEnabled(analyticsConfig.refresh(FirebaseDatabase.getInstance()))
+            applyCollectionSwitch(analyticsConfig.refresh(FirebaseDatabase.getInstance()))
         }
     }
 

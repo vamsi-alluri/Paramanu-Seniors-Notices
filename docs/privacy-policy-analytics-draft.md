@@ -3,6 +3,12 @@
 Draft replacement text for `docs/privacy-policy.md` (and the published copy on
 paramanuseniorshealth.org). Each block says which existing text it replaces.
 
+STATUS (2026-10-16): applied to `docs/privacy-policy.md`, with one deliberate difference —
+block 7 was NOT applied as written. The per-device exclusion it promises was not built, so the
+bullet now says only that one switch governs every phone. Blocks 6 and 8's retention and
+region claims still depend on the console actions noted below. The published copy on the
+website is not yet updated.
+
 Written to match the existing register: short sentences, plain words, no jargon,
 nothing a reader has to take on trust that could instead be stated plainly.
 

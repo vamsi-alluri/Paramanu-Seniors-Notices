@@ -104,7 +104,7 @@ ui/          ActivationScreen  NoticeListScreen  SettingsScreen  NoticeViewerScr
              NotificationAccess  ShareText (tested)  theme/
 ```
 
-**Tests:** 84 JVM unit tests. `GeneratedCodeCompatibilityTest` is the important one — it pins the
+**Tests:** JVM unit tests (count in §8). `GeneratedCodeCompatibilityTest` is the important one — it pins the
 Kotlin validator against codes produced by the JavaScript generator. If those two drift, every
 printed slip is rejected on every phone with a message blaming the user for mistyping, discovered
 at a counter by someone in their eighties.
@@ -451,11 +451,25 @@ problem that is already fixed.
   Harmless in isolation, but a user told one name at the counter who sees another on their home
   screen has a real "is this the right app?" moment. The list header now says **Notices** — a screen
   title, not a third repetition of the app name.
-- **No advertising ID, enforced in the manifest.** `firebase-analytics` was removed (it pulled in
-  `AD_ID`, which would have forced a "yes" on the Data Safety advertising-ID question and
-  contradicted the listing), and the permission is additionally stripped with `tools:node="remove"`
-  so a transitive dependency cannot quietly reintroduce it. Release manifest holds six permissions:
-  INTERNET, ACCESS_NETWORK_STATE, POST_NOTIFICATIONS, WAKE_LOCK, C2DM RECEIVE, READ_GSERVICES.
+- **No advertising ID, enforced three independent ways.** `firebase-analytics` is present (launch
+  analytics, see the spec in `docs/superpowers/specs/2026-10-15-analytics-design.md`), and it would
+  pull in `AD_ID`, which would force a "yes" on the Data Safety advertising-ID question and
+  contradict the listing. So: (1) the Gradle dependency excludes
+  `play-services-ads-identifier`; (2) the permission is stripped in the manifest with
+  `tools:node="remove"`, together with `ACCESS_ADSERVICES_AD_ID`; (3) the manifest sets
+  `google_analytics_adid_collection_enabled` to false, so the SDK itself never collects it. Any
+  one holds the guarantee if the others fail. After a dependency change, grep the merged manifest
+  for both permissions. The older six-permission release manifest (INTERNET, ACCESS_NETWORK_STATE,
+  POST_NOTIFICATIONS, WAKE_LOCK, C2DM RECEIVE, READ_GSERVICES) is no longer a safe description:
+  the debug merged manifest on 2026-10-16 also holds `ACCESS_ADSERVICES_ATTRIBUTION`,
+  `BIND_GET_INSTALL_REFERRER_SERVICE`, `RECEIVE_BOOT_COMPLETED` and `FOREGROUND_SERVICE`. Re-read
+  the release manifest before relying on any permission count.
+- **Analytics and Crashlytics are off by default, on one server-side switch.** Both ship disabled
+  by manifest meta-data, because each SDK initialises before `NoticesApplication.onCreate` and
+  would otherwise start enabled. `/config/analytics/enabled` then opens or closes both at runtime
+  (cached for offline starts). The switch is global: there is no per-device exclusion and no
+  in-app opt-out, and the privacy policy says so. Known traps when reading the data are in the
+  spec, §9 "Known sources of dirty data".
 
 ---
 
@@ -518,7 +532,8 @@ the code screen.
   created, hidden behind seven taps on the version number).
 - Welcome notice written locally on activation, so the list is never empty.
 - "Check notifications" button, contact section, privacy policy link.
-- Analytics and `AD_ID` removed; six permissions in the release manifest.
+- `AD_ID` kept out of the manifest (analytics itself was removed at this point and has since come
+  back; see §6); six permissions in the release manifest as of that build.
 - Console: codes, slips, notes, disable, enable, unlink phone, holders with their own history and
   their own table, On hold, the monthly purge, search and a status filter, saved messages, sortable
   paged table, per-code audit history, a banner editor that is its own preview.
@@ -527,7 +542,11 @@ the code screen.
   as the console.
 - Pushed revocation applied on receipt; entitlement verification moved off the message path into
   WorkManager; a revoked device keeps its notices behind a banner and recovers on Restore.
-- 67 Android unit tests. Apps Script tests run from the editor (`runAllTests` in the sender,
+- Android JVM unit tests: 193 across 23 suites as of 2026-10-16 (count it afresh with
+  `./gradlew.bat testDebugUnitTest --rerun-tasks`; this figure is a snapshot, not a contract).
+  They cover activation codes and links, the fetch policy, notice text and time handling, PDF
+  rendering, pruning, the control messages, and the analytics gate, config and event surface.
+  Apps Script tests run from the editor (`runAllTests` in the sender,
   `runConsoleTests` in the console) and have **not** been run since these changes — see §9.
 - Play assets: 512 icon, 1024×500 feature graphic, 4 screenshots, listing copy.
 - Verified end to end on an SM-S928U1 (Android 16) at `versionCode 3`: notices delivered, office

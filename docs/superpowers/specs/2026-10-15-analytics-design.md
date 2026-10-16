@@ -230,6 +230,9 @@ must never be called arrival time.
   offline.
 - **Drives `setAnalyticsCollectionEnabled` too**, not only our own calls. Guarding the wrapper
   alone would leave GA4's automatic events flowing and make "off" a lie.
+- **Drives Crashlytics as well**, through `isCrashlyticsCollectionEnabled`, from the same place in
+  `NoticesApplication`. Both SDKs also ship disabled by manifest meta-data, because each
+  initialises before `onCreate`; the runtime setter overrides the manifest in both directions.
 - **Its own node**, not under `/dispensaries/…` — it is not dispensary-scoped, and putting it there
   would force the future multi-dispensary seam to carry it.
 - `database.rules.json` grants world read, no client write.
@@ -240,17 +243,20 @@ must never be called arrival time.
 the analytics build is**, not alongside it. Data Safety is declared app-wide, not per track, so a
 collecting build on open testing while the listing declares no collection is an inaccurate listing.
 
-Three statements in `docs/privacy-policy.md` become false and must be replaced, not softened:
+Three statements in `docs/privacy-policy.md` became false and were replaced, not softened (line
+numbers are those of the pre-amendment text):
 line 13 ("no advertising, no analytics, and no tracking"), line 50 ("No analytics or usage tracking
 of individuals"), and line 44 ("the app does not send … any record of what you read") — the last
 being the sharpest, since per-notice dwell time *is* a record of what you read.
 
 Drafted replacement text is in `docs/privacy-policy-analytics-draft.md`, as eight
-replace-this-with-that blocks covering both the repo copy and the published website copy. Two
-claims in it must be made true before publishing: GA4 retention set to 2 months, and the
-per-device exclusion either built or the sentence weakened. The third, the stated region, is
-settled: the BigQuery dataset was created in **Mumbai (`asia-south1`)** on 2026-10-15, which the
-draft already names.
+replace-this-with-that blocks covering both the repo copy and the published website copy. The
+blocks have been applied to `docs/privacy-policy.md`; the published copy on the website is still
+to be updated by hand. Of the three claims that had to be made true: the stated region is settled
+(the BigQuery dataset was created in **Mumbai (`asia-south1`)** on 2026-10-15); the per-device
+exclusion was **not built**, and the sentence was weakened to say that one server-side switch
+governs every phone; and GA4 retention at 2 months with "Reset user data on new activity" off is
+a console setting only the account owner can change, **not yet done**.
 
 **Data Safety answers:** App activity → yes. App info & performance → yes. **Device or other IDs →
 yes** (the GA4 app-instance id is a device identifier under Play's definition even though it is
@@ -275,6 +281,69 @@ manifest keeps stripping `AD_ID` and the Gradle dependency excludes `play-servic
    buffered must be flushed there, or a truncated sweep reports as a clean one.
 3. **The FCM path runs in `runBlocking`** on a service thread with a ~10–20s teardown window. A
    fire-and-forget log can be killed; writes go through `appScope` and must not block.
+
+The rest were found while building it, and each is the difference between a correct query and a
+confident wrong answer.
+
+**What the dataset cannot see**
+
+4. **`first_open` is never recorded.** The manifest default means collection is off before the
+   gate opens, so GA4 acquisition counts begin at the first *enabled* session, not at install. It
+   is not retroactive if the switch is flipped later.
+5. **`delivery_lag_ms` can be negative**, meaning that handset's clock is behind FCM's. Filter
+   `>= 0` before any transit-time percentile. Absence means FCM supplied no `sentTime`, not a bad
+   one.
+
+**Fetch policy and fetch timing**
+
+6. **`fetch_policy_decision` rows are decisions, not attachments.** A deferred attachment is
+   re-decided on every later sweep, so any ratio must be taken per decision, never per attachment.
+7. **`probe` separates four cases:** `skipped` (the roaming short-circuit; nothing probed),
+   `sender` (the payload supplied a size; no request made), `reachable` (a real HEAD succeeded)
+   and `unreachable` (no answer). **`unreachable` rows are connectivity facts, not policy
+   decisions, and must be excluded from any deferral ratio** — including them makes the ratio rise
+   with network flakiness.
+8. **`size_bytes` on roaming rows is sender-supplied or absent.** A null there says nothing about
+   the file's size, unlike a null on a `reachable` row, which means the server withheld
+   `Content-Length`.
+9. **`size_known` is redundant.** It equals `size_bytes IS NOT NULL`, and `probe` carries the
+   provenance it was once meant to indicate.
+10. **`attachment_fetch_start` cannot separate sweeps, taps and the PDF tap.** All three emit no
+    `jitter_seconds` and no `enqueued_at_ms`; only per-notice work carries them. Load-duration
+    percentiles therefore blend foreground taps with background sweeps. A `jitter_seconds` of `0`
+    is a genuine zero draw, not a missing value — absence is the missing case.
+
+**Opens and entry points**
+
+11. **`app_open_source`: `launcher` is a lower bound.** Warm foreground returns of a live task are
+    not counted, and automatic detection was rejected because PDFs open in an external viewer, so
+    every return from reading one would log a spurious launcher open.
+12. **`source = notification` and `notification_tapped` are deliberately different denominators
+    and must not be divided into one another.** The former includes local test and revocation
+    notifications; the latter excludes them.
+13. **`cold_start` means the first open in this process**, not that the activity was created. A
+    process started by an incoming FCM message and then opened by a tap reports `true`;
+    `ms_since_process_start` is what tells that apart from a user-initiated cold launch.
+
+**Reading and dwell**
+
+14. **`image_viewer_closed` durations must be SUMMED per `notice_id`, never maxed.** A rotation, or
+    a trip out of the viewer and back, legitimately produces several rows for one reading session.
+    Dwell is lost entirely if the process dies while backgrounded, so the distribution is biased
+    short — the longest sessions are the likeliest to be killed.
+15. **`notice_card_visible` has no minimum and no maximum.** Very short rows are expected from
+    flings and should be filtered in the query; there is deliberately no floor in the app. There is
+    no upper bound beyond the foreground gate, so a phone left foregrounded can accrue hours — cap
+    in the query. `position` is captured when the card appears and goes stale if a notice arrives
+    above it.
+16. **`pdf_opened` means "resolved and handed off"**, not "read". There is no close event, because
+    the PDF goes to an external viewer, and a handset with no PDF viewer installed still records
+    an open. Share and Save are excluded.
+
+**Activation**
+
+17. **`activation_submitted` is an upper bound on attempts.** A submit with no result is possible
+    if the ViewModel is cleared mid-flight. The reverse — a result with no submit — cannot happen.
 
 ### Where logging must never go
 
@@ -309,9 +378,9 @@ stops a full-dataset scan against the 1 TiB monthly allowance. Dry-run every que
 
 ## 11. Open questions
 
-1. **Per-device exclusion.** The drafted policy offers "contact us and your installation will be
-   excluded". Build it (an exclusion list keyed by activation code, read alongside the kill switch)
-   or weaken the sentence. Not yet decided.
+1. **Per-device exclusion.** Decided: not built. The policy says only that a single switch governs
+   every phone. Revisit only if the policy is to promise more, and then build it first (an
+   exclusion list keyed by activation code, read alongside the kill switch).
 2. **Sunset.** The kill switch turns collection off; nothing removes the code. Whether 0.8 strips
    it is a later decision.
 3. **GA4 streaming on sandbox** is documented for a sibling product but not for GA4 specifically.
