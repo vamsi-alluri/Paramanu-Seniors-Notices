@@ -38,6 +38,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import org.paramanuseniorshealth.notices.activation.ActivationLink
 import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
+import org.paramanuseniorshealth.notices.analytics.CardDwellTracker
+import org.paramanuseniorshealth.notices.analytics.CardFacts
+import org.paramanuseniorshealth.notices.analytics.CardStretch
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
@@ -208,16 +211,16 @@ class MainActivity : ComponentActivity() {
 }
 
 /**
- * What is remembered about a card from the moment it came on screen, so that the report does not
- * depend on the notice still being in the list when the card leaves. [shownAt] is on the monotonic
- * clock, which a wall-clock change cannot move backwards.
+ * The visible keys together with the list they were read against. Equal when the keys match and
+ * the list is the same instance, which is cheap to test on every layout change; comparing the
+ * list's contents would walk every notice per scroll frame.
  */
-private class ShownCard(
-    val shownAt: Long,
-    val position: Int,
-    val hasImage: Boolean,
-    val hasPdf: Boolean,
-)
+private class VisibleKeys(val keys: List<Any?>, val notices: List<NoticeEntity>) {
+    override fun equals(other: Any?) =
+        other is VisibleKeys && keys == other.keys && notices === other.notices
+
+    override fun hashCode() = keys.hashCode()
+}
 
 @Composable
 private fun NoticesApp(
@@ -263,6 +266,11 @@ private fun NoticesApp(
     // such rows are expected: filter them in the query. A floor here would be irreversible and
     // would also drop the genuine case of a reader glancing at a card and moving on.
     //
+    // visibleMs has no upper bound beyond the STARTED gate described next: a phone left foregrounded
+    // on the list can accrue hours, so queries should cap. position is where the card was when it
+    // appeared and is not revised, so it is stale if a notice arrives above a visible card. The
+    // arithmetic lives in CardDwellTracker, which is tested; this is its caller.
+    //
     // The list state outlives the list. Its last layout is still readable while the viewer or
     // Settings is up and while the app is in the background, so left alone every visible card
     // would go on accruing time it was not being looked at. The effect is therefore bound to the
@@ -274,51 +282,42 @@ private fun NoticesApp(
         if (!onNoticeList) return@LaunchedEffect
         val analytics = (context.applicationContext as NoticesApplication).analytics
         lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
-            val shown = mutableMapOf<Long, ShownCard>()
-            fun report(ids: Collection<Long>, now: Long) {
-                ids.toList().forEach { id ->
-                    val card = shown.remove(id) ?: return@forEach
-                    analytics.log(
-                        AnalyticsEvent.NoticeCardVisible(
-                            noticeId = id,
-                            visibleMs = now - card.shownAt,
-                            hasImage = card.hasImage,
-                            hasPdf = card.hasPdf,
-                            position = card.position,
-                        )
+            val tracker = CardDwellTracker()
+            fun report(ended: List<CardStretch>) = ended.forEach {
+                analytics.log(
+                    AnalyticsEvent.NoticeCardVisible(
+                        noticeId = it.noticeId,
+                        visibleMs = it.visibleMs,
+                        hasImage = it.hasImage,
+                        hasPdf = it.hasPdf,
+                        position = it.position,
                     )
-                }
+                )
             }
             try {
-                snapshotFlow {
-                    // Keys are a String for the office-info header and a Long for each notice, so
-                    // only Long keys are notices. Ids no longer in the list are dropped too: a
-                    // list that has emptied stops composing but keeps its last layout.
-                    val known = notices.mapTo(HashSet()) { it.id }
-                    noticeListState.layoutInfo.visibleItemsInfo
-                        .mapNotNull { (it.key as? Long)?.takeIf { id -> id in known } }
-                }
+                // The block below runs on every layout change, which includes every scroll frame,
+                // so it only collects the keys; the lookups run in collect, after
+                // distinctUntilChanged has dropped the frames where nothing changed.
+                snapshotFlow { VisibleKeys(noticeListState.layoutInfo.visibleItemsInfo.map { it.key }, notices) }
                     .distinctUntilChanged()
                     .collect { visible ->
-                        val now = SystemClock.elapsedRealtime()
-                        report(shown.keys - visible.toSet(), now)
-                        visible.forEach { id ->
-                            if (id in shown) return@forEach
-                            val index = notices.indexOfFirst { it.id == id }
-                            if (index < 0) return@forEach
-                            val notice = notices[index]
-                            shown[id] = ShownCard(
-                                shownAt = now,
-                                // 1-based among notices, so the first notice is 1. The office-info
-                                // header is not counted, so this is not a LazyColumn index.
-                                position = index + 1,
-                                hasImage = !notice.imageUrl.isNullOrBlank(),
-                                hasPdf = !notice.pdfUrl.isNullOrBlank(),
-                            )
-                        }
+                        report(
+                            tracker.update(visible.keys, SystemClock.elapsedRealtime()) { id ->
+                                // Ids no longer in the list are not tracked: a list that has
+                                // emptied stops composing but keeps its last layout.
+                                val index = visible.notices.indexOfFirst { it.id == id }
+                                if (index < 0) null else visible.notices[index].let {
+                                    CardFacts(
+                                        position = index + 1,
+                                        hasImage = !it.imageUrl.isNullOrBlank(),
+                                        hasPdf = !it.pdfUrl.isNullOrBlank(),
+                                    )
+                                }
+                            }
+                        )
                     }
             } finally {
-                report(shown.keys, SystemClock.elapsedRealtime())
+                report(tracker.flush(SystemClock.elapsedRealtime()))
             }
         }
     }

@@ -49,6 +49,7 @@ import kotlinx.coroutines.withContext
 import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
+import org.paramanuseniorshealth.notices.analytics.ViewerDwell
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.fcm.NoticeImageStore
 import java.io.File
@@ -115,24 +116,22 @@ fun NoticeViewerScreen(
     //
     // A process killed while in the background reports nothing; the event is written on leaving,
     // and there is no leaving to observe. The longest sessions are the likeliest to be killed, so
-    // the recorded durations are biased slightly short.
+    // the recorded durations are biased slightly short. There is no upper bound beyond the started
+    // gate: a phone left foregrounded on this screen can accrue hours, so queries should cap. The
+    // arithmetic lives in ViewerDwell, which is tested.
     DisposableEffect(lifecycleOwner) {
-        var startedAt: Long? = null
-        var openMs = 0L
+        val dwell = ViewerDwell(SystemClock::elapsedRealtime)
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_START -> startedAt = SystemClock.elapsedRealtime()
-                Lifecycle.Event.ON_STOP -> startedAt?.let {
-                    openMs += SystemClock.elapsedRealtime() - it
-                    startedAt = null
-                }
+                Lifecycle.Event.ON_START -> dwell.started()
+                Lifecycle.Event.ON_STOP -> dwell.stopped()
                 else -> Unit
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
-            startedAt?.let { openMs += SystemClock.elapsedRealtime() - it }
+            val openMs = dwell.finish()
             noticeId?.let { id ->
                 (context.applicationContext as NoticesApplication).analytics.log(
                     AnalyticsEvent.ImageViewerClosed(
