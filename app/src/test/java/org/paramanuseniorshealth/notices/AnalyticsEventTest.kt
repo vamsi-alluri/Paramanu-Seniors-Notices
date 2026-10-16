@@ -107,9 +107,10 @@ class AnalyticsEventTest {
             "source" to setOf("notification", "link", "launcher"),
             // AttachmentFetchEnd, at the end of the attachment worker's fetch.
             "outcome" to setOf("fetched", "failed"),
-            // ActivationResult: the five RedeemResult variants in activation/ActivationState.kt,
-            // rendered as result::class.simpleName.orEmpty().lowercase(). A sixth variant will
-            // fail here, and its lowercased simple name is the value to add.
+            // ActivationResult: the strings RedeemResult.analyticsName() reports. This pins the
+            // strings; the exhaustive `when` in analyticsName() pins the coverage, failing to
+            // compile when a variant is added. A new variant therefore needs an arm there first,
+            // and then its string added here.
             "result" to setOf("success", "mistyped", "notaccepted", "samecode", "offline"),
             // ActivationResult: set just before each of the three RedeemResult.Offline returns
             // (no uid from anonymous sign-in, transport exception, 20-second timeout).
