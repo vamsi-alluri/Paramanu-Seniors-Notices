@@ -58,6 +58,7 @@ fun ActivationScreen(
     onErrorDismissed: () -> Unit,
     modifier: Modifier = Modifier,
     prefill: String = "",
+    hasCode: Boolean = false,
 ) {
     // Held unpunctuated. The dash is painted by CodeDashTransformation, so it cannot be deleted,
     // retyped, or land in the middle of a paste.
@@ -73,16 +74,16 @@ fun ActivationScreen(
     // onValueChange runs per character, so neither may log. Keyed on Unit, so a later change of
     // [prefill] is not a new appearance. The flag is saved state so that an activity recreation
     // with this screen up does not count the same appearance again; it is dropped when the screen
-    // is left, so coming back is a new appearance. hasCode is whether the field arrives holding a
-    // code, not whether the phone already holds one: a revoked phone reaches this screen with a
-    // stored code and an empty field, and that is not a reader arriving with a code in hand.
+    // is left, so coming back is a new appearance. [hasCode] is re-entry from Settings as against a
+    // fresh install: the phone holds a working code. A revoked phone does hold a stored code, but it
+    // counts as not having one, because it is the phone a replacement slip is for.
     val context = LocalContext.current
     var shownReported by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (shownReported) return@LaunchedEffect
         shownReported = true
         (context.applicationContext as NoticesApplication).analytics.log(
-            AnalyticsEvent.ActivationShown(hasCode = CodeDashTransformation.clean(prefill).isNotEmpty())
+            AnalyticsEvent.ActivationShown(hasCode = hasCode)
         )
     }
 

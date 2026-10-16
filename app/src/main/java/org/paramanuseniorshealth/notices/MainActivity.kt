@@ -259,8 +259,10 @@ private fun NoticesApp(
     // How long each notice card stays on screen, which is what says which notice holds attention.
     //
     // Read from the hoisted list state rather than from the rows: NoticeRow does disk scans on
-    // every recomposition, and nothing here may run per frame. The flow only emits when the set of
-    // visible ids changes, so this logs at most once per card per continuous stretch on screen.
+    // every recomposition, and nothing here may run per frame. The flow emits when the set of
+    // visible ids changes and also on every new notices-list instance (VisibleKeys.equals compares
+    // the list by identity), so the lookups run more often than the ids change; the tracker still
+    // logs at most once per card per continuous stretch on screen.
     //
     // No minimum duration is applied, on purpose. A fling past a card yields a very short row, and
     // such rows are expected: filter them in the query. A floor here would be irreversible and
@@ -350,7 +352,13 @@ private fun NoticesApp(
     // Re-check whenever the app comes forward. Previously the only check was in the view model's
     // init, which survives a trip through recents -- so a user whose code had been restored had to
     // know to swipe the app away and reopen it, which nobody knows.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed(context.applicationContext) }
+    //
+    // The analytics kill switch is re-read on the same event, so turning it off reaches a phone whose
+    // process has been alive for days and not only the next cold start. Deliberately not throttled.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.onResumed(context.applicationContext)
+        (context.applicationContext as NoticesApplication).refreshAnalyticsSwitch()
+    }
 
     // The permission prompt is deliberately not raised on the code screen: asking before the user
     // has any reason to expect notices is how a denial happens, and on Android 13+ a denial
@@ -411,6 +419,7 @@ private fun NoticesApp(
                 error = redeemError,
                 onErrorDismissed = viewModel::dismissRedeemError,
                 prefill = deepLinkCode.orEmpty(),
+                hasCode = alreadyActivated,
             )
         }
 

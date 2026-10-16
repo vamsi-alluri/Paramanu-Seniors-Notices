@@ -111,6 +111,10 @@ class NoticesApplication : Application() {
     /**
      * Brings the switch into line with the database. Safe to call on every foreground.
      *
+     * Called from [onCreate] (process start) and from MainActivity's ON_RESUME effect (every
+     * foreground), which is what lets "off" reach a process that stays alive for days. Neither
+     * call is throttled.
+     *
      * Uses the existing appScope rather than a new one: it is already IO-dispatched and
      * supervisor-scoped, which is exactly what a best-effort read wants.
      */
