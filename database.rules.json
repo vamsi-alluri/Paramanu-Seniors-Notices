@@ -2,12 +2,6 @@
   "rules": {
     ".read": false,
     ".write": false,
-    "config": {
-      "analytics": {
-        ".read": true,
-        ".write": false
-      }
-    },
     "dispensaries": {
       "$dispensary": {
         ".read": "auth != null",

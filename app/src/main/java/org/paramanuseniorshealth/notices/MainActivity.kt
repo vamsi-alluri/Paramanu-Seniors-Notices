@@ -354,7 +354,8 @@ private fun NoticesApp(
     // know to swipe the app away and reopen it, which nobody knows.
     //
     // The analytics kill switch is re-read on the same event, so turning it off reaches a phone whose
-    // process has been alive for days and not only the next cold start. Deliberately not throttled.
+    // process has been alive for days and not only the next cold start. Not throttled here, because
+    // Remote Config already is: inside its fetch window this costs no network at all.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.onResumed(context.applicationContext)
         (context.applicationContext as NoticesApplication).refreshAnalyticsSwitch()

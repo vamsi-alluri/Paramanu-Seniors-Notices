@@ -2,7 +2,6 @@ package org.paramanuseniorshealth.notices
 
 import android.app.Application
 import com.google.firebase.crashlytics.FirebaseCrashlytics
-import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -12,6 +11,7 @@ import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.analytics.Analytics
 import org.paramanuseniorshealth.notices.analytics.AnalyticsConfig
 import org.paramanuseniorshealth.notices.analytics.FirebaseAnalyticsSink
+import org.paramanuseniorshealth.notices.analytics.FirebaseRemoteConfigSwitch
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.InfoRepository
 import org.paramanuseniorshealth.notices.data.NoticeRepository
@@ -57,11 +57,7 @@ class NoticesApplication : Application() {
      */
     fun markOpened(): Boolean = !openedInThisProcess.getAndSet(true)
 
-    private val analyticsPrefs by lazy {
-        getSharedPreferences("analytics", MODE_PRIVATE)
-    }
-
-    val analyticsConfig by lazy { AnalyticsConfig(analyticsPrefs) }
+    val analyticsConfig by lazy { AnalyticsConfig(FirebaseRemoteConfigSwitch()) }
 
     val analytics by lazy { Analytics(FirebaseAnalyticsSink(this)) }
 
@@ -89,8 +85,8 @@ class NoticesApplication : Application() {
             ActivationRefreshWorker.ensurePeriodic(this)
         }
 
-        // The cached value applies immediately so a launch while offline behaves as the last known
-        // state -- which on a first install is off. The live read then corrects it.
+        // The value already in force applies immediately, so a launch while offline behaves as the
+        // last known state -- which on a first install is off. The fetch then corrects it.
         applyCollectionSwitch(analyticsConfig.cached())
         refreshAnalyticsSwitch()
     }
@@ -109,19 +105,18 @@ class NoticesApplication : Application() {
     }
 
     /**
-     * Brings the switch into line with the database. Safe to call on every foreground.
+     * Brings the switch into line with Remote Config. Safe to call on every foreground.
      *
      * Called from [onCreate] (process start) and from MainActivity's ON_RESUME effect (every
      * foreground), which is what lets "off" reach a process that stays alive for days. Neither
-     * call is throttled.
+     * call is throttled here, and neither needs to be: inside Remote Config's fetch window the
+     * fetch is answered from local storage without touching the network.
      *
      * Uses the existing appScope rather than a new one: it is already IO-dispatched and
      * supervisor-scoped, which is exactly what a best-effort read wants.
      */
     fun refreshAnalyticsSwitch() {
-        appScope.launch {
-            applyCollectionSwitch(analyticsConfig.refresh(FirebaseDatabase.getInstance()))
-        }
+        appScope.launch { applyCollectionSwitch(analyticsConfig.refresh()) }
     }
 
     /**

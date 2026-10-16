@@ -1,58 +1,62 @@
 package org.paramanuseniorshealth.notices.analytics
 
-import android.content.SharedPreferences
-import android.util.Log
-import androidx.core.content.edit
-import com.google.firebase.database.FirebaseDatabase
-import org.paramanuseniorshealth.notices.data.awaitResult
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
- * The kill switch, read from RTDB and cached so it survives being offline.
+ * The kill switch, owned here: the key's default, and the guarantee that nothing is collected
+ * unless the switch says to.
  *
- * Its own node rather than a field on the dispensary record: it is not dispensary-scoped, and
- * putting it there would force the future multi-dispensary seam to carry it.
+ * It reads through [AnalyticsSwitch] rather than touching a store itself. Behind that seam the
+ * value lives in Firebase Remote Config, which persists the activated value and answers from local
+ * storage, so there is nothing here to cache -- being offline is already handled by the thing
+ * holding the value.
  *
- * Only a literal `true` enables collection. The node is hand-edited in the RTDB console, where a
- * string "true", a 1, or a deleted node are all realistic, and every one of them must mean off.
+ * It is not dispensary-scoped and never was, which is why it is its own parameter rather than a
+ * field on the dispensary record: putting it there would force the future multi-dispensary seam to
+ * carry it.
  */
-class AnalyticsConfig(private val prefs: SharedPreferences) {
-
-    fun cached(): Boolean = prefs.getBoolean(KEY, false)
-
-    fun store(enabled: Boolean) = prefs.edit { putBoolean(KEY, enabled) }
+class AnalyticsConfig(private val switch: AnalyticsSwitch) {
 
     /**
-     * Reads the live value, stores it, and returns it. On any failure the cached value stands --
-     * which on a first launch is false, so a phone that has never reached the node collects
-     * nothing.
+     * The value in force. Local and synchronous, so the gate at process start is set from a
+     * deterministic value -- on a phone that has never fetched, the `false` default.
+     */
+    fun cached(): Boolean = switch.enabled()
+
+    /**
+     * Fetches the live value and returns what is now in force. On any failure the value already in
+     * force stands -- which on a first launch is false, so a phone that has never reached Remote
+     * Config collects nothing.
      *
      * Cancellation is passed on rather than treated as a failed read: a caller that gave up on
-     * this should stop, not be handed a stale answer as though the read had been tried.
+     * this should stop, not be handed the standing answer as though the fetch had been tried.
+     *
+     * The failure is swallowed without a word here, for the reason [Analytics] swallows the sink's:
+     * this class has no Android imports, so it cannot log -- and keeping it that way is what lets a
+     * JVM test reach this branch at all. [FirebaseRemoteConfigSwitch] is the layer that can see
+     * what went wrong, and says so there.
      */
-    suspend fun refresh(database: FirebaseDatabase): Boolean = try {
-        val snapshot = database.getReference(PATH).get().awaitResult()
-        parse(snapshot.value).also { store(it) }
+    suspend fun refresh(): Boolean = try {
+        switch.refresh()
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        Log.i(TAG, "Could not read the analytics switch: ${e.message}")
         cached()
     }
 
     companion object {
         /**
-         * Must sit under the `config/analytics` rule in `database.rules.json`, which is the only
-         * world-readable grant. It is scoped to `analytics` on purpose: RTDB read access cascades
-         * to every child, so anything added beneath `config/analytics` is public too, while a new
-         * sibling under `config` is not covered and stays private. Do not widen the grant to
-         * `config`, and do not put anything private under `config/analytics`.
+         * The Remote Config parameter, Boolean-typed in the console.
+         *
+         * Its predecessor was a hand-edited RTDB node, where a string "true", a 1 or a deleted node
+         * were all realistic and every one of them had to mean off -- which is what the old
+         * `parse()` existed for. A Remote Config parameter is typed at the console field, and
+         * `getBoolean` is false for anything missing or unparseable, so that hazard is gone rather
+         * than handled. Keep the parameter Boolean: a String-typed parameter would bring it back.
          */
-        const val PATH = "config/analytics/enabled"
-        private const val KEY = "analytics_enabled"
-        private const val TAG = "AnalyticsConfig"
+        const val KEY = "analytics_enabled"
 
-        /** Anything that is not a literal boolean `true` is off. */
-        fun parse(raw: Any?): Boolean = raw as? Boolean == true
+        /** Off unless the switch says on, on a phone that has never fetched and after a failure. */
+        const val DEFAULT = false
     }
 }

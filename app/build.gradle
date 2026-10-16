@@ -82,6 +82,9 @@ dependencies {
     implementation libs.firebase.messaging
     implementation libs.firebase.auth
     implementation libs.firebase.database
+    // The analytics kill switch, moved off RTDB: fetched over HTTPS, so it costs no realtime
+    // connection against the Spark plan's hundred. See FirebaseRemoteConfigSwitch.
+    implementation libs.firebase.config
     // Analytics is deliberately excluded from pulling the advertising-ID artifact: the Data
     // Safety advertising-ID answer stays "no", and the manifest's tools:node="remove" is the
     // second lock on the same guarantee. See docs/SYSTEM.md.
