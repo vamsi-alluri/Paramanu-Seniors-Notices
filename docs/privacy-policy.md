@@ -81,8 +81,10 @@ code was accepted.
 - No advertising, and no advertising identifier. The app does not request the Android advertising
   ID permission.
 - No tracking of you as a person. The usage measurements described above are tied to a random
-  identifier for this installation, not to you, and no one at the organisation can work back
-  from them to a named individual.
+  identifier for this installation, not to you. The app never gives the measurements a user
+  identifier of any kind, never includes your activation code in them, and records notices only
+  by their reference number. So the measurements contain nothing that could be matched against
+  the activation records.
 - No sale or sharing of information with anyone for marketing.
 - No medical advice, diagnosis, prescriptions, or appointment booking. The app delivers
   announcements only, and is not a substitute for contacting the dispensary or your doctor.
@@ -115,8 +117,16 @@ Technical reports about unexpected stops are kept for ninety days.
   notice from your phone. To have the activation record removed as well, contact the organisation
   using the details below.
 - **Measurement.** The usage measurement described above is governed by a single switch held by
-  the organisation, which applies to every phone at once. The app does not offer a setting for
-  it on your phone, and the organisation cannot exclude a single phone from it.
+  the organisation, which applies to every phone at once. It is there to answer particular
+  questions about how the app performs, and the organisation will turn it off once those
+  questions are answered. The app does not offer a setting for it on your phone, and the
+  organisation cannot exclude a single phone from it.
+- **Deleting measurements.** Because the measurements contain no name, code or other key that
+  ties them to you, the organisation cannot pick out one person's records to delete them. What
+  does happen is that collection can be stopped for every phone at once, at any time, and the
+  records expire on their own: Google Analytics keeps them for two months and the detailed
+  records are deleted after sixty days. If you want your phone to stop contributing, uninstall
+  the app.
 
 ## Children
 

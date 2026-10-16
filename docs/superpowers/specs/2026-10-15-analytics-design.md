@@ -260,7 +260,10 @@ a console setting only the account owner can change, **not yet done**.
 
 **Data Safety answers:** App activity → yes. App info & performance → yes. **Device or other IDs →
 yes** (the GA4 app-instance id is a device identifier under Play's definition even though it is
-random and unlinked — this is the line most often missed). Advertising ID → **no**, unchanged; the
+random and unlinked — this is the line most often missed). **"Can users request that their data
+be deleted" → no**: nothing can single out one installation's records, and answering yes would be a
+false declaration; the policy states the truth instead (no key tying data to a person, a global
+stop, expiry at two months). Advertising ID → **no**, unchanged; the
 manifest keeps stripping `AD_ID` and the Gradle dependency excludes `play-services-ads-identifier`.
 
 ## 9. Testing

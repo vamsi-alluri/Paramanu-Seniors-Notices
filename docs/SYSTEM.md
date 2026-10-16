@@ -459,11 +459,26 @@ problem that is already fixed.
   `tools:node="remove"`, together with `ACCESS_ADSERVICES_AD_ID`; (3) the manifest sets
   `google_analytics_adid_collection_enabled` to false, so the SDK itself never collects it. Any
   one holds the guarantee if the others fail. After a dependency change, grep the merged manifest
-  for both permissions. The older six-permission release manifest (INTERNET, ACCESS_NETWORK_STATE,
-  POST_NOTIFICATIONS, WAKE_LOCK, C2DM RECEIVE, READ_GSERVICES) is no longer a safe description:
-  the debug merged manifest on 2026-10-16 also holds `ACCESS_ADSERVICES_ATTRIBUTION`,
-  `BIND_GET_INSTALL_REFERRER_SERVICE`, `RECEIVE_BOOT_COMPLETED` and `FOREGROUND_SERVICE`. Re-read
-  the release manifest before relying on any permission count.
+  for both permissions.
+
+  **The release manifest holds eleven permissions** (read from the merged manifest on 2026-10-16,
+  identical to debug; the origin of each is from `manifest-merger-release-report.txt`). The old
+  "six permissions" figure is obsolete.
+  - Requested by this app: `INTERNET`, `POST_NOTIFICATIONS`.
+  - WorkManager (`work-runtime`): `WAKE_LOCK`, `ACCESS_NETWORK_STATE`, `RECEIVE_BOOT_COMPLETED`,
+    `FOREGROUND_SERVICE` (the last two are declared by the library itself, for rescheduling after a reboot and for foreground-service-backed jobs; this app declares neither).
+  - Firebase Cloud Messaging: `com.google.android.c2dm.permission.RECEIVE`.
+  - reCAPTCHA (pulled in by Firebase Auth): `READ_GSERVICES`.
+  - AndroidX core: `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which protects the
+    app's own runtime-registered receivers and is not a capability the app gains.
+  - Measurement SDK (`play-services-measurement`): `ACCESS_ADSERVICES_ATTRIBUTION` and
+    `BIND_GET_INSTALL_REFERRER_SERVICE`. These are contributed by the SDK, not requested by this
+    app. The advertising-ID permissions (`AD_ID`, `ACCESS_ADSERVICES_AD_ID`) are stripped. No code
+    in `app/src/main` refers to the install referrer (a search for "referrer" finds nothing), so
+    this app never calls it. What the measurement SDK itself does with the permission is **not
+    confirmed from our source**: it is Google's code, and `first_open` (which would use the
+    referrer) is not collected here, but that has not been verified on a device. Treat the Data
+    Safety form's answers on attribution as a question to check, not a closed one.
 - **Analytics and Crashlytics are off by default, on one server-side switch.** Both ship disabled
   by manifest meta-data, because each SDK initialises before `NoticesApplication.onCreate` and
   would otherwise start enabled. `/config/analytics/enabled` then opens or closes both at runtime

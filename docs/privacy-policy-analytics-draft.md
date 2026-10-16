@@ -184,7 +184,7 @@ in the BigQuery link wizard. If you end up on asia-southeast1, this says Singapo
 | Is the data linked to identity? | **No**, for every item above |
 | Is collection required or optional? | **Required** — there is no in-app opt-out |
 | Is data encrypted in transit? | **Yes** |
-| Can users request deletion? | **Yes** — via the contact details in the policy |
+| Can users request deletion? | **No** — corrected 2026-10-16: nothing can single out one installation's records, so a "yes" would be a false declaration. The policy says what is true instead (no key, global stop, expiry). |
 
 The "Device or other IDs = Yes" line is the one most likely to be missed. The
 GA4 app-instance id is a device identifier under Play's definition even though
