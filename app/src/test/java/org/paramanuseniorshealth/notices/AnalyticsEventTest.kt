@@ -140,7 +140,7 @@ class AnalyticsEventTest {
         // then be missing -- not present as 0, and not present as null.
         val cases = listOf(
             AnalyticsEvent.FetchPolicyDecision("pdf", true, false, null, "reachable", false) to listOf("size_bytes"),
-            AnalyticsEvent.AttachmentFetchStart("pdf", null, 30L, 1L, 2L, 0) to listOf("size_bytes"),
+            AnalyticsEvent.AttachmentFetchStart("pdf", null, null, null, 2L, 0) to listOf("size_bytes", "jitter_seconds", "enqueued_at_ms"),
             AnalyticsEvent.AttachmentFetchEnd("pdf", null, 250L, "fetched", null) to listOf("size_bytes", "http_status"),
             AnalyticsEvent.NoticeReceived(hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = null, msSinceProcessStart = 20L) to listOf("delivery_lag_ms"),
             AnalyticsEvent.NotificationTapped(msSinceShown = null, coldStart = true) to listOf("ms_since_shown"),
@@ -161,6 +161,8 @@ class AnalyticsEventTest {
         assertEquals(0L, size.params["size_bytes"])
         val lag = AnalyticsEvent.NoticeReceived(hasImage = false, hasPdf = false, isNew = true, deliveryLagMs = 0L, msSinceProcessStart = 0L)
         assertEquals(0L, lag.params["delivery_lag_ms"])
+        val start = AnalyticsEvent.AttachmentFetchStart("pdf", null, 0L, 5L, 6L, 0)
+        assertEquals(0L, start.params["jitter_seconds"]) // rolled zero, unlike a sweep's absence
         val status = AnalyticsEvent.AttachmentFetchEnd("pdf", 0L, 1L, "fetched", 0)
         assertEquals(0L, status.params["size_bytes"])
         assertEquals(0L, status.params["http_status"])

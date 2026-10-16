@@ -51,16 +51,16 @@ sealed interface AnalyticsEvent {
     data class AttachmentFetchStart(
         val kind: String,
         val sizeBytes: Long?,
-        val jitterSeconds: Long,
-        val enqueuedAtMs: Long,
+        val jitterSeconds: Long?,
+        val enqueuedAtMs: Long?,
         val startedAtMs: Long,
         val attempt: Int,
     ) : AnalyticsEvent {
         override val name = "attachment_fetch_start"
         override val params = buildMap {
             put("kind", kind)
-            put("jitter_seconds", jitterSeconds)
-            put("enqueued_at_ms", enqueuedAtMs)
+            jitterSeconds?.let { put("jitter_seconds", it) }
+            enqueuedAtMs?.let { put("enqueued_at_ms", it) }
             put("started_at_ms", startedAtMs)
             put("attempt", attempt.toLong())
             sizeBytes?.let { put("size_bytes", it) }

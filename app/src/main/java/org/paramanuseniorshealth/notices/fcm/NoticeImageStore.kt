@@ -20,18 +20,17 @@ import java.net.URL
  * start has an end and every end a start.
  *
  * [jitterSeconds] and [enqueuedAtMs] describe the per-notice work request and exist only for work
- * enqueued by `AttachmentWorker.enqueueFor`. Sweeps and taps have neither, and read as `0` for
- * both: that `0` means "no such thing", not "zero seconds of jitter". [enqueuedAtMs] is the
- * discriminator -- a real enqueue time is never `0`, so `enqueued_at_ms = 0` identifies a row
- * with no jitter to speak of, whereas `jitter_seconds = 0` alone cannot (the draw can be `0`).
+ * enqueued by `AttachmentWorker.enqueueFor`. Sweeps and taps have neither, so they are null and
+ * reach analytics as absent parameters. That keeps "no jitter concept" apart from a draw that
+ * genuinely rolled `0` (the range includes it), which is a device that fired immediately.
  *
  * [startedAtMs] is when the worker (or tap) began, shared by every attachment of a sweep, not
  * when this download opened its connection. [attempt] is WorkManager's `runAttemptCount`, so it is
  * `0` for taps.
  */
 data class FetchOrigin(
-    val jitterSeconds: Long = 0L,
-    val enqueuedAtMs: Long = 0L,
+    val jitterSeconds: Long? = null,
+    val enqueuedAtMs: Long? = null,
     val startedAtMs: Long = System.currentTimeMillis(),
     val attempt: Int = 0,
 )

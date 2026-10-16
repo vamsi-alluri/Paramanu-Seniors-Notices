@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
+import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
@@ -41,12 +42,12 @@ class AttachmentWorker(
         val single = inputData.getString(KEY_LOG_ID)
 
         // Only enqueueFor writes KEY_JITTER and KEY_ENQUEUED_AT. The sweeps carry no input data on
-        // purpose (see enqueueCatchUp), so for them both read as the 0L default. That 0 means "this
-        // work came from a sweep, which has neither" and not "zero seconds of jitter"; a real
-        // enqueue time is never 0, so enqueued_at_ms = 0 is what tells the two apart.
+        // purpose (see enqueueCatchUp), so for them both are null -- absent, not 0. getLong's
+        // default cannot be used: the jitter draw includes 0, and a default would make "no jitter
+        // concept" and "rolled zero" the same value. The key's presence is what decides.
         val origin = FetchOrigin(
-            jitterSeconds = inputData.getLong(KEY_JITTER, 0L),
-            enqueuedAtMs = inputData.getLong(KEY_ENQUEUED_AT, 0L),
+            jitterSeconds = inputData.longOrNull(KEY_JITTER),
+            enqueuedAtMs = inputData.longOrNull(KEY_ENQUEUED_AT),
             startedAtMs = System.currentTimeMillis(),
             attempt = runAttemptCount,
         )
@@ -226,6 +227,9 @@ class AttachmentWorker(
         private const val KEY_LOG_ID = "logId"
         private const val KEY_JITTER = "jitter"
         private const val KEY_ENQUEUED_AT = "enqueuedAt"
+
+        private fun Data.longOrNull(key: String): Long? =
+            if (hasKeyWithValueOfType(key, Long::class.javaObjectType)) getLong(key, 0L) else null
         private const val CATCH_UP = "attachment-catch-up"
         private const val CATCH_UP_WIFI = "attachment-catch-up-wifi"
         /**
