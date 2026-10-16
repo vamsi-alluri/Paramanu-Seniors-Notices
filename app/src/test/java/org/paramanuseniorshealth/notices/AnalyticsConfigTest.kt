@@ -14,6 +14,14 @@ class AnalyticsConfigTest {
     fun `a phone that has never fetched reads off`() {
         // The whole of "collection defaults to off" on a first launch rests on this. An unfetched
         // Remote Config returns the false default, which is the promise the privacy policy makes.
+        //
+        // The constant is asserted directly, and not only through the switch: it is the default
+        // handed to setDefaultsAsync, so it IS the promise, and a test that only read it back
+        // through a double would pass just as happily with the promise reversed.
+        assertFalse(
+            "collection defaults to off; the published privacy policy depends on it",
+            AnalyticsConfig.DEFAULT,
+        )
         assertFalse(AnalyticsConfig(RecordingSwitch()).cached())
     }
 

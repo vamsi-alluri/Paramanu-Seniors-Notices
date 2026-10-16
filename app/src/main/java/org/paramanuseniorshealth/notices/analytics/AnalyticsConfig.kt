@@ -50,9 +50,14 @@ class AnalyticsConfig(private val switch: AnalyticsSwitch) {
          *
          * Its predecessor was a hand-edited RTDB node, where a string "true", a 1 or a deleted node
          * were all realistic and every one of them had to mean off -- which is what the old
-         * `parse()` existed for. A Remote Config parameter is typed at the console field, and
-         * `getBoolean` is false for anything missing or unparseable, so that hazard is gone rather
-         * than handled. Keep the parameter Boolean: a String-typed parameter would bring it back.
+         * `parse()` existed for.
+         *
+         * **Keep the parameter Boolean.** The hazard is not gone, it has moved to the type of the
+         * console field, and it has changed direction: `getBoolean` is false for a missing or
+         * unparseable value, but it *coerces* -- `1`, `t`, `true`, `y`, `yes` and `on` all read as
+         * true. So where a stray string in the old RTDB node failed closed, a String-typed
+         * parameter holding `yes` would fail **open**. A Boolean parameter cannot hold any of
+         * those; that, and not the SDK's parsing, is what makes the hazard unreachable.
          */
         const val KEY = "analytics_enabled"
 

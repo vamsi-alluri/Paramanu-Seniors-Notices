@@ -519,6 +519,12 @@ build reaches open testing**, not alongside it.
 4. **Publish the updated policy** on paramanuseniorshealth.org, with "Last updated" set to the
    actual publication date. Skipped: a collecting build ships under a policy saying it collects
    nothing, or a public document carries a wrong date.
+   **Fix one sentence first: `docs/privacy-policy.md:141`.** It promises that a phone "follows
+   within a short time of the switch being turned off". Since the switch moved to Remote Config
+   (§7) the honest bound is worse in two ways: up to the six-hour fetch window, **and** only once
+   the app is next opened — a phone nobody opens never hears at all. "Within a short time" reads as
+   minutes to a layperson. This is the owner's wording to choose, but it cannot be published as it
+   stands.
 5. **Update Play Data Safety:** App activity, Crash logs, Diagnostics, Device or other IDs = yes;
    Advertising ID = no; required; not linked; encrypted in transit; **"can users request deletion"
    = No**. Skipped, or left at "Yes": an inaccurate or false declaration.

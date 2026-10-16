@@ -85,9 +85,8 @@ class NoticesApplication : Application() {
             ActivationRefreshWorker.ensurePeriodic(this)
         }
 
-        // The value already in force applies immediately, so a launch while offline behaves as the
-        // last known state -- which on a first install is off. The fetch then corrects it.
-        applyCollectionSwitch(analyticsConfig.cached())
+        // The value already in force applies first, so a launch while offline behaves as the last
+        // known state -- which on a first install is off. The fetch then corrects it.
         refreshAnalyticsSwitch()
     }
 
@@ -114,9 +113,20 @@ class NoticesApplication : Application() {
      *
      * Uses the existing appScope rather than a new one: it is already IO-dispatched and
      * supervisor-scoped, which is exactly what a best-effort read wants.
+     *
+     * The standing value is applied first, inside the same coroutine, and deliberately **not** on
+     * the main thread. Remote Config's first getter call in a process resolves its activated
+     * container through a blocking disk read with a five-second timeout, and this used to run in
+     * `onCreate` on the main thread. Measured at ~40ms on the reference handset, but the ceiling is
+     * an ANR, and nothing here may be able to break app start. Moving it cannot let collection
+     * start early: both SDKs ship disabled by manifest meta-data, so the pre-gate state of a phone
+     * that has never been enabled is already off.
      */
     fun refreshAnalyticsSwitch() {
-        appScope.launch { applyCollectionSwitch(analyticsConfig.refresh()) }
+        appScope.launch {
+            applyCollectionSwitch(analyticsConfig.cached())
+            applyCollectionSwitch(analyticsConfig.refresh())
+        }
     }
 
     /**

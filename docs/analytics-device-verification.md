@@ -231,6 +231,18 @@ interval, so there is nothing to wait for. **Before judging any event**, expect
 `RemoteConfigSwitch: Could not fetch the analytics switch` line. If collection is not enabled yet,
 events are dropped, not delayed, so a missing event proves nothing.
 
+**A throttled fetch is an expected outcome, not a failure of the switch.** Zero seconds removes only
+the *client* throttle; the backend keeps its own per-installation limit, and crossing it raises
+`FirebaseRemoteConfigFetchThrottledException`. You will then see
+`RemoteConfigSwitch: Could not fetch the analytics switch: ...` and **the previous value staying in
+force** — which is correct behaviour (a failed fetch leaves the standing value alone) and will look
+exactly like "the new value did not propagate". Verified on 2026-10-16: six fetches across five
+launches in four minutes were **not** throttled (`num_failed_fetches=0`, `backoff_end_time=-1` in
+`shared_prefs/frc_*_firebase_settings.xml`), so a handful of toggles in one sitting is fine. If it
+does throttle, check those two fields, then either wait out the backoff or
+`adb shell pm clear org.paramanuseniorshealth.notices` and re-activate. Do not read a throttle as a
+broken switch.
+
 There is **no `shared_prefs/analytics.xml` any more** — the switch moved off RTDB and
 SharedPreferences on 2026-10-16, and Remote Config keeps the activated value in its own store under
 `files/`. A new `analytics.xml` appearing is a sign something still writes the old cache, which
