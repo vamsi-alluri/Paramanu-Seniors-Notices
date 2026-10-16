@@ -277,6 +277,9 @@ object NoticeImageStore {
      * known whether the file was already on the phone, which the return value does not say. Share
      * and Save fetch the same file and leave it null, since they do not open anything. A failed
      * download logs nothing: there was no document to open.
+     *
+     * The event means "a PDF was resolved and handed off", logged before the external viewer is
+     * launched. A phone with no PDF viewer installed therefore still records one.
      */
     suspend fun fetchPdf(
         context: Context,

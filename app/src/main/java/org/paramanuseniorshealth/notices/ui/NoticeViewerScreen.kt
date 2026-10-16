@@ -109,8 +109,13 @@ fun NoticeViewerScreen(
     // screen overnight, or put in a pocket, is not someone reading.
     //
     // A configuration change disposes and recreates this screen, so it reports twice, each covering
-    // its own part of one viewing. A process killed while in the background reports nothing; the
-    // event is written on leaving, and there is no leaving to observe.
+    // its own part of one viewing. Durations for a notice must therefore be SUMMED per notice id,
+    // never maxed: several rows can belong to one reading session (a rotation, or a trip out and
+    // back), and a reader can also open the same notice twice.
+    //
+    // A process killed while in the background reports nothing; the event is written on leaving,
+    // and there is no leaving to observe. The longest sessions are the likeliest to be killed, so
+    // the recorded durations are biased slightly short.
     DisposableEffect(lifecycleOwner) {
         var startedAt: Long? = null
         var openMs = 0L

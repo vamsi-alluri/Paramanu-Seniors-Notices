@@ -259,6 +259,10 @@ private fun NoticesApp(
     // every recomposition, and nothing here may run per frame. The flow only emits when the set of
     // visible ids changes, so this logs at most once per card per continuous stretch on screen.
     //
+    // No minimum duration is applied, on purpose. A fling past a card yields a very short row, and
+    // such rows are expected: filter them in the query. A floor here would be irreversible and
+    // would also drop the genuine case of a reader glancing at a card and moving on.
+    //
     // The list state outlives the list. Its last layout is still readable while the viewer or
     // Settings is up and while the app is in the background, so left alone every visible card
     // would go on accruing time it was not being looked at. The effect is therefore bound to the
@@ -305,7 +309,8 @@ private fun NoticesApp(
                             val notice = notices[index]
                             shown[id] = ShownCard(
                                 shownAt = now,
-                                // The first notice is 1, as a reader counts, not the list index.
+                                // 1-based among notices, so the first notice is 1. The office-info
+                                // header is not counted, so this is not a LazyColumn index.
                                 position = index + 1,
                                 hasImage = !notice.imageUrl.isNullOrBlank(),
                                 hasPdf = !notice.pdfUrl.isNullOrBlank(),
