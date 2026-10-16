@@ -463,3 +463,5 @@ build reaches open testing**, not alongside it. Item 10 is what starts collectio
    `/config/analytics/enabled` against whatever rules are live.
 10. **Set `/config/analytics/enabled = true` in RTDB** (hand-edited) when collection should begin.
     Skipped: nothing is collected, crashes included, by design.
+    The on-device walk in `docs/analytics-device-verification.md` needs this switch on, so do it
+    while the build is still on your own handset; it also settles §9.4 (`first_open`).
