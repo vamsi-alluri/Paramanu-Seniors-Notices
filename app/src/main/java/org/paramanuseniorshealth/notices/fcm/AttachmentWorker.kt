@@ -227,9 +227,6 @@ class AttachmentWorker(
         private const val KEY_LOG_ID = "logId"
         private const val KEY_JITTER = "jitter"
         private const val KEY_ENQUEUED_AT = "enqueuedAt"
-
-        private fun Data.longOrNull(key: String): Long? =
-            if (hasKeyWithValueOfType(key, Long::class.javaObjectType)) getLong(key, 0L) else null
         private const val CATCH_UP = "attachment-catch-up"
         private const val CATCH_UP_WIFI = "attachment-catch-up-wifi"
         /**
@@ -252,6 +249,9 @@ class AttachmentWorker(
          * minute is well inside the window where the notice is still on screen.
          */
         private const val MAX_JITTER_SECONDS = 60L
+
+        private fun Data.longOrNull(key: String): Long? =
+            if (hasKeyWithValueOfType(key, Long::class.javaObjectType)) getLong(key, 0L) else null
 
         private fun connected() =
             Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build()
@@ -282,8 +282,8 @@ class AttachmentWorker(
                     workDataOf(
                         KEY_LOG_ID to logId,
                         KEY_JITTER to jitterSeconds,
-                        // WorkManager does not expose enqueue time to the worker, and WorkInfo
-                        // does not carry it either -- so it travels as input data or not at all.
+                        // Input data is the only channel into a worker, and WorkManager does not put
+                        // the enqueue time in it -- so it travels as input data or not at all.
                         // Only here: the sweeps stay free of input data so that KEEP can see their
                         // requests as identical.
                         KEY_ENQUEUED_AT to System.currentTimeMillis(),
@@ -484,8 +484,8 @@ class AttachmentWorker(
          */
         suspend fun fetchNow(context: Context, repository: NoticeRepository, notice: NoticeEntity) {
             val logId = notice.logId ?: return
-            // A tap has no worker, so no jitter, enqueue time or attempt: FetchOrigin's defaults,
-            // stamped with now. See FetchOrigin for how those zeros are told apart.
+            // A tap has no worker, so there is no jitter and no enqueue time -- both absent -- and
+            // its attempt is 0. FetchOrigin's defaults say exactly that, stamped with now.
             fetchAttachments(
                 context, repository, notice, logId, tapInitiated = true, origin = FetchOrigin(),
             ) { _, _, _ ->

@@ -16,8 +16,8 @@ import java.net.URL
 
 /**
  * Where a fetch came from, carried to [NoticeImageStore.download] so that the start event is
- * logged by the same function that logs the end event -- the only arrangement in which every
- * start has an end and every end a start.
+ * logged by the same function that logs the end event -- an arrangement in which every start has
+ * an end and every end a start, whatever the callers do.
  *
  * [jitterSeconds] and [enqueuedAtMs] describe the per-notice work request and exist only for work
  * enqueued by `AttachmentWorker.enqueueFor`. Sweeps and taps have neither, so they are null and

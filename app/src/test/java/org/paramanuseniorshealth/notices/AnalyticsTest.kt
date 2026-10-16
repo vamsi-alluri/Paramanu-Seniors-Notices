@@ -69,11 +69,14 @@ class AnalyticsTest {
     }
 
     @Test
-    fun `a late duplicate event is logged, not suppressed`() {
+    fun `Analytics does not de-duplicate identical events`() {
         // NoticeImageStore.download cannot be interrupted by withTimeoutOrNull, so a fetch that
         // the caller already gave up on can still complete and report. Both events are real and
         // both are kept; de-duplication belongs in the query, not here, because the app cannot
         // know which one the analysis wants.
+        //
+        // This pins only that Analytics.log passes repeats through. It does not pin that download
+        // logs an end after its caller has timed out; that would need a seam in download.
         val sink = RecordingSink()
         val analytics = Analytics(sink)
         analytics.setEnabled(true)
