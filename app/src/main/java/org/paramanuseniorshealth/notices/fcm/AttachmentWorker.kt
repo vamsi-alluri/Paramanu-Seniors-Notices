@@ -282,8 +282,8 @@ class AttachmentWorker(
                     workDataOf(
                         KEY_LOG_ID to logId,
                         KEY_JITTER to jitterSeconds,
-                        // Input data is the only channel into a worker, and WorkManager does not put
-                        // the enqueue time in it -- so it travels as input data or not at all.
+                        // Input data is how a worker receives values from whoever enqueued it, and
+                        // WorkManager does not put the enqueue time there, so it is added here.
                         // Only here: the sweeps stay free of input data so that KEEP can see their
                         // requests as identical.
                         KEY_ENQUEUED_AT to System.currentTimeMillis(),
