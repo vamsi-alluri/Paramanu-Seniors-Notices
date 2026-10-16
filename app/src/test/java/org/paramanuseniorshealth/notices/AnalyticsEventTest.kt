@@ -8,6 +8,33 @@ import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 
 class AnalyticsEventTest {
 
+    /**
+     * One of every variant, every optional parameter present. sealedSubclasses would need
+     * kotlin-reflect, so the list is hand-written: a fourteenth variant must be added here
+     * deliberately, and the size check below is what makes forgetting it fail.
+     */
+    private val allEvents: List<AnalyticsEvent> = listOf(
+        AnalyticsEvent.FetchPolicyDecision("pdf", true, false, 1L, true),
+        AnalyticsEvent.NetworkStateOnOpen(metered = true, roaming = false),
+        AnalyticsEvent.AttachmentFetchStart("pdf", 1L, 30L, 1L, 2L, 0),
+        AnalyticsEvent.AttachmentFetchEnd("pdf", 1L, 250L, "fetched", 200),
+        AnalyticsEvent.NoticeReceived(hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = 10L, msSinceProcessStart = 20L),
+        AnalyticsEvent.NotificationTapped(msSinceShown = 5L, coldStart = true),
+        AnalyticsEvent.AppOpen(source = "launcher"),
+        AnalyticsEvent.NoticeCardVisible(noticeId = 1L, visibleMs = 900L, hasImage = true, hasPdf = false, position = 3),
+        AnalyticsEvent.ImageViewerClosed(noticeId = 1L, durationMs = 400L, maxScale = 2.5f),
+        AnalyticsEvent.PdfOpened(noticeId = 1L, sizeBytes = 1L, wasCached = true),
+        AnalyticsEvent.ActivationShown(hasCode = false),
+        AnalyticsEvent.ActivationSubmitted,
+        AnalyticsEvent.ActivationResult(result = "offline", offlineCause = "timeout"),
+    )
+
+    @Test
+    fun `the variant list covers all thirteen events`() {
+        assertEquals(13, allEvents.size)
+        assertEquals(13, allEvents.map { it.name }.toSet().size)
+    }
+
     @Test
     fun `fetch policy decision carries the network facts`() {
         val event = AnalyticsEvent.FetchPolicyDecision(
@@ -37,23 +64,14 @@ class AnalyticsEventTest {
     fun `every event and parameter name is within GA4 limits`() {
         // Over-long names are dropped silently at runtime and surface as a column that is always
         // null -- a failure that only shows up days later in BigQuery.
-        val all = listOf(
-            AnalyticsEvent.FetchPolicyDecision("pdf", true, false, 1L, true),
-            AnalyticsEvent.NetworkStateOnOpen(metered = true, roaming = false),
-            AnalyticsEvent.AttachmentFetchStart("pdf", 1L, 30L, 1L, 2L, 0),
-            AnalyticsEvent.AttachmentFetchEnd("pdf", 1L, 250L, "fetched", 200),
-            AnalyticsEvent.NoticeReceived(hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = 10L, msSinceProcessStart = 20L),
-            AnalyticsEvent.NotificationTapped(msSinceShown = 5L, coldStart = true),
-            AnalyticsEvent.AppOpen(source = "launcher"),
-            AnalyticsEvent.NoticeCardVisible(noticeId = 1L, visibleMs = 900L, hasImage = true, hasPdf = false, position = 3),
-            AnalyticsEvent.ImageViewerClosed(noticeId = 1L, durationMs = 400L, maxScale = 2.5f),
-            AnalyticsEvent.PdfOpened(noticeId = 1L, sizeBytes = 1L, wasCached = true),
-            AnalyticsEvent.ActivationShown(hasCode = false),
-            AnalyticsEvent.ActivationSubmitted,
-            AnalyticsEvent.ActivationResult(result = "offline", offlineCause = "timeout"),
-        )
-        for (event in all) {
+        //
+        // The reserved prefixes are dropped just as silently; app_open is reserved too, which is
+        // why AppOpen is named app_open_source.
+        for (event in allEvents) {
             assertTrue("event name too long: ${event.name}", event.name.length <= 40)
+            for (prefix in listOf("firebase_", "google_", "ga_")) {
+                assertFalse("event name uses reserved prefix $prefix: ${event.name}", event.name.startsWith(prefix))
+            }
             assertTrue("event name not snake_case: ${event.name}", event.name.matches(Regex("[a-z][a-z0-9_]*")))
             assertTrue("too many params on ${event.name}", event.params.size <= 25)
             for (key in event.params.keys) {
@@ -65,11 +83,66 @@ class AnalyticsEventTest {
 
     @Test
     fun `no event carries notice text`() {
-        val event = AnalyticsEvent.NoticeCardVisible(
-            noticeId = 7L, visibleMs = 100L, hasImage = false, hasPdf = false, position = 0,
+        // Notice text could only ever arrive as a free-form String, so the strong guard is on
+        // value types: only the named keys may hold a String, and only from a closed vocabulary.
+        // The key-name check is the cheap second line of defence. Widening a vocabulary below is
+        // a privacy-relevant change and should be made deliberately.
+        val stringVocabulary = mapOf(
+            "kind" to setOf("pdf", "img"),
+            "decision" to setOf("fetch", "defer"),
+            "source" to setOf("launcher"),
+            "outcome" to setOf("fetched"),
+            "result" to setOf("offline"),
+            "offline_cause" to setOf("timeout"),
         )
-        assertEquals(7L, event.params["notice_id"])
-        assertFalse(event.params.containsKey("title"))
-        assertFalse(event.params.containsKey("body"))
+        val forbiddenInKey = listOf("title", "body", "text", "message")
+        for (event in allEvents) {
+            for ((key, value) in event.params) {
+                for (word in forbiddenInKey) {
+                    assertFalse("${event.name} has a parameter that may carry notice text: $key", key.contains(word))
+                }
+                when (value) {
+                    is Long, is Double -> Unit
+                    is String -> {
+                        val allowed = stringVocabulary[key]
+                        assertTrue("${event.name} carries a String in '$key' -- only ${stringVocabulary.keys} may", allowed != null)
+                        assertTrue("${event.name} '$key' = \"$value\" is outside its vocabulary $allowed", value in allowed!!)
+                    }
+                    else -> throw AssertionError("${event.name} '$key' has unsupported type ${value::class.simpleName}")
+                }
+            }
+        }
+    }
+
+    @Test
+    fun `every nullable parameter is absent when null, never zero`() {
+        // Each pair is a variant built with its nullable parameters null, and the keys that must
+        // then be missing -- not present as 0, and not present as null.
+        val cases = listOf(
+            AnalyticsEvent.FetchPolicyDecision("pdf", true, false, null, false) to listOf("size_bytes"),
+            AnalyticsEvent.AttachmentFetchStart("pdf", null, 30L, 1L, 2L, 0) to listOf("size_bytes"),
+            AnalyticsEvent.AttachmentFetchEnd("pdf", null, 250L, "fetched", null) to listOf("size_bytes", "http_status"),
+            AnalyticsEvent.NoticeReceived(hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = null, msSinceProcessStart = 20L) to listOf("delivery_lag_ms"),
+            AnalyticsEvent.NotificationTapped(msSinceShown = null, coldStart = true) to listOf("ms_since_shown"),
+            AnalyticsEvent.PdfOpened(noticeId = 1L, sizeBytes = null, wasCached = true) to listOf("size_bytes"),
+            AnalyticsEvent.ActivationResult(result = "offline", offlineCause = null) to listOf("offline_cause"),
+        )
+        for ((event, keys) in cases) {
+            for (key in keys) {
+                assertFalse("${event.name} records an unknown '$key' instead of omitting it", event.params.containsKey(key))
+            }
+        }
+    }
+
+    @Test
+    fun `a real zero is a measurement and stays present`() {
+        // The converse: absence means unknown, so a measured zero must not collapse into it.
+        val size = AnalyticsEvent.PdfOpened(noticeId = 1L, sizeBytes = 0L, wasCached = true)
+        assertEquals(0L, size.params["size_bytes"])
+        val lag = AnalyticsEvent.NoticeReceived(hasImage = false, hasPdf = false, isNew = true, deliveryLagMs = 0L, msSinceProcessStart = 0L)
+        assertEquals(0L, lag.params["delivery_lag_ms"])
+        val status = AnalyticsEvent.AttachmentFetchEnd("pdf", 0L, 1L, "fetched", 0)
+        assertEquals(0L, status.params["size_bytes"])
+        assertEquals(0L, status.params["http_status"])
     }
 }
