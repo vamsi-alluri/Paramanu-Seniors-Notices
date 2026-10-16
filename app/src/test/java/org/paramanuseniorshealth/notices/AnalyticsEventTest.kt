@@ -87,13 +87,27 @@ class AnalyticsEventTest {
         // value types: only the named keys may hold a String, and only from a closed vocabulary.
         // The key-name check is the cheap second line of defence. Widening a vocabulary below is
         // a privacy-relevant change and should be made deliberately.
+        //
+        // The sets are the contract later call sites are measured against, not a record of what
+        // this test constructs. Each comment names the producer to check before widening a set.
         val stringVocabulary = mapOf(
-            "kind" to setOf("pdf", "img"),
+            // NoticeImageStore's existing vocabulary; FetchPolicyDecision, AttachmentFetchStart
+            // and AttachmentFetchEnd.
+            "kind" to setOf("img", "link", "pdf_thumb", "pdf"),
+            // FetchPolicyDecision itself: `fetched` true -> "fetch", false -> "defer".
             "decision" to setOf("fetch", "defer"),
-            "source" to setOf("launcher"),
-            "outcome" to setOf("fetched"),
-            "result" to setOf("offline"),
-            "offline_cause" to setOf("timeout"),
+            // AppOpen, derived at launch: a logId extra present -> notification, else action
+            // ACTION_VIEW -> link, else launcher.
+            "source" to setOf("notification", "link", "launcher"),
+            // AttachmentFetchEnd, at the end of the attachment worker's fetch.
+            "outcome" to setOf("fetched", "failed"),
+            // ActivationResult: the five RedeemResult variants in activation/ActivationState.kt,
+            // rendered as result::class.simpleName.orEmpty().lowercase(). A sixth variant will
+            // fail here, and its lowercased simple name is the value to add.
+            "result" to setOf("success", "mistyped", "notaccepted", "samecode", "offline"),
+            // ActivationResult: set just before each of the three RedeemResult.Offline returns
+            // (no uid from anonymous sign-in, transport exception, 20-second timeout).
+            "offline_cause" to setOf("no_uid", "transport", "timeout"),
         )
         val forbiddenInKey = listOf("title", "body", "text", "message")
         for (event in allEvents) {
