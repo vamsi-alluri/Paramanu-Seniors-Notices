@@ -67,4 +67,21 @@ class AnalyticsTest {
         assertEquals(1, sink.logged.size)
         assertEquals(listOf(true, false), sink.collectionCalls)
     }
+
+    @Test
+    fun `a late duplicate event is logged, not suppressed`() {
+        // NoticeImageStore.download cannot be interrupted by withTimeoutOrNull, so a fetch that
+        // the caller already gave up on can still complete and report. Both events are real and
+        // both are kept; de-duplication belongs in the query, not here, because the app cannot
+        // know which one the analysis wants.
+        val sink = RecordingSink()
+        val analytics = Analytics(sink)
+        analytics.setEnabled(true)
+        val event = AnalyticsEvent.AttachmentFetchEnd(
+            kind = "pdf", sizeBytes = 100L, durationMs = 50L, outcome = "failed", httpStatus = null,
+        )
+        analytics.log(event)
+        analytics.log(event)
+        assertEquals(2, sink.logged.size)
+    }
 }

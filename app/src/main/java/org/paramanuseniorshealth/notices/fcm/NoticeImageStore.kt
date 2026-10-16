@@ -7,9 +7,34 @@ import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import org.paramanuseniorshealth.notices.NoticesApplication
+import org.paramanuseniorshealth.notices.analytics.Analytics
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+
+/**
+ * Where a fetch came from, carried to [NoticeImageStore.download] so that the start event is
+ * logged by the same function that logs the end event -- the only arrangement in which every
+ * start has an end and every end a start.
+ *
+ * [jitterSeconds] and [enqueuedAtMs] describe the per-notice work request and exist only for work
+ * enqueued by `AttachmentWorker.enqueueFor`. Sweeps and taps have neither, and read as `0` for
+ * both: that `0` means "no such thing", not "zero seconds of jitter". [enqueuedAtMs] is the
+ * discriminator -- a real enqueue time is never `0`, so `enqueued_at_ms = 0` identifies a row
+ * with no jitter to speak of, whereas `jitter_seconds = 0` alone cannot (the draw can be `0`).
+ *
+ * [startedAtMs] is when the worker (or tap) began, shared by every attachment of a sweep, not
+ * when this download opened its connection. [attempt] is WorkManager's `runAttemptCount`, so it is
+ * `0` for taps.
+ */
+data class FetchOrigin(
+    val jitterSeconds: Long = 0L,
+    val enqueuedAtMs: Long = 0L,
+    val startedAtMs: Long = System.currentTimeMillis(),
+    val attempt: Int = 0,
+)
 
 /**
  * Downloads and caches everything a notice carries.
@@ -145,12 +170,20 @@ object NoticeImageStore {
      * Fetches [url] into the cache and returns the decoded bitmap, or null on any failure --
      * callers fall back to a text-only notification, never to silence.
      */
-    suspend fun fetchImage(context: Context, url: String, logId: String): Bitmap? =
-        fetchPicture(context, url, logId, "img")
+    suspend fun fetchImage(
+        context: Context,
+        url: String,
+        logId: String,
+        origin: FetchOrigin = FetchOrigin(),
+    ): Bitmap? = fetchPicture(context, url, logId, "img", "img", origin)
 
     /** The logo or still for a link preview card. Same path, different name on disk. */
-    suspend fun fetchLinkImage(context: Context, url: String, logId: String): Bitmap? =
-        fetchPicture(context, url, logId, "link")
+    suspend fun fetchLinkImage(
+        context: Context,
+        url: String,
+        logId: String,
+        origin: FetchOrigin = FetchOrigin(),
+    ): Bitmap? = fetchPicture(context, url, logId, "link", "link", origin)
 
     /**
      * A published first-page image for a circular, ~40KB instead of the document's ~5.6MB.
@@ -166,8 +199,12 @@ object NoticeImageStore {
      * chooses on `pdfThumbUrl`), and if both somehow did, the later one overwriting the earlier is
      * a correct result rather than a collision.
      */
-    suspend fun fetchPdfThumb(context: Context, url: String, logId: String): Bitmap? =
-        fetchPicture(context, url, logId, "pdf")
+    suspend fun fetchPdfThumb(
+        context: Context,
+        url: String,
+        logId: String,
+        origin: FetchOrigin = FetchOrigin(),
+    ): Bitmap? = fetchPicture(context, url, logId, "pdf", "pdf_thumb", origin)
 
     /**
      * Fetches a picture ([fetchImage], [fetchLinkImage] or [fetchPdfThumb]) into the cache.
@@ -184,18 +221,26 @@ object NoticeImageStore {
      * blank tile with no glyph, no tap and no retry able to reach it. A unique name per call makes
      * that interleaving impossible; the `finally` below cleans it up since, unlike the old shared
      * name, it never gets overwritten by the next call and would otherwise litter `cacheDir`.
+     *
+     * [kind] names the file on disk; [eventKind] names the fetch in analytics. They differ for the
+     * published PDF thumbnail, which is stored as `pdf` (see [fetchPdfThumb]) but is a different
+     * fetch from the document itself and must not be counted as one.
      */
     private suspend fun fetchPicture(
         context: Context,
         url: String,
         logId: String,
         kind: String,
+        eventKind: String,
+        origin: FetchOrigin,
     ): Bitmap? = withTimeoutOrNull(TIMEOUT_MS) {
         withContext(Dispatchers.IO) {
             val scratch = File.createTempFile("notice_$logId-$kind", ".part", context.cacheDir)
             try {
                 runCatching {
-                    val contentType = download(url, scratch)
+                    val contentType = download(
+                        url, scratch, eventKind, analyticsOf(context), origin, sizeBytes = null,
+                    )
 
                     // Checked before the file is kept, not after it fails to decode. An ICO favicon
                     // downloads perfectly and then renders as nothing at all, which on a phone looks
@@ -228,7 +273,12 @@ object NoticeImageStore {
      * failure returns null and the caller falls back to opening the URL in a browser -- which needs
      * a connection, but so did this.
      */
-    suspend fun fetchPdf(context: Context, pdfUrl: String, logId: String): File? {
+    suspend fun fetchPdf(
+        context: Context,
+        pdfUrl: String,
+        logId: String,
+        origin: FetchOrigin = FetchOrigin(),
+    ): File? {
         cachedPdf(context, logId)?.takeIf { it.length() > 0 }?.let { return it }
 
         return withTimeoutOrNull(TAP_TIMEOUT_MS) {
@@ -239,7 +289,7 @@ object NoticeImageStore {
 
                     // Downloaded to a scratch name and moved into place, so an interrupted download
                     // cannot leave a truncated file that looks cached and opens to an error.
-                    download(pdfUrl, scratch)
+                    download(pdfUrl, scratch, "pdf", analyticsOf(context), origin, sizeBytes = null)
                     if (!PdfPageRenderer.isReadablePdf(scratch)) {
                         scratch.delete()
                         error("$pdfUrl is not a readable PDF")
@@ -299,6 +349,9 @@ object NoticeImageStore {
          * therefore gets its own scratch name -- this is the flag that decides which.
          */
         tapInitiated: Boolean = false,
+        origin: FetchOrigin = FetchOrigin(),
+        /** The size the sender published for the document, if it did; reported on the start event. */
+        sizeBytes: Long? = null,
     ): PdfFetch? =
         withTimeoutOrNull(WORKER_TIMEOUT_MS) {
             withContext(Dispatchers.IO) {
@@ -310,7 +363,7 @@ object NoticeImageStore {
                     "notice_$logId-doc-${if (tapInitiated) "tap" else "worker"}.part",
                 )
                 runCatching {
-                    download(pdfUrl, scratch)
+                    download(pdfUrl, scratch, "pdf", analyticsOf(context), origin, sizeBytes)
                     // pageCount and isReadablePdf open the file identically (same guards, same
                     // PdfRenderer, same >= 1 check) -- pageCount's non-null result already proves
                     // the file is readable, so a separate isReadablePdf call would be a third full
@@ -342,23 +395,77 @@ object NoticeImageStore {
             }
         }
 
-    /** Returns the response's Content-Type, which is the only honest source for the extension. */
-    private fun download(url: String, target: File): String? {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 5_000
-            readTimeout = 15_000
-            instanceFollowRedirects = true
-        }
+    private fun analyticsOf(context: Context): Analytics =
+        (context.applicationContext as NoticesApplication).analytics
+
+    /**
+     * Returns the response's Content-Type, which is the only honest source for the extension.
+     *
+     * Logs one start and one end event per call, and nothing else logs either. The start is the
+     * first statement, before the `try`, and the end is in its `finally`, so every call that logs
+     * one logs the other, whatever throws between. That is why both live here and not at the
+     * callers: a caller that logged the start could be cancelled by its timeout before this ran.
+     *
+     * The end event cannot be suppressed when a caller has already timed out. This function has no
+     * suspension points, so [withTimeoutOrNull] stops *waiting* for it but cannot stop it: the
+     * caller may log a failure to its own state and this call later report `fetched`. Both events
+     * are real and both are kept; de-duplicating belongs in the query, which knows which one the
+     * analysis wants.
+     *
+     * `fetched` means the bytes arrived in full, not that the caller could use them: a download of
+     * a file that then fails to decode is still `fetched` here. The URL is never logged.
+     */
+    private fun download(
+        url: String,
+        target: File,
+        kind: String,
+        analytics: Analytics,
+        origin: FetchOrigin,
+        sizeBytes: Long?,
+    ): String? {
+        analytics.log(
+            AnalyticsEvent.AttachmentFetchStart(
+                kind = kind,
+                sizeBytes = sizeBytes,
+                jitterSeconds = origin.jitterSeconds,
+                enqueuedAtMs = origin.enqueuedAtMs,
+                startedAtMs = origin.startedAtMs,
+                attempt = origin.attempt,
+            )
+        )
+        val began = System.currentTimeMillis()
+        var status: Int? = null
+        var completed = false
         try {
-            if (connection.responseCode !in 200..299) {
-                error("HTTP ${connection.responseCode} for $url")
+            val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = 5_000
+                readTimeout = 15_000
+                instanceFollowRedirects = true
             }
-            connection.inputStream.use { input ->
-                target.outputStream().use { output -> input.copyTo(output) }
+            try {
+                status = connection.responseCode
+                if (status !in 200..299) {
+                    error("HTTP $status for $url")
+                }
+                connection.inputStream.use { input ->
+                    target.outputStream().use { output -> input.copyTo(output) }
+                }
+                completed = true
+                return connection.contentType
+            } finally {
+                connection.disconnect()
             }
-            return connection.contentType
         } finally {
-            connection.disconnect()
+            analytics.log(
+                AnalyticsEvent.AttachmentFetchEnd(
+                    kind = kind,
+                    // The measured size when the bytes arrived; otherwise absent, never zero.
+                    sizeBytes = if (completed) target.length() else null,
+                    durationMs = System.currentTimeMillis() - began,
+                    outcome = if (completed) "fetched" else "failed",
+                    httpStatus = status,
+                )
+            )
         }
     }
 

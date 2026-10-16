@@ -40,6 +40,17 @@ class AttachmentWorker(
         val app = applicationContext as NoticesApplication
         val single = inputData.getString(KEY_LOG_ID)
 
+        // Only enqueueFor writes KEY_JITTER and KEY_ENQUEUED_AT. The sweeps carry no input data on
+        // purpose (see enqueueCatchUp), so for them both read as the 0L default. That 0 means "this
+        // work came from a sweep, which has neither" and not "zero seconds of jitter"; a real
+        // enqueue time is never 0, so enqueued_at_ms = 0 is what tells the two apart.
+        val origin = FetchOrigin(
+            jitterSeconds = inputData.getLong(KEY_JITTER, 0L),
+            enqueuedAtMs = inputData.getLong(KEY_ENQUEUED_AT, 0L),
+            startedAtMs = System.currentTimeMillis(),
+            attempt = runAttemptCount,
+        )
+
         val notices = if (single != null) {
             listOfNotNull(app.repository.byLogId(single))
         } else {
@@ -69,7 +80,7 @@ class AttachmentWorker(
 
             // One bad notice must not abandon the rest of a sweep, so each is isolated. Logged
             // rather than swallowed: a fetch that throws is a bug here, not a policy decision.
-            runCatching { fetch(app, notice) }.onFailure { failure ->
+            runCatching { fetch(app, notice, origin) }.onFailure { failure ->
                 Log.w(TAG, "Attachment fetch threw for ${notice.logId}", failure)
 
                 // fetch()'s own recordAttachment never ran, so without this the row keeps both its
@@ -94,7 +105,7 @@ class AttachmentWorker(
         return Result.success()
     }
 
-    private suspend fun fetch(app: NoticesApplication, notice: NoticeEntity) {
+    private suspend fun fetch(app: NoticesApplication, notice: NoticeEntity, origin: FetchOrigin) {
         // Both routes into here guarantee a logId: `withAttachments()` filters `logId IS NOT NULL`,
         // and `byLogId` matched on one. So this is an assertion about an invariant, not a case to
         // handle -- a null here would mean the query changed underneath the worker, and silently
@@ -110,7 +121,9 @@ class AttachmentWorker(
         val metered = withContext(Dispatchers.IO) { NetworkStatus.isMetered(context) }
         val roaming = withContext(Dispatchers.IO) { NetworkStatus.isRoaming(context) }
 
-        fetchAttachments(context, app.repository, notice, logId, tapInitiated = false) { kind, url, known ->
+        fetchAttachments(
+            context, app.repository, notice, logId, tapInitiated = false, origin = origin,
+        ) { kind, url, known ->
             decide(kind, url, known, metered, roaming)
         }
     }
@@ -211,6 +224,8 @@ class AttachmentWorker(
     companion object {
         private const val TAG = "AttachmentWorker"
         private const val KEY_LOG_ID = "logId"
+        private const val KEY_JITTER = "jitter"
+        private const val KEY_ENQUEUED_AT = "enqueuedAt"
         private const val CATCH_UP = "attachment-catch-up"
         private const val CATCH_UP_WIFI = "attachment-catch-up-wifi"
         /**
@@ -253,10 +268,23 @@ class AttachmentWorker(
          * become a tappable glyph.
          */
         fun enqueueFor(context: Context, logId: String) {
+            // Hoisted so the draw can be recorded: spread-versus-clustered jitter is exactly what
+            // the fetch-start events exist to show.
+            val jitterSeconds = Random.nextLong(0, MAX_JITTER_SECONDS)
             val request = OneTimeWorkRequestBuilder<AttachmentWorker>()
                 .setConstraints(connected())
-                .setInitialDelay(Random.nextLong(0, MAX_JITTER_SECONDS), TimeUnit.SECONDS)
-                .setInputData(workDataOf(KEY_LOG_ID to logId))
+                .setInitialDelay(jitterSeconds, TimeUnit.SECONDS)
+                .setInputData(
+                    workDataOf(
+                        KEY_LOG_ID to logId,
+                        KEY_JITTER to jitterSeconds,
+                        // WorkManager does not expose enqueue time to the worker, and WorkInfo
+                        // does not carry it either -- so it travels as input data or not at all.
+                        // Only here: the sweeps stay free of input data so that KEEP can see their
+                        // requests as identical.
+                        KEY_ENQUEUED_AT to System.currentTimeMillis(),
+                    )
+                )
                 .build()
 
             WorkManager.getInstance(context.applicationContext)
@@ -325,6 +353,7 @@ class AttachmentWorker(
             notice: NoticeEntity,
             logId: String,
             tapInitiated: Boolean,
+            origin: FetchOrigin,
             verdict: suspend (kind: String, url: String, known: Long?) -> Verdict,
         ) {
             var deferred = false
@@ -341,7 +370,7 @@ class AttachmentWorker(
                 if (NoticeImageStore.cachedLinkImage(context, logId) == null) {
                     when (verdict("link", url, null)) {
                         Verdict.FETCH -> if (
-                            NoticeImageStore.fetchLinkImage(context, url, logId) == null
+                            NoticeImageStore.fetchLinkImage(context, url, logId, origin) == null
                         ) failed = true
                         Verdict.DEFER -> deferred = true
                         Verdict.GONE -> { failed = true; gone = true }
@@ -353,7 +382,9 @@ class AttachmentWorker(
                 if (NoticeImageStore.cachedImage(context, logId) == null) {
                     when (verdict("img", url, null)) {
                         Verdict.FETCH ->
-                            if (NoticeImageStore.fetchImage(context, url, logId) == null) failed = true
+                            if (NoticeImageStore.fetchImage(context, url, logId, origin) == null) {
+                                failed = true
+                            }
                         Verdict.DEFER -> deferred = true
                         Verdict.GONE -> { failed = true; gone = true }
                     }
@@ -371,7 +402,7 @@ class AttachmentWorker(
                     // whatever the phone is connected to.
                     when (verdict("pdf_thumb", thumbUrl, null)) {
                         Verdict.FETCH -> if (
-                            NoticeImageStore.fetchPdfThumb(context, thumbUrl, logId) == null
+                            NoticeImageStore.fetchPdfThumb(context, thumbUrl, logId, origin) == null
                         ) failed = true
                         Verdict.DEFER -> deferred = true
                         Verdict.GONE -> { failed = true; gone = true }
@@ -382,7 +413,7 @@ class AttachmentWorker(
                     when (verdict("pdf", pdfUrl, notice.pdfBytes)) {
                         Verdict.FETCH -> {
                             val fetched = NoticeImageStore.fetchPdfKeeping(
-                                context, pdfUrl, logId, tapInitiated,
+                                context, pdfUrl, logId, tapInitiated, origin, notice.pdfBytes,
                             )
                             if (fetched == null) failed = true else {
                                 pages = fetched.pages
@@ -449,7 +480,11 @@ class AttachmentWorker(
          */
         suspend fun fetchNow(context: Context, repository: NoticeRepository, notice: NoticeEntity) {
             val logId = notice.logId ?: return
-            fetchAttachments(context, repository, notice, logId, tapInitiated = true) { _, _, _ ->
+            // A tap has no worker, so no jitter, enqueue time or attempt: FetchOrigin's defaults,
+            // stamped with now. See FetchOrigin for how those zeros are told apart.
+            fetchAttachments(
+                context, repository, notice, logId, tapInitiated = true, origin = FetchOrigin(),
+            ) { _, _, _ ->
                 Verdict.FETCH
             }
         }
