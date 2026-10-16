@@ -41,7 +41,13 @@ class AnalyticsConfig(private val prefs: SharedPreferences) {
     }
 
     companion object {
-        /** Must match the `config` rule in `database.rules.json`. */
+        /**
+         * Must sit under the `config/analytics` rule in `database.rules.json`, which is the only
+         * world-readable grant. It is scoped to `analytics` on purpose: RTDB read access cascades
+         * to every child, so anything added beneath `config/analytics` is public too, while a new
+         * sibling under `config` is not covered and stays private. Do not widen the grant to
+         * `config`, and do not put anything private under `config/analytics`.
+         */
         const val PATH = "config/analytics/enabled"
         private const val KEY = "analytics_enabled"
         private const val TAG = "AnalyticsConfig"
