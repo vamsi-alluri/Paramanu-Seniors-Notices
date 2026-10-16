@@ -131,11 +131,11 @@ Technical reports about unexpected stops are kept for ninety days.
   notice from your phone. To have the activation record removed as well, contact the organisation
   using the details below.
 - **Measurement.** The usage measurement described above is governed by a single switch held by
-  the organisation, which applies to every phone at once. It is there to answer particular
+  the organisation, which applies to every phone, not one at a time. It is there to answer particular
   questions about how the app performs, and the organisation will turn it off once those
   questions are answered. The app does not offer a setting for it on your phone, and the
   organisation cannot exclude a single phone from it.
-- **Deleting measurements.** Because the measurements contain no name, code or other key that
+- **Deleting measurements.** Because the measurements contain no name or code that
   ties them to you, the organisation cannot pick out one person's records to delete them. What
   does happen is that collection can be stopped for every phone at once, at any time (a phone
   follows within a short time of the switch being turned off, not the same instant), and the

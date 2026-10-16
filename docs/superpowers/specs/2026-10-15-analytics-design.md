@@ -393,3 +393,44 @@ stops a full-dataset scan against the 1 TiB monthly allowance. Dry-run every que
    it is a later decision.
 3. **GA4 streaming on sandbox** is documented for a sibling product but not for GA4 specifically.
    Assume daily-only; confirm from what the link wizard actually offers.
+4. **Two facts we have not established, and what the policy does about them.** (a) *GA4's location
+   precision*: whether the IP-derived geo record is city-level or coarser. (b) *Where Crashlytics
+   holds its data*: which country or region. The published policy therefore states the
+   conservative superset in both cases ("at least the country, and possibly the town or city";
+   Crashlytics data "on Google's own servers", no country). Tighten the wording only once either
+   is confirmed: a real exported event's `geo` record settles the first, Google's own
+   documentation settles the second. Do not trust a precision nobody checked, and do not quietly
+   weaken a disclosure that was chosen deliberately. Separately, the policy says Google may attach
+   more than it lists; that stays whatever is confirmed, because a third party's telemetry cannot
+   be enumerated from here.
+
+## 12. Before the collecting build ships
+
+Actions only the account owner can take. Order matters where stated: Data Safety is declared
+app-wide and the open-testing track is public, so **items 4 and 5 must be live before a collecting
+build reaches open testing**, not alongside it. Item 10 is what starts collection, so do it last.
+
+1. **GA4 retention.** Admin, Data settings, Data retention: 2 months, and turn OFF "Reset user data
+   on new activity". Skipped: the policy's "two months" is false.
+2. **Crashlytics retention.** Verify it is 90 days; change the policy number if not. Skipped: a
+   wrong number in a public promise.
+3. **BigQuery dataset.** Confirm it is `asia-south1` and that the 60-day sandbox expiry applies.
+   Skipped: the policy's "Mumbai" and "sixty days" may be false.
+4. **Publish the updated policy** on paramanuseniorshealth.org, with "Last updated" set to the
+   actual publication date. Skipped: a collecting build ships under a policy saying it collects
+   nothing, or a public document carries a wrong date.
+5. **Update Play Data Safety:** App activity, Crash logs, Diagnostics, Device or other IDs = yes;
+   Advertising ID = no; required; not linked; encrypted in transit; **"can users request deletion"
+   = No**. Skipped, or left at "Yes": an inaccurate or false declaration.
+6. **Decide whether Data Safety needs an approximate-location category** (Google derives rough
+   location from the internet address) and anything for the install-referrer and attribution
+   permissions the measurement SDK contributes. Skipped: possible under-declaration.
+7. **Decide on GA4's granular location and device data collection setting.** It reduces what is
+   gathered. Skipped: the disclosure stands as written and remains true.
+8. **Decide whether to keep the sunset sentence** in the policy's Measurement bullet ("will turn it
+   off once those questions are answered"). Skipped: nothing breaks, but the organisation is
+   publicly committed to it.
+9. **Deploy rules and config with the `firebase` CLI where relevant.** Skipped: the app reads
+   `/config/analytics/enabled` against whatever rules are live.
+10. **Set `/config/analytics/enabled = true` in RTDB** (hand-edited) when collection should begin.
+    Skipped: nothing is collected, crashes included, by design.
