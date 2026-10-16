@@ -192,6 +192,7 @@ class ActivationRepository(
      * worrying "not valid".
      */
     suspend fun redeem(rawCode: String): RedeemResult {
+        lastOfflineCause = null
         if (!ActivationCode.isValid(rawCode)) return RedeemResult.Mistyped
         val code = ActivationCode.normalise(rawCode)
 
@@ -206,7 +207,10 @@ class ActivationRepository(
                 // mint a new UID and orphan any claim this device already holds.
                 val uid = auth.currentUser?.uid
                     ?: auth.signInAnonymously().awaitResult().user?.uid
-                    ?: return@withTimeoutOrNull RedeemResult.Offline
+                    ?: run {
+                        lastOfflineCause = OFFLINE_NO_UID
+                        return@withTimeoutOrNull RedeemResult.Offline
+                    }
 
                 // updateChildren rather than setValue, so the `issued` metadata the NGO wrote when
                 // it printed the slip survives the claim.
@@ -258,10 +262,29 @@ class ActivationRepository(
                 // distinction does not matter. A transport failure is a separate message because
                 // "try again" is useful advice and "ask for a new code" is not.
                 Log.w(TAG, "Redeem refused for $code", e)
-                if (isTransportFailure(e)) RedeemResult.Offline else RedeemResult.NotAccepted
+                if (isTransportFailure(e)) {
+                    lastOfflineCause = OFFLINE_TRANSPORT
+                    RedeemResult.Offline
+                } else {
+                    RedeemResult.NotAccepted
+                }
             }
-        } ?: RedeemResult.Offline
+        } ?: run {
+            lastOfflineCause = OFFLINE_TIMEOUT
+            RedeemResult.Offline
+        }
     }
+
+    /**
+     * Why the last Offline was Offline. Three unrelated failures produce the same result -- no uid
+     * from anonymous sign-in, a transport exception, and the 20-second timeout elapsing -- and
+     * telling them apart is most of the value of the activation funnel.
+     *
+     * Cleared at the start of every [redeem], so it only ever describes the latest attempt, and is
+     * meaningful only when that attempt returned [RedeemResult.Offline].
+     */
+    var lastOfflineCause: String? = null
+        private set
 
     /**
      * Confirms the claim still stands, and picks up the code's dispensary while it is reading.
@@ -427,6 +450,12 @@ class ActivationRepository(
         private const val FIELD_DISPENSARY = "dispensary"
 
         private const val NETWORK_TIMEOUT_MS = 20_000L
+
+        // The values of lastOfflineCause. They are an analytics contract: the funnel is queried by
+        // these exact strings, so they are not to be renamed or added to casually.
+        private const val OFFLINE_NO_UID = "no_uid"
+        private const val OFFLINE_TRANSPORT = "transport"
+        private const val OFFLINE_TIMEOUT = "timeout"
 
         /**
          * Kept short: an inconclusive check costs nothing, because Unknown is permitted, and a person

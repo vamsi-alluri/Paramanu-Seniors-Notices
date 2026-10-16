@@ -453,9 +453,20 @@ class NoticeViewModel(
     fun redeem(rawCode: String) {
         if (_redeeming.value) return
         _redeeming.value = true
+        // After the guard, so taps made while a redemption is in flight are not counted.
+        analytics.log(AnalyticsEvent.ActivationSubmitted)
         _redeemError.value = null
         viewModelScope.launch {
-            when (val result = activation.redeem(rawCode)) {
+            val result = activation.redeem(rawCode)
+            // The one place every outcome passes through. Only the result's name is sent, never the
+            // code.
+            analytics.log(
+                AnalyticsEvent.ActivationResult(
+                    result = result::class.simpleName.orEmpty().lowercase(),
+                    offlineCause = activation.lastOfflineCause.takeIf { result is RedeemResult.Offline },
+                )
+            )
+            when (result) {
                 RedeemResult.Success -> {
                     // redeem() has already read the dispensary -- its topics and its banner -- and
                     // subscribed to the defaults, so Settings and the header are ready. A sole

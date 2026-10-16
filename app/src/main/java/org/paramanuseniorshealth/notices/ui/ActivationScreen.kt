@@ -19,12 +19,14 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -34,8 +36,10 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.activation.ActivationCode
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import org.paramanuseniorshealth.notices.activation.RedeemResult
 
 /**
@@ -63,6 +67,18 @@ fun ActivationScreen(
     // before it is spent and means a stale link fails where it can be seen.
     var code by remember(prefill) { mutableStateOf(CodeDashTransformation.clean(prefill)) }
     val complete = code.length == ActivationCode.LENGTH
+
+    // Once per appearance. The screen recomposes on every keystroke and keyboard change, and
+    // onValueChange runs per character, so neither may log. Keyed on Unit, so a later change of
+    // [prefill] is not a new appearance. hasCode is whether the field arrives holding a code, not
+    // whether the phone already holds one: a revoked phone reaches this screen with a stored code
+    // and an empty field, and that is not a reader arriving with a code in hand.
+    val context = LocalContext.current
+    LaunchedEffect(Unit) {
+        (context.applicationContext as NoticesApplication).analytics.log(
+            AnalyticsEvent.ActivationShown(hasCode = CodeDashTransformation.clean(prefill).isNotEmpty())
+        )
+    }
 
     Column(
         modifier = modifier
