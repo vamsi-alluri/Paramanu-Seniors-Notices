@@ -85,6 +85,18 @@
             android:value="false" />
 
         <!--
+          Ships the Analytics SDK switched off. This is not redundant with setEnabled() in
+          NoticesApplication.onCreate: the SDK initialises through its own component init, before
+          onCreate runs, and without this it starts enabled and can emit first_open, which fires
+          once per installation and can never be suppressed afterwards, before our gate closes.
+          The manifest value is only the startup default; setAnalyticsCollectionEnabled(true) at
+          runtime overrides it and persists, so the kill switch still works in both directions.
+        -->
+        <meta-data
+            android:name="firebase_analytics_collection_enabled"
+            android:value="false" />
+
+        <!--
           Lets the photo viewer read a cached image without the app copying it into shared storage.
           The grant is read-only and per-Intent: the viewer receives a content:// URI it can display
           and pass onward to a share target, and loses access when the task ends.
