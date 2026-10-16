@@ -295,9 +295,18 @@ confident wrong answer.
 
 **What the dataset cannot see**
 
-4. **`first_open` is never recorded.** The manifest default means collection is off before the
-   gate opens, so GA4 acquisition counts begin at the first *enabled* session, not at install. It
-   is not retroactive if the switch is flipped later.
+4. **Whether `first_open` is recorded is not established.** The manifest default does not appear
+   to discard the install: a device capture of this build with collection off logged
+   `FA: Persisting first open: 1792143140354` and `App measurement setting deferred collection:
+   true`, and left `deferred_analytics_collection=true` in
+   `com.google.android.gms.measurement.prefs.xml` (`task-12-report.md`). So the SDK seems to hold
+   the first-open instant rather than drop it. Nothing is sent while the gate is shut, so the
+   privacy position does not depend on this. What it leaves open is the dataset: whether
+   `first_open` arrives on the first *enabled* session, and with what timestamp, is not known, so
+   do not read acquisition counts as starting at either install or the first enabled session. What
+   would settle it is observing the first enabled session on a device that was installed while the
+   switch was off. Our own events are not retroactive: nothing the app logs while the switch is
+   off is sent later.
 5. **`delivery_lag_ms` can be negative**, meaning that handset's clock is behind FCM's. Filter
    `>= 0` before any transit-time percentile. Absence means FCM supplied no `sentTime`, not a bad
    one.
@@ -344,6 +353,26 @@ confident wrong answer.
     no upper bound beyond the foreground gate, so a phone left foregrounded can accrue hours — cap
     in the query. `position` is captured when the card appears and goes stale if a notice arrives
     above it.
+
+**Further traps from the whole-branch review**
+
+18. **`attachment_fetch_end.outcome` can only be `fetched` or `failed`.** §5 lists
+    fetched/failed/gone/deferred, but a deferral never reaches `download`, and a 4xx arrives as
+    `failed` with `http_status` carrying the real answer. `WHERE outcome = 'gone'` returns nothing
+    whatever the 4xx rate; filter on `http_status`.
+19. **Jittered rows are selection-biased.** `enqueueFor` delays up to 60s and is the only producer
+    of `jitter_seconds` and `enqueued_at_ms`; the app-open sweep fires with no delay. A reader who
+    taps the notification inside the jitter window triggers the undelayed sweep, which fetches
+    everything, and the jittered work then finds it cached and emits no start event. Jittered rows
+    therefore come disproportionately from phones whose owners did *not* open the app promptly
+    (see 10). Question 2 is still answerable: sweep rows are identifiable by the absent jitter.
+20. **`network_state_on_open` fires on every `ON_RESUME`, not every open** — including rotation,
+    return from the external PDF viewer, and after the notification-permission dialog. It is
+    harmless for "did this device ever see wifi" grouped per user; a metered-to-unmetered *ratio*
+    is weighted by how often people rotate their phones and read PDFs.
+21. **`started_at_ms` is the worker's start, shared by every attachment in one sweep.** A
+    ten-notice sweep emits ten start events bearing one identical instant; it is not each fetch's
+    own start. Use `duration_ms` on the end event for individual fetches.
 16. **`pdf_opened` means "resolved and handed off"**, not "read". There is no close event, because
     the PDF goes to an external viewer, and a handset with no PDF viewer installed still records
     an open. Share and Save are excluded.
