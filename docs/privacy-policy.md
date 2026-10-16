@@ -77,10 +77,9 @@ What is recorded:
 - **Details Google adds itself.** The app does not send these and does not ask for permission
   to see your location, but Google's measurement service attaches them to what it receives: the
   phone's make and model, its Android version, the version of this app, and the phone's
-  language; and roughly where the phone is, worked out from its internet connection. We have
-  not established how fine that rough location is — it may be as coarse as the country or as
-  fine as the town or city. The full set of details Google attaches is for Google to define, so
-  this list may not be complete.
+  language; and roughly where the phone is, worked out from its internet connection — at least
+  the country, and possibly the town or city. The full set of details Google attaches is for
+  Google to define, so this list may not be complete.
 
 This is a list of the main things recorded, not a guarantee that nothing else is attached by
 Google's software. What the app itself never records: your contacts, your photographs, an
@@ -106,7 +105,7 @@ Google, through the Firebase service, on behalf of Paramanu Seniors Health. Mess
 by Firebase Cloud Messaging; the activation record is held in a Firebase database located in
 Singapore; usage measurements are processed by Google Analytics for Firebase and stored in
 Google BigQuery in Mumbai, India; technical reports about unexpected stops are processed by
-Google Crashlytics, and we have not established where it holds them. Google's practices are described in the Google Privacy Policy at
+Google Crashlytics, which holds them on Google's own servers. Google's practices are described in the Google Privacy Policy at
 https://policies.google.com/privacy and Firebase's data handling at
 https://firebase.google.com/support/privacy.
 
