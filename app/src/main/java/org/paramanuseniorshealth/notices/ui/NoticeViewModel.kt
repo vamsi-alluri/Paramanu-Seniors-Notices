@@ -25,6 +25,7 @@ import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.activation.ActivationState
 import org.paramanuseniorshealth.notices.activation.Dispensary
 import org.paramanuseniorshealth.notices.activation.RedeemResult
+import org.paramanuseniorshealth.notices.activation.analyticsName
 import org.paramanuseniorshealth.notices.analytics.Analytics
 import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
@@ -453,7 +454,9 @@ class NoticeViewModel(
     fun redeem(rawCode: String) {
         if (_redeeming.value) return
         _redeeming.value = true
-        // After the guard, so taps made while a redemption is in flight are not counted.
+        // After the guard, so taps made while a redemption is in flight are not counted. An upper
+        // bound on attempts rather than an exact count: if the view model is cleared mid-flight
+        // there is a submission with no result.
         analytics.log(AnalyticsEvent.ActivationSubmitted)
         _redeemError.value = null
         viewModelScope.launch {
@@ -462,7 +465,7 @@ class NoticeViewModel(
             // code.
             analytics.log(
                 AnalyticsEvent.ActivationResult(
-                    result = result::class.simpleName.orEmpty().lowercase(),
+                    result = result.analyticsName(),
                     offlineCause = activation.lastOfflineCause.takeIf { result is RedeemResult.Offline },
                 )
             )

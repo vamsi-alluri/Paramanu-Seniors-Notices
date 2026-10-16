@@ -23,6 +23,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -70,11 +71,16 @@ fun ActivationScreen(
 
     // Once per appearance. The screen recomposes on every keystroke and keyboard change, and
     // onValueChange runs per character, so neither may log. Keyed on Unit, so a later change of
-    // [prefill] is not a new appearance. hasCode is whether the field arrives holding a code, not
-    // whether the phone already holds one: a revoked phone reaches this screen with a stored code
-    // and an empty field, and that is not a reader arriving with a code in hand.
+    // [prefill] is not a new appearance. The flag is saved state so that an activity recreation
+    // with this screen up does not count the same appearance again; it is dropped when the screen
+    // is left, so coming back is a new appearance. hasCode is whether the field arrives holding a
+    // code, not whether the phone already holds one: a revoked phone reaches this screen with a
+    // stored code and an empty field, and that is not a reader arriving with a code in hand.
     val context = LocalContext.current
+    var shownReported by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
+        if (shownReported) return@LaunchedEffect
+        shownReported = true
         (context.applicationContext as NoticesApplication).analytics.log(
             AnalyticsEvent.ActivationShown(hasCode = CodeDashTransformation.clean(prefill).isNotEmpty())
         )
