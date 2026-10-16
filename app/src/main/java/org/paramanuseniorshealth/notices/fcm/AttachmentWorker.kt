@@ -135,8 +135,10 @@ class AttachmentWorker(
      * logs nothing, because a 4xx is the server's answer about the file, not the policy's about
      * the connection, and counting it as a decline would inflate the deferral ratio.
      *
-     * A size is reported only when one was measured or supplied. An unreachable probe and the
-     * roaming short-circuit have none, and that is sent as absent rather than as zero.
+     * A size is reported only when one was measured or supplied, and is otherwise sent as absent
+     * rather than as zero. On the roaming short-circuit nothing is probed, so its size is present
+     * only when the sender supplied one (in practice a `pdf` with `pdfBytes`); a null there means
+     * the sender said nothing, not that we did not look. An unreachable probe is likewise absent.
      */
     private suspend fun decide(
         kind: String,

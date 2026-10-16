@@ -25,13 +25,13 @@ import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.activation.ActivationState
 import org.paramanuseniorshealth.notices.activation.Dispensary
 import org.paramanuseniorshealth.notices.activation.RedeemResult
+import org.paramanuseniorshealth.notices.analytics.Analytics
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.InfoRepository
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.data.OfficeInfo
-import org.paramanuseniorshealth.notices.analytics.Analytics
-import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import org.paramanuseniorshealth.notices.fcm.AttachmentWorker
 import org.paramanuseniorshealth.notices.fcm.NetworkStatus
 
@@ -398,6 +398,11 @@ class NoticeViewModel(
         // Once per foreground, here, and not in AttachmentWorker: the worker re-reads these inside
         // its per-notice loop, so logging there would emit one event per notice in a sweep and
         // inflate every ratio built from this event.
+        //
+        // Read on the main thread, which is fine here: these are two system-service reads, once per
+        // foreground. The worker wraps the same calls in Dispatchers.IO because its doWork runs on
+        // Default and sits next to a blocking HEAD probe -- not because the calls are unsafe on
+        // main -- so that wrapping is no rule broken here, and should not be copied or removed.
         analytics.log(
             AnalyticsEvent.NetworkStateOnOpen(
                 metered = NetworkStatus.isMetered(context),
