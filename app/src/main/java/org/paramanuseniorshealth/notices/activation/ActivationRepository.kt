@@ -2,7 +2,6 @@ package org.paramanuseniorshealth.notices.activation
 
 import android.content.Context
 import android.util.Log
-import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.database.DataSnapshot
@@ -10,14 +9,12 @@ import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.database.ServerValue
 import com.google.firebase.messaging.FirebaseMessaging
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
+import org.paramanuseniorshealth.notices.data.awaitResult
 import org.paramanuseniorshealth.notices.fcm.ControlMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 import kotlin.time.Duration.Companion.milliseconds
 import androidx.core.content.edit
 
@@ -436,22 +433,5 @@ class ActivationRepository(
          * pressing Check again should not wait long to be told so.
          */
         private const val VERIFY_TIMEOUT_MS = 4_000L
-    }
-}
-
-/**
- * Bridges a Play Services [Task] into a coroutine without pulling in
- * `kotlinx-coroutines-play-services` for the handful of call sites that need it.
- */
-private suspend fun <T> Task<T>.awaitResult(): T = suspendCancellableCoroutine { continuation ->
-    addOnCompleteListener { task ->
-        if (task.isSuccessful) {
-            @Suppress("UNCHECKED_CAST")
-            continuation.resume(task.result as T)
-        } else {
-            continuation.resumeWithException(
-                task.exception ?: IllegalStateException("Task failed without an exception")
-            )
-        }
     }
 }
