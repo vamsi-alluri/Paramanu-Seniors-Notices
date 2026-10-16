@@ -65,7 +65,7 @@ class NoticeMessagingService : FirebaseMessagingService() {
                 return@runBlocking
             }
 
-            val channel = if (topic == ActivationRepository.TESTING_TOPIC) {
+            val channel = if (topic in ActivationRepository.TESTING_TOPICS) {
                 NoticeChannel.TESTING
             } else {
                 NoticeChannel.forImportance(

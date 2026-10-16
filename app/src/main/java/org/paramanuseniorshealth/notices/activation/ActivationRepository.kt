@@ -122,7 +122,7 @@ class ActivationRepository(
     fun topicChoices(): Map<String, Boolean> =
         dispensaries.current?.topics.orEmpty().associate { it.topic to isTopicOn(it) }
 
-    /** Whether the hidden testing topic is switched on. Not a dispensary topic: it is ours. */
+    /** Whether the hidden testing topics are switched on. Not dispensary topics: they are ours. */
     val testingOn: Boolean get() = prefs.getBoolean(KEY_TESTING, false)
 
     /**
@@ -134,7 +134,7 @@ class ActivationRepository(
      * does not offer is never shown, whatever reached the phone.
      */
     fun wantsTopic(topic: String): Boolean = when (topic) {
-        TESTING_TOPIC -> testingOn
+        in TESTING_TOPICS -> testingOn
         else -> dispensaries.current?.topic(topic)?.let { isTopicOn(it) } == true
     }
 
@@ -175,7 +175,7 @@ class ActivationRepository(
                 add(CONTROL_TOPIC)
                 if (!isRevoked) {
                     dispensaries.current?.topics.orEmpty().filter { isTopicOn(it) }.forEach { add(it.topic) }
-                    if (testingOn) add(TESTING_TOPIC)
+                    if (testingOn) addAll(TESTING_TOPICS)
                 }
             }
         }
@@ -395,10 +395,18 @@ class ActivationRepository(
         const val CONTROL_TOPIC = "control-v1"
 
         /**
-         * Delivery checks against real devices. Not a dispensary topic, and hidden behind seven taps
+         * Delivery checks against real devices. Not dispensary topics, and hidden behind seven taps
          * on the version number in Settings.
+         *
+         * Two of them, because the sender splits its test sends by shape: anything carrying a PDF or
+         * an image goes to the attachment topic, everything else to the plain one. A phone with the
+         * switch on wants both, or half the checks never arrive. Must match
+         * TEST_SEND_ATTACHMENT_TOPIC and TEST_SEND_PLAIN_TOPIC in the sender's TestSends.gs.
          */
-        const val TESTING_TOPIC = "testing-v1"
+        const val TESTING_ATTACHMENT_TOPIC = "test-notices-v1"
+        const val TESTING_PLAIN_TOPIC = "test-notifications-v1"
+
+        val TESTING_TOPICS = setOf(TESTING_ATTACHMENT_TOPIC, TESTING_PLAIN_TOPIC)
 
         private const val TAG = "ActivationRepo"
         private const val PREFS = "activation"
