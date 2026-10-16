@@ -220,24 +220,38 @@ must never be called arrival time.
 ## 7. The kill switch
 
 ```
-/config/analytics/enabled: true | false
+Firebase Remote Config, Boolean parameter: analytics_enabled = true | false
 ```
 
-- **Default off.** A failed read, a missing node, a first launch before the first read all collect
-  nothing. The safe failure for analytics is silence. (The same hazard is documented for
+- **Default off.** A failed fetch, a missing parameter, a first launch before the first fetch all
+  collect nothing. The safe failure for analytics is silence. (The same hazard is documented for
   hand-edited dispensary records, where a missing key silently empties Settings.)
-- **Read at process start and on each foreground**, cached in SharedPreferences so it survives
-  offline.
+- **Read at process start and on each foreground**, from Remote Config's local store — a
+  synchronous read with no network, so there is nothing to cache and nothing to race.
+- **Not in RTDB, deliberately** (changed 2026-10-16). It began at `/config/analytics/enabled`,
+  read with `FirebaseDatabase.get()`. That opened the realtime socket on every foreground, and the
+  SDK holds the connection for ~60s of idleness afterwards, against a Spark ceiling of 100
+  simultaneous connections shared by ~400 handsets that wake together when a notice goes out.
+  Remote Config fetches over HTTPS with no such ceiling. The `config/analytics` read rule — the
+  only world-readable grant the database had — comes out with it, and the RTDB node is dead data
+  that can be deleted.
+- **Propagation is bounded by the fetch window, not the next foreground.** Release builds use a
+  six-hour minimum fetch interval; debug builds use zero so the verification walk can see a
+  published change at once. Inside the window the refresh is answered locally and costs no
+  network, which is what makes the unthrottled every-foreground call site free.
 - **Drives `setAnalyticsCollectionEnabled` too**, not only our own calls. Guarding the wrapper
   alone would leave GA4's automatic events flowing and make "off" a lie.
 - **Drives Crashlytics as well**, through `isCrashlyticsCollectionEnabled`, from the same place in
   `NoticesApplication`. Both SDKs also ship disabled by manifest meta-data, because each
   initialises before `onCreate`; the runtime setter overrides the manifest in both directions.
-- **Turning it off is not instantaneous.** Both SDKs persist the last runtime `true`, so after the
-  owner flips the switch off, a device's next cold start can initialise with collection enabled
-  until its refresh completes. The cached value closes that window quickly, not instantly, and a
-  phone that never opens the app does not hear at all. The policy therefore says "within a short
-  time", and nothing should be written that implies a stop at the moment of the flip.
+- **Turning it off is not instantaneous, and is now slower.** Both SDKs persist the last runtime
+  `true`, so after the owner flips the parameter off, a device keeps collecting until a fetch
+  brings the new value down — up to the six-hour window, and longer on a phone that does not open
+  the app. The activated value is applied synchronously at process start, so there is no window
+  *within* a launch; the delay is purely how long the new value takes to arrive. The policy
+  therefore says "within a short time", and nothing should be written that implies a stop at the
+  moment of the flip. **Before the policy is published, confirm six hours still reads honestly as
+  "a short time"** (§12 item 4) — it is defensible, but it is the wording that has to carry it.
 - **Its own node**, not under `/dispensaries/…` — it is not dispensary-scoped, and putting it there
   would force the future multi-dispensary seam to carry it.
 - `database.rules.json` grants world read, no client write.
@@ -485,14 +499,16 @@ Actions only the account owner can take. Order matters where stated: Data Safety
 app-wide and the open-testing track is public, so **items 4 and 5 must be live before a collecting
 build reaches open testing**, not alongside it.
 
-> **Changed 2026-10-16: items 9 and 10 are done.** The `config/analytics` read rule is deployed and
-> `/config/analytics/enabled` is `true`, for the on-device verification. Nothing collects today,
-> because the only build in open testing is 0.7.2 / versionCode 13, which has no analytics code.
-> But **the gate is already open**, so the switch is no longer the thing that starts collection —
-> the *build* is. Uploading a collecting build now begins collection on first launch, with no
-> further action. Items 1–8 are therefore blocking on that upload. If any of them will not be
-> ready, set `/config/analytics/enabled` back to `false` before the build goes up, and treat
-> turning it on again as the last step.
+> **Changed 2026-10-16: the switch moved to Remote Config, and items 9 and 10 changed with it.**
+> The app no longer reads RTDB for the switch (§7), so the deployed `config/analytics` read rule and
+> the `/config/analytics/enabled` node are both dead — the node can be deleted, and the rule is
+> removed from `database.rules.json` but **still live until the rules are published**.
+>
+> The gate's state now lives in a Remote Config parameter that **does not exist yet**, and an absent
+> parameter reads as off. So unlike the RTDB node, which was left at `true` after the verification
+> walk, the gate is currently **shut**, and a collecting build uploaded today would collect nothing
+> until the parameter is created and set to `true`. That is the safer order, and item 10 is once
+> again the last step rather than a thing already done.
 
 1. **GA4 retention.** Admin, Data settings, Data retention: 2 months, and turn OFF "Reset user data
    on new activity". Skipped: the policy's "two months" is false.
@@ -514,9 +530,13 @@ build reaches open testing**, not alongside it.
 8. **Decide whether to keep the sunset sentence** in the policy's Measurement bullet ("will turn it
    off once those questions are answered"). Skipped: nothing breaks, but the organisation is
    publicly committed to it.
-9. **Deploy rules and config with the `firebase` CLI where relevant.** Skipped: the app reads
-   `/config/analytics/enabled` against whatever rules are live.
-10. **Set `/config/analytics/enabled = true` in RTDB** (hand-edited) when collection should begin.
-    Skipped: nothing is collected, crashes included, by design.
-    The on-device walk in `docs/analytics-device-verification.md` needs this switch on, so do it
+9. **Publish the database rules** (`firebase deploy --only database`). Skipped: the
+   `config/analytics` read grant stays live on a node nothing reads — the only world-readable grant
+   the database has, left open for no reason. The app itself is unaffected either way.
+10. **Create the Remote Config parameter and set it when collection should begin.** Firebase console,
+    Remote Config: a parameter named `analytics_enabled`, **Boolean**, published. Skipped: nothing is
+    collected, crashes included — an absent parameter reads as off, by design.
+    Keep it Boolean: the app calls `getBoolean`, and a String-typed parameter would bring back the
+    "a string `true` must not mean on" hazard that the RTDB node had.
+    The on-device walk in `docs/analytics-device-verification.md` needs this parameter on, so do it
     while the build is still on your own handset; it also settles §9.4 (`first_open`).

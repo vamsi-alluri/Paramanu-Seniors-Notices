@@ -481,9 +481,14 @@ problem that is already fixed.
     Safety form's answers on attribution as a question to check, not a closed one.
 - **Analytics and Crashlytics are off by default, on one server-side switch.** Both ship disabled
   by manifest meta-data, because each SDK initialises before `NoticesApplication.onCreate` and
-  would otherwise start enabled. `/config/analytics/enabled` then opens or closes both at runtime
-  (cached for offline starts). The switch is global: there is no per-device exclusion and no
-  in-app opt-out, and the privacy policy says so. Known traps when reading the data are in the
+  would otherwise start enabled. The Remote Config parameter `analytics_enabled` then opens or
+  closes both at runtime, read from Remote Config's local store so an offline start behaves as the
+  phone last knew. It is fetched over HTTPS rather than read from RTDB **because the realtime socket
+  was the expensive part**: a read on every foreground pinned one of the Spark plan's 100
+  simultaneous connections for about a minute, across ~400 handsets that wake together. The cost of
+  the move is propagation time — up to the six-hour fetch window instead of the next foreground.
+  The switch is global: there is no per-device exclusion and no in-app opt-out, and the privacy
+  policy says so. Known traps when reading the data are in the
   spec, §9 "Known sources of dirty data".
 
 ---

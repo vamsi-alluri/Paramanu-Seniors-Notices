@@ -114,6 +114,11 @@ leaves collection off rather than falling open, and a phone that has never reach
 off. The two denials 0 ms apart are the `onCreate` read plus the first `ON_RESUME` re-read, which
 incidentally confirms the foreground re-read landed.
 
+Both captures above describe the **pre-2026-10-16 switch**, read from RTDB and cached in
+`shared_prefs/analytics.xml`. The finding they establish still holds — an unreachable switch leaves
+collection off — but the log lines, the permission denial and the prefs file belong to a mechanism
+the app no longer has. What replaced it is in §7 of the spec.
+
 Limits of the original capture, stated plainly:
 
 - The capture covered a **48 ms foreground behind a locked screen, with the phone in Doze**, then
@@ -132,8 +137,10 @@ Limits of the original capture, stated plainly:
 
 1. **An unlocked handset, kept awake** (stay-awake in developer options, or keep touching it). Doze
    blocks the app's network, which is exactly what stopped the earlier run.
-2. **`/config/analytics/enabled` set to the boolean `true`** in the production Realtime Database. It
-   must be a real boolean, not the string `"true"`; the parser requires a literal boolean.
+2. **The Remote Config parameter `analytics_enabled` published as Boolean `true`.** The app calls
+   `getBoolean`, so the parameter must be Boolean-typed in the console, not a String. (Until
+   2026-10-16 this was the RTDB node `/config/analytics/enabled`; that node and its read rule are
+   dead and the app no longer looks at them.)
 3. **A fresh install with no activation.** The `activation_*` events fire only in the unactivated
    state, so do those first. A fresh install of the debug build currently has none (the notice
    list is empty and the activation screen is what a user sees).
@@ -217,18 +224,17 @@ DebugView, make sure the selected device and app are ours.
 
 ## Step 0: turn collection on and confirm it took
 
-After setting the database node to `true`, force-stop and relaunch the app so the live read stores
-the new value. **Before judging any event**, confirm:
-
-```
-adb shell run-as org.paramanuseniorshealth.notices cat shared_prefs/analytics.xml
-```
-
-It must show `<boolean name="analytics_enabled" value="true" />`. If the file already existed,
-check that its modification time is later than the launch. Also expect
-`Setting app measurement enabled (FE): true` after the live read, and no
-`AnalyticsConfig: Could not read the analytics switch` line. If collection is not enabled yet,
+After publishing `analytics_enabled = true` in Remote Config, force-stop and relaunch the app so
+the fetch brings the new value down and activates it. Debug builds use a zero-second minimum fetch
+interval, so there is nothing to wait for. **Before judging any event**, expect
+`Setting app measurement enabled (FE): true` and no
+`RemoteConfigSwitch: Could not fetch the analytics switch` line. If collection is not enabled yet,
 events are dropped, not delayed, so a missing event proves nothing.
+
+There is **no `shared_prefs/analytics.xml` any more** — the switch moved off RTDB and
+SharedPreferences on 2026-10-16, and Remote Config keeps the activated value in its own store under
+`files/`. A new `analytics.xml` appearing is a sign something still writes the old cache, which
+nothing should.
 
 In logcat an event appears as `FA-SVC: Logging event: origin=app,name=<event>(...)` and, in debug
 mode, `Logging event (FE): ...`.
