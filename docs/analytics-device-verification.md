@@ -26,7 +26,14 @@ value.
 Run on `f0d9797`, debug build, `SM_S928U1` / Android 16, fresh install, switch `true`, every line
 attributed to `app_id: org.paramanuseniorshealth.notices` via the upload records. **All thirteen
 event names arrive with their parameter sets intact** — no name was silently dropped, which was the
-one failure this walk existed to rule out. Observed values:
+one failure this walk existed to rule out.
+
+**Every payload size below is a test asset and is not representative of production.** The PDF was
+13,374,538 bytes and the image 1,015,470; real circulars are not that shape, and notices go out
+only about once a fortnight. Read these sizes as evidence that the parameter arrives and is
+numeric, never as evidence about what readers actually download.
+
+Observed values:
 
 | # | Event | Observed |
 |---|---|---|
@@ -75,7 +82,8 @@ The analytics consequence is a 0 that reads as a real measurement. The product c
 worse: the file is lost, so nothing is cached. After the sweep had already downloaded a 13,374,538-byte
 PDF, tapping it logged `was_cached=0` and downloaded the same 13 MB again — verified by the
 `attachment_fetch_start`/`end` pair at 10:23:59. Only 3 of the 6 PDFs delivered that sitting were
-on disk afterwards. On a 5.6 MB circular over mobile data this is a real cost to the reader, and it
+on disk afterwards. Paying twice for any circular over mobile data is a real cost to the reader
+(the sizes above are test assets, so take the doubling rather than the megabytes as the point), and it
 also defeats the stated purpose of the scratch name at `:304` ("an interrupted download cannot
 leave a truncated file that looks cached").
 

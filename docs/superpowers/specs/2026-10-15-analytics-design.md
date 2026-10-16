@@ -412,6 +412,22 @@ confident wrong answer.
     "otherwise absent, never zero" does not hold. The same race also discards the downloaded file,
     so the user pays for those bytes twice — see `docs/analytics-device-verification.md`.
 
+**Sample size — read before any query below**
+
+25. **A real notice goes out about once every two weeks.** Roughly 26 a year, across ~400 handsets.
+    With retention set to two months (§12 item 1), the window holds **about four notices**. So every
+    per-notice measure here — the `fetch_policy_decision` defer ratio, `delivery_lag_ms`
+    percentiles, `notice_received` counts, the fetch durations — rests on a handful of broadcast
+    events, not on a stream. One unusual circular can dominate a window, a single roaming tester can
+    move the defer ratio, and a threshold tuned from one window is tuned on one fortnight's
+    evidence. Report the number of distinct notices behind any figure, and treat a difference
+    between two windows as noise until several notices agree. The per-open measures
+    (`app_open_source`, `network_state_on_open`, `activation_*`, the dwell events) are not affected
+    — those accumulate per use, not per notice, and are the only places with real volume.
+26. **Payload sizes seen during device verification are test assets.** The 2026-10-16 walk observed
+    a 13,374,538-byte PDF and a 1,015,470-byte image; production circulars are not that shape.
+    Nothing in this document's size reasoning should be anchored to them.
+
 ### Where logging must never go
 
 `NoticeRow`'s body performs three `listFiles()` disk scans on **every recomposition**, deliberately
