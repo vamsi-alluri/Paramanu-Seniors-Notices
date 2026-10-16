@@ -19,7 +19,7 @@ class AnalyticsEventTest {
         AnalyticsEvent.AttachmentFetchStart("pdf", 1L, 30L, 1L, 2L, 0),
         AnalyticsEvent.AttachmentFetchEnd("pdf", 1L, 250L, "fetched", 200),
         AnalyticsEvent.NoticeReceived(hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = 10L, msSinceProcessStart = 20L),
-        AnalyticsEvent.NotificationTapped(msSinceShown = 5L, coldStart = true),
+        AnalyticsEvent.NotificationTapped(msSinceShown = 5L, coldStart = true, msSinceProcessStart = 30L),
         AnalyticsEvent.AppOpen(source = "launcher"),
         AnalyticsEvent.NoticeCardVisible(noticeId = 1L, visibleMs = 900L, hasImage = true, hasPdf = false, position = 3),
         AnalyticsEvent.ImageViewerClosed(noticeId = 1L, durationMs = 400L, maxScale = 2.5f),
@@ -143,7 +143,7 @@ class AnalyticsEventTest {
             AnalyticsEvent.AttachmentFetchStart("pdf", null, null, null, 2L, 0) to listOf("size_bytes", "jitter_seconds", "enqueued_at_ms"),
             AnalyticsEvent.AttachmentFetchEnd("pdf", null, 250L, "fetched", null) to listOf("size_bytes", "http_status"),
             AnalyticsEvent.NoticeReceived(hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = null, msSinceProcessStart = 20L) to listOf("delivery_lag_ms"),
-            AnalyticsEvent.NotificationTapped(msSinceShown = null, coldStart = true) to listOf("ms_since_shown"),
+            AnalyticsEvent.NotificationTapped(msSinceShown = null, coldStart = true, msSinceProcessStart = 30L) to listOf("ms_since_shown"),
             AnalyticsEvent.PdfOpened(noticeId = 1L, sizeBytes = null, wasCached = true) to listOf("size_bytes"),
             AnalyticsEvent.ActivationResult(result = "offline", offlineCause = null) to listOf("offline_cause"),
         )

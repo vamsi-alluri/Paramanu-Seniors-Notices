@@ -106,7 +106,8 @@ class MainActivity : ComponentActivity() {
      *
      * Called from exactly one of [onCreate] and [onNewIntent] for any one launch intent: the system
      * delivers an intent to a new instance or to a running one, never both. [coldStart] says which,
-     * so it means "this tap created the activity", not "the process was not running".
+     * so it means "this tap created the activity", not "the process was not running". The process
+     * age logged beside it is what tells the two apart.
      *
      * Intents the system replays from recents carry their original extras, and with them an
      * instant from some earlier tap. They are counted as a launcher open instead.
@@ -121,14 +122,20 @@ class MainActivity : ComponentActivity() {
             !replayed && intent?.action == Intent.ACTION_VIEW -> "link"
             else -> "launcher"
         }
+        // source = notification counts every notification door, including the local test and
+        // revocation ones. notification_tapped below counts notice notifications only. The two are
+        // deliberately not the same denominator, so do not divide one by the other for a tap rate.
         app.analytics.log(AnalyticsEvent.AppOpen(source))
-        if (logId != null) {
+        // Local notifications (test, revocation) carry a logId too, so presence alone would not
+        // keep them out; the prefix is what marks them as not being notices.
+        if (logId != null && !logId.startsWith(NoticeRepository.LOCAL_LOG_ID_PREFIX)) {
             val postedAt = extras?.getLong(NoticeNotifications.EXTRA_POSTED_AT, 0L) ?: 0L
             app.analytics.log(
                 AnalyticsEvent.NotificationTapped(
                     msSinceShown = postedAt.takeIf { it > 0 }
                         ?.let { System.currentTimeMillis() - it },
                     coldStart = coldStart,
+                    msSinceProcessStart = System.currentTimeMillis() - app.processStartedAt,
                 )
             )
         }

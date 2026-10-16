@@ -101,10 +101,21 @@ sealed interface AnalyticsEvent {
         }
     }
 
-    data class NotificationTapped(val msSinceShown: Long?, val coldStart: Boolean) : AnalyticsEvent {
+    /**
+     * [coldStart] says only that the tap created the activity; it does not say the process was
+     * new. An activity Android reclaimed while the app sat in the background is created afresh
+     * too, so [msSinceProcessStart] is what tells a genuinely cold process (small) from a warm
+     * process with a cold activity (large).
+     */
+    data class NotificationTapped(
+        val msSinceShown: Long?,
+        val coldStart: Boolean,
+        val msSinceProcessStart: Long,
+    ) : AnalyticsEvent {
         override val name = "notification_tapped"
         override val params = buildMap {
             put("cold_start", coldStart.asParam())
+            put("ms_since_process_start", msSinceProcessStart)
             msSinceShown?.let { put("ms_since_shown", it) }
         }
     }
