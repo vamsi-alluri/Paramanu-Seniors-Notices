@@ -3,8 +3,10 @@
     ".read": false,
     ".write": false,
     "config": {
-      ".read": true,
-      ".write": false
+      "analytics": {
+        ".read": true,
+        ".write": false
+      }
     },
     "dispensaries": {
       "$dispensary": {
