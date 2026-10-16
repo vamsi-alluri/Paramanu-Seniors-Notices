@@ -1,12 +1,16 @@
 package org.paramanuseniorshealth.notices
 
 import android.app.Application
+import com.google.firebase.database.FirebaseDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.paramanuseniorshealth.notices.activation.ActivationRefreshWorker
 import org.paramanuseniorshealth.notices.activation.ActivationRepository
+import org.paramanuseniorshealth.notices.analytics.Analytics
+import org.paramanuseniorshealth.notices.analytics.AnalyticsConfig
+import org.paramanuseniorshealth.notices.analytics.FirebaseAnalyticsSink
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.InfoRepository
 import org.paramanuseniorshealth.notices.data.NoticeRepository
@@ -31,6 +35,22 @@ class NoticesApplication : Application() {
 
     val activationRepository: ActivationRepository by lazy { ActivationRepository(this, dispensaryRepository) }
 
+    /**
+     * When this process started.
+     *
+     * Nothing else in the app tracks it, and it is what makes "was the app already running when
+     * the notice landed" answerable without adding lifecycle-process as a dependency.
+     */
+    val processStartedAt: Long = System.currentTimeMillis()
+
+    private val analyticsPrefs by lazy {
+        getSharedPreferences("analytics", MODE_PRIVATE)
+    }
+
+    val analyticsConfig by lazy { AnalyticsConfig(analyticsPrefs) }
+
+    val analytics by lazy { Analytics(FirebaseAnalyticsSink(this)) }
+
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
@@ -53,6 +73,23 @@ class NoticesApplication : Application() {
         // that was switched off when it went out misses it, and this is how that phone still hears.
         if (activationRepository.isActivated) {
             ActivationRefreshWorker.ensurePeriodic(this)
+        }
+
+        // The cached value applies immediately so a launch while offline behaves as the last known
+        // state -- which on a first install is off. The live read then corrects it.
+        analytics.setEnabled(analyticsConfig.cached())
+        refreshAnalyticsSwitch()
+    }
+
+    /**
+     * Brings the switch into line with the database. Safe to call on every foreground.
+     *
+     * Uses the existing appScope rather than a new one: it is already IO-dispatched and
+     * supervisor-scoped, which is exactly what a best-effort read wants.
+     */
+    fun refreshAnalyticsSwitch() {
+        appScope.launch {
+            analytics.setEnabled(analyticsConfig.refresh(FirebaseDatabase.getInstance()))
         }
     }
 
