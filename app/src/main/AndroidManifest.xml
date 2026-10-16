@@ -99,8 +99,9 @@
 
         <!--
           The same default for Crashlytics, for the same reason: it too initialises through its own
-          component init before NoticesApplication.onCreate can close the gate, and without this a
-          crash early in startup would be reported while collection was meant to be off. The
+          component init before NoticesApplication.onCreate can close the gate, and this default guards
+          against a crash early in startup being reported while collection is meant to be off. That
+          is inferred from the analytics case, not observed for Crashlytics. The
           runtime setter in NoticesApplication still overrides it, so the kill switch works in
           both directions.
         -->

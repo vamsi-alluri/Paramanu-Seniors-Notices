@@ -471,9 +471,9 @@ problem that is already fixed.
   - reCAPTCHA (pulled in by Firebase Auth): `READ_GSERVICES`.
   - AndroidX core: `<applicationId>.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION`, which protects the
     app's own runtime-registered receivers and is not a capability the app gains.
-  - Measurement SDK (`play-services-measurement`): `ACCESS_ADSERVICES_ATTRIBUTION` and
-    `BIND_GET_INSTALL_REFERRER_SERVICE`. These are contributed by the SDK, not requested by this
-    app. The advertising-ID permissions (`AD_ID`, `ACCESS_ADSERVICES_AD_ID`) are stripped. No code
+  - Measurement SDK: `BIND_GET_INSTALL_REFERRER_SERVICE` comes from `play-services-measurement`
+    and `ACCESS_ADSERVICES_ATTRIBUTION` from `play-services-measurement-api`. These are contributed
+    by the SDK, not requested by this app. The advertising-ID permissions (`AD_ID`, `ACCESS_ADSERVICES_AD_ID`) are stripped. No code
     in `app/src/main` refers to the install referrer (a search for "referrer" finds nothing), so
     this app never calls it. What the measurement SDK itself does with the permission is **not
     confirmed from our source**: it is Google's code, and `first_open` (which would use the

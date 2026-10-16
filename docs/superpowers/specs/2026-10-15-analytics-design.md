@@ -233,6 +233,11 @@ must never be called arrival time.
 - **Drives Crashlytics as well**, through `isCrashlyticsCollectionEnabled`, from the same place in
   `NoticesApplication`. Both SDKs also ship disabled by manifest meta-data, because each
   initialises before `onCreate`; the runtime setter overrides the manifest in both directions.
+- **Turning it off is not instantaneous.** Both SDKs persist the last runtime `true`, so after the
+  owner flips the switch off, a device's next cold start can initialise with collection enabled
+  until its refresh completes. The cached value closes that window quickly, not instantly, and a
+  phone that never opens the app does not hear at all. The policy therefore says "within a short
+  time", and nothing should be written that implies a stop at the moment of the flip.
 - **Its own node**, not under `/dispensaries/…` — it is not dispensary-scoped, and putting it there
   would force the future multi-dispensary seam to carry it.
 - `database.rules.json` grants world read, no client write.
