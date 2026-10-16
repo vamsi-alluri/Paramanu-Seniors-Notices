@@ -15,11 +15,21 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * Failures from the sink are swallowed without a log line. `android.util.Log` is not on the JVM
  * unit-test classpath and would itself throw there, and this class is deliberately Android-free.
+ * Reporting those failures is the sink implementation's job: it may import Android, this class
+ * may not.
  */
 class Analytics(private val sink: AnalyticsSink) {
 
     private val enabled = AtomicBoolean(false)
 
+    /**
+     * Never throws. The gate flips even when the SDK call fails: the dangerous direction is failing
+     * to turn collection off, and our own events must stop regardless.
+     *
+     * Synchronized so two writers (the cached value applied at startup and the live one arriving
+     * later) cannot interleave and leave the gate and the SDK flag disagreeing.
+     */
+    @Synchronized
     fun setEnabled(value: Boolean) {
         enabled.set(value)
         runCatching { sink.setCollectionEnabled(value) }

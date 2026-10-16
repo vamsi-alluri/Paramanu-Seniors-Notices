@@ -5,7 +5,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.paramanuseniorshealth.notices.analytics.Analytics
 import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
-import org.paramanuseniorshealth.notices.analytics.AnalyticsSink
 
 class AnalyticsTest {
 
@@ -44,12 +43,28 @@ class AnalyticsTest {
     @Test
     fun `a sink that throws never reaches the caller`() {
         // Analytics must not be able to break the thing it is measuring.
-        val throwing = object : AnalyticsSink {
-            override fun log(name: String, params: Map<String, Any>) = error("sink is broken")
-            override fun setCollectionEnabled(enabled: Boolean) = Unit
-        }
-        val analytics = Analytics(throwing)
+        val sink = RecordingSink(throwOnLog = true)
+        val analytics = Analytics(sink)
         analytics.setEnabled(true)
         analytics.log(AnalyticsEvent.ActivationSubmitted)
+        assertEquals(1, sink.logged.size) // the call did reach the sink, so the throw was real
+    }
+
+    @Test
+    fun `a sink that fails to switch the SDK still moves our own gate`() {
+        // The dangerous direction is failing to turn collection off: if the SDK call throws, our
+        // own events must stop anyway. The same holds for switching on, so the gate and the call
+        // are never coupled.
+        val sink = RecordingSink(throwOnSetCollection = true)
+        val analytics = Analytics(sink)
+
+        analytics.setEnabled(true)
+        analytics.log(AnalyticsEvent.ActivationSubmitted)
+        assertEquals(1, sink.logged.size)
+
+        analytics.setEnabled(false)
+        analytics.log(AnalyticsEvent.ActivationSubmitted)
+        assertEquals(1, sink.logged.size)
+        assertEquals(listOf(true, false), sink.collectionCalls)
     }
 }
