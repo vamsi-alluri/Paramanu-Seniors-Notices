@@ -99,8 +99,9 @@ class AnalyticsEventTest {
             // FetchPolicyDecision itself: `fetched` true -> "fetch", false -> "defer".
             "decision" to setOf("fetch", "defer"),
             // FetchPolicyDecision, set by AttachmentWorker.decide: the roaming short-circuit
-            // attempts no probe (skipped); otherwise the probe's own Reachable / Unreachable.
-            "probe" to setOf("skipped", "reachable", "unreachable"),
+            // attempts no probe (skipped); a payload-supplied size makes no request (sender);
+            // otherwise the real probe's own Reachable / Unreachable.
+            "probe" to setOf("skipped", "sender", "reachable", "unreachable"),
             // AppOpen, derived at launch: a logId extra present -> notification, else action
             // ACTION_VIEW -> link, else launcher.
             "source" to setOf("notification", "link", "launcher"),

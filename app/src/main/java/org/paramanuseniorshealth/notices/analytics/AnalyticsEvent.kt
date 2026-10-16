@@ -33,7 +33,8 @@ sealed interface AnalyticsEvent {
             put("metered", metered.asParam())
             put("roaming", roaming.asParam())
             put("decision", if (fetched) "fetch" else "defer")
-            // size_known discriminates a real HEAD result from a sender-supplied pdfBytes.
+            // Whether a size was available at all, nothing more: it does not say where the size
+            // came from. `probe` does that (sender-supplied versus a real HEAD).
             put("size_known", (sizeBytes != null).asParam())
             sizeBytes?.let { put("size_bytes", it) }
         }

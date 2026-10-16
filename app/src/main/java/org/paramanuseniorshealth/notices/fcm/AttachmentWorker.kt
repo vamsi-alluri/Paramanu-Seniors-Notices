@@ -136,15 +136,18 @@ class AttachmentWorker(
      * the connection, and counting it as a decline would inflate the deferral ratio.
      *
      * A size is reported only when one was measured or supplied, and is otherwise sent as absent
-     * rather than as zero. The `probe` parameter is what separates the three cases a null size
-     * could otherwise come from, and it matters: an unreachable attachment is decided with the
+     * rather than as zero. The `probe` parameter is what separates the cases a size could
+     * otherwise come from, and it matters: an unreachable attachment is decided with the
      * same unknown-size policy as a withheld `Content-Length`, so without `probe` a flaky network
      * would be recorded as policy deferrals and inflate the very ratio these events exist to
      * measure. What a null means depends on it:
      *  - `skipped` (roaming short-circuit): nothing was probed, so a present size is always the
      *    sender's own (only `pdf` carries one, from `pdfBytes`) and a null says nothing about the
      *    file's size;
-     *  - `reachable`: a probe did happen, so a null means the server withheld `Content-Length`;
+     *  - `sender`: the payload supplied the size, so no request was made and the size is always
+     *    present;
+     *  - `reachable`: a real HEAD request was answered, so a null means the server withheld
+     *    `Content-Length`;
      *  - `unreachable`: no answer came back, so the size is always null, and the row is a
      *    connectivity fact rather than a policy one -- leave it out of any deferral ratio.
      *
@@ -179,6 +182,9 @@ class AttachmentWorker(
         if (roaming) return decided(Verdict.DEFER, known, "skipped")
         // A size supplied by the sender stands in for a successful probe: the website would not
         // publish a length for a file it does not have.
+        // Decided here because only this expression knows which of the two produced a
+        // Probe.Reachable: the event must say whether a request was actually made.
+        val fromSender = known != null
         val probe = known?.let { Probe.Reachable(it) }
             ?: withContext(Dispatchers.IO) { NetworkStatus.probe(url) }
         return when (probe) {
@@ -188,7 +194,7 @@ class AttachmentWorker(
                     if (FetchPolicy.shouldFetch(probe.bytes, metered, roaming)) Verdict.FETCH
                     else Verdict.DEFER,
                     probe.bytes,
-                    "reachable",
+                    if (fromSender) "sender" else "reachable",
                 )
             // No answer is not the same as a refusal. Treated as an unknown size, which the policy
             // reads as "large" -- so it waits for wifi rather than giving up.
