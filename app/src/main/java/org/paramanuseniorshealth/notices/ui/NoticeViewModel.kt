@@ -30,7 +30,10 @@ import org.paramanuseniorshealth.notices.data.InfoRepository
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.data.OfficeInfo
+import org.paramanuseniorshealth.notices.analytics.Analytics
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import org.paramanuseniorshealth.notices.fcm.AttachmentWorker
+import org.paramanuseniorshealth.notices.fcm.NetworkStatus
 
 /** Where the user is. Deliberately a state machine rather than a navigation graph: four
  *  destinations do not justify a navigation dependency, and the code screen is a gate rather
@@ -50,6 +53,7 @@ class NoticeViewModel(
     info: InfoRepository,
     private val welcomeTitle: String,
     private val welcomeBody: String,
+    private val analytics: Analytics,
 ) : ViewModel() {
 
     val allNotices: StateFlow<List<NoticeEntity>> = notices.notices
@@ -391,6 +395,15 @@ class NoticeViewModel(
      * this view model -- a ViewModel holding a Context outlives the Activity and leaks it.
      */
     fun onResumed(context: Context) {
+        // Once per foreground, here, and not in AttachmentWorker: the worker re-reads these inside
+        // its per-notice loop, so logging there would emit one event per notice in a sweep and
+        // inflate every ratio built from this event.
+        analytics.log(
+            AnalyticsEvent.NetworkStateOnOpen(
+                metered = NetworkStatus.isMetered(context),
+                roaming = NetworkStatus.isRoaming(context),
+            )
+        )
         AttachmentWorker.enqueueCatchUp(context)
         AttachmentWorker.enqueueWifiCatchUp(context)
 
@@ -549,6 +562,7 @@ class NoticeViewModel(
                     // and the view model keeps no Context.
                     welcomeTitle = app.getString(R.string.welcome_title),
                     welcomeBody = app.getString(R.string.welcome_body),
+                    analytics = app.analytics,
                 )
             }
         }

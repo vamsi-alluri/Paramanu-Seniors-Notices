@@ -13,6 +13,7 @@ import androidx.work.workDataOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.paramanuseniorshealth.notices.NoticesApplication
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import java.util.concurrent.TimeUnit
@@ -60,7 +61,11 @@ class AttachmentWorker(
             // up on. What a cutoff drops is decided by `withAttachments()`'s `ORDER BY receivedAt
             // DESC`: the oldest notices go first, which is the right end to lose -- and they are
             // picked up by the next sweep, since nothing here has advanced their state.
-            if (isStopped) return Result.success()
+            if (isStopped) {
+                // Nothing of ours is buffered: Analytics.log writes straight through. If that ever
+                // changes, this is where a truncated sweep would silently lose its events.
+                return Result.success()
+            }
 
             // One bad notice must not abandon the rest of a sweep, so each is isolated. Logged
             // rather than swallowed: a fetch that throws is a bug here, not a policy decision.
@@ -105,8 +110,8 @@ class AttachmentWorker(
         val metered = withContext(Dispatchers.IO) { NetworkStatus.isMetered(context) }
         val roaming = withContext(Dispatchers.IO) { NetworkStatus.isRoaming(context) }
 
-        fetchAttachments(context, app.repository, notice, logId, tapInitiated = false) { url, known ->
-            decide(url, known, metered, roaming)
+        fetchAttachments(context, app.repository, notice, logId, tapInitiated = false) { kind, url, known ->
+            decide(kind, url, known, metered, roaming)
         }
     }
 
@@ -121,15 +126,43 @@ class AttachmentWorker(
      * size is probed, which is one small round trip against a possible 5.6MB one.
      *
      * The probe is moved to [Dispatchers.IO] for the reason given in [fetch]: `remoteSize` blocks.
+     *
+     * This is where the policy decision is logged, and deliberately not in [fetchAttachments]'s
+     * arms or in the lambda [fetchNow] passes: this function is reached only from [fetch], so a
+     * tap-initiated fetch -- which is consent, not a policy decision -- can never be recorded as
+     * one. It is also the only place that holds the facts the event needs (metered, roaming and
+     * the size actually measured). Every return that is a decision logs exactly once; [Verdict.GONE]
+     * logs nothing, because a 4xx is the server's answer about the file, not the policy's about
+     * the connection, and counting it as a decline would inflate the deferral ratio.
+     *
+     * A size is reported only when one was measured or supplied. An unreachable probe and the
+     * roaming short-circuit have none, and that is sent as absent rather than as zero.
      */
     private suspend fun decide(
+        kind: String,
         url: String,
         known: Long?,
         metered: Boolean,
         roaming: Boolean,
     ): Verdict {
+        val analytics = (applicationContext as NoticesApplication).analytics
+        fun decided(verdict: Verdict, sizeBytes: Long?): Verdict {
+            analytics.log(
+                AnalyticsEvent.FetchPolicyDecision(
+                    kind = kind,
+                    metered = metered,
+                    roaming = roaming,
+                    sizeBytes = sizeBytes,
+                    fetched = verdict == Verdict.FETCH,
+                )
+            )
+            return verdict
+        }
+
         // Roaming answers without any request at all: nothing is going to be fetched either way.
-        if (roaming) return Verdict.DEFER
+        // It returns before FetchPolicy is consulted, so it needs its own log -- without it every
+        // roaming deferral would be invisible, and they are what the roaming rule is judged by.
+        if (roaming) return decided(Verdict.DEFER, known)
         // A size supplied by the sender stands in for a successful probe: the website would not
         // publish a length for a file it does not have.
         val probe = known?.let { Probe.Reachable(it) }
@@ -137,13 +170,19 @@ class AttachmentWorker(
         return when (probe) {
             Probe.Gone -> Verdict.GONE
             is Probe.Reachable ->
-                if (FetchPolicy.shouldFetch(probe.bytes, metered, roaming)) Verdict.FETCH
-                else Verdict.DEFER
+                decided(
+                    if (FetchPolicy.shouldFetch(probe.bytes, metered, roaming)) Verdict.FETCH
+                    else Verdict.DEFER,
+                    probe.bytes,
+                )
             // No answer is not the same as a refusal. Treated as an unknown size, which the policy
             // reads as "large" -- so it waits for wifi rather than giving up.
             Probe.Unreachable ->
-                if (FetchPolicy.shouldFetch(null, metered, roaming)) Verdict.FETCH
-                else Verdict.DEFER
+                decided(
+                    if (FetchPolicy.shouldFetch(null, metered, roaming)) Verdict.FETCH
+                    else Verdict.DEFER,
+                    null,
+                )
         }
     }
 
@@ -264,7 +303,7 @@ class AttachmentWorker(
             notice: NoticeEntity,
             logId: String,
             tapInitiated: Boolean,
-            verdict: suspend (url: String, known: Long?) -> Verdict,
+            verdict: suspend (kind: String, url: String, known: Long?) -> Verdict,
         ) {
             var deferred = false
             var failed = false
@@ -278,7 +317,7 @@ class AttachmentWorker(
             // non-roaming connection, so the card has something to show within the hour.
             notice.linkImage?.takeIf { it.isNotBlank() }?.let { url ->
                 if (NoticeImageStore.cachedLinkImage(context, logId) == null) {
-                    when (verdict(url, null)) {
+                    when (verdict("link", url, null)) {
                         Verdict.FETCH -> if (
                             NoticeImageStore.fetchLinkImage(context, url, logId) == null
                         ) failed = true
@@ -290,7 +329,7 @@ class AttachmentWorker(
 
             notice.imageUrl?.takeIf { it.isNotBlank() }?.let { url ->
                 if (NoticeImageStore.cachedImage(context, logId) == null) {
-                    when (verdict(url, null)) {
+                    when (verdict("img", url, null)) {
                         Verdict.FETCH ->
                             if (NoticeImageStore.fetchImage(context, url, logId) == null) failed = true
                         Verdict.DEFER -> deferred = true
@@ -308,7 +347,7 @@ class AttachmentWorker(
                     // touched until somebody taps it. This is the whole egress saving and it must
                     // not be "optimised" into pre-fetching on wifi: the website pays for the bytes
                     // whatever the phone is connected to.
-                    when (verdict(thumbUrl, null)) {
+                    when (verdict("pdf_thumb", thumbUrl, null)) {
                         Verdict.FETCH -> if (
                             NoticeImageStore.fetchPdfThumb(context, thumbUrl, logId) == null
                         ) failed = true
@@ -318,7 +357,7 @@ class AttachmentWorker(
                 } else {
                     // No published thumbnail, so page one can only be had by downloading the
                     // document. Its size decides, and the result is kept rather than thrown away.
-                    when (verdict(pdfUrl, notice.pdfBytes)) {
+                    when (verdict("pdf", pdfUrl, notice.pdfBytes)) {
                         Verdict.FETCH -> {
                             val fetched = NoticeImageStore.fetchPdfKeeping(
                                 context, pdfUrl, logId, tapInitiated,
@@ -388,7 +427,7 @@ class AttachmentWorker(
          */
         suspend fun fetchNow(context: Context, repository: NoticeRepository, notice: NoticeEntity) {
             val logId = notice.logId ?: return
-            fetchAttachments(context, repository, notice, logId, tapInitiated = true) { _, _ ->
+            fetchAttachments(context, repository, notice, logId, tapInitiated = true) { _, _, _ ->
                 Verdict.FETCH
             }
         }
