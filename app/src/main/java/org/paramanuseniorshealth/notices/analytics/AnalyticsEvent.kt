@@ -102,10 +102,10 @@ sealed interface AnalyticsEvent {
     }
 
     /**
-     * [coldStart] says only that the tap created the activity; it does not say the process was
-     * new. An activity Android reclaimed while the app sat in the background is created afresh
-     * too, so [msSinceProcessStart] is what tells a genuinely cold process (small) from a warm
-     * process with a cold activity (large).
+     * [coldStart] is true when no open had yet been recorded in this process. A process started by
+     * an incoming message and then opened by a tap therefore reports true as well, because nothing
+     * had opened it before. [msSinceProcessStart] is what separates that case (large) from a
+     * launch the user started (small).
      */
     data class NotificationTapped(
         val msSinceShown: Long?,

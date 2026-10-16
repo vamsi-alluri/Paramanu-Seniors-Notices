@@ -76,7 +76,7 @@ class MainActivity : ComponentActivity() {
         readActivationLink(intent)
         // A recreated activity (rotation, process death) is handed the same intent again, with the
         // same tap in it. That is the one action being replayed, not a second open.
-        if (savedInstanceState == null) logOpen(intent, coldStart = true)
+        if (savedInstanceState == null) logOpen(intent)
 
         setContent {
             ParamanuNoticesTheme {
@@ -98,22 +98,30 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         persistFromNotificationIntent(intent)
         readActivationLink(intent)
-        logOpen(intent, coldStart = false)
+        logOpen(intent)
     }
 
     /**
      * Records how the app was opened and, for a tap, how long after posting it happened.
      *
      * Called from exactly one of [onCreate] and [onNewIntent] for any one launch intent: the system
-     * delivers an intent to a new instance or to a running one, never both. [coldStart] says which,
-     * so it means "this tap created the activity", not "the process was not running". The process
-     * age logged beside it is what tells the two apart.
+     * delivers an intent to a new instance or to a running one, never both.
+     *
+     * The cold-start flag comes from the application, not from which of the two callers this is: a
+     * restored task can reach here through [onNewIntent] while its process is brand new.
      *
      * Intents the system replays from recents carry their original extras, and with them an
      * instant from some earlier tap. They are counted as a launcher open instead.
+     *
+     * Only opens that deliver an intent are counted. Returning to a live, stopped task fires
+     * neither callback, so launcher opens are a lower bound. Detecting those returns on ON_START was
+     * rejected on purpose: this app hands PDFs to an external viewer, which stops this activity, so
+     * every return from reading a PDF would be recorded as a launcher open and inflate the number
+     * the detection was meant to correct.
      */
-    private fun logOpen(intent: Intent?, coldStart: Boolean) {
+    private fun logOpen(intent: Intent?) {
         val app = application as NoticesApplication
+        val coldStart = app.markOpened()
         val replayed = (intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0
         val extras = intent?.extras.takeUnless { replayed }
         val logId = extras?.getString(NoticeNotifications.EXTRA_LOG_ID)
@@ -132,8 +140,11 @@ class MainActivity : ComponentActivity() {
             val postedAt = extras?.getLong(NoticeNotifications.EXTRA_POSTED_AT, 0L) ?: 0L
             app.analytics.log(
                 AnalyticsEvent.NotificationTapped(
+                    // A wall-clock change can put the posting in the future; a negative interval
+                    // is corrupt rather than unknown, so it is left out like any missing one.
                     msSinceShown = postedAt.takeIf { it > 0 }
-                        ?.let { System.currentTimeMillis() - it },
+                        ?.let { System.currentTimeMillis() - it }
+                        ?.takeIf { it >= 0 },
                     coldStart = coldStart,
                     msSinceProcessStart = System.currentTimeMillis() - app.processStartedAt,
                 )

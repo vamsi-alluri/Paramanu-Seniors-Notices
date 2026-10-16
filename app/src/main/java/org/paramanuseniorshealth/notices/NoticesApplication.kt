@@ -43,6 +43,19 @@ class NoticesApplication : Application() {
      */
     val processStartedAt: Long = System.currentTimeMillis()
 
+    private val openedInThisProcess = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Records that the app has been opened, and says whether this was the first open in this
+     * process.
+     *
+     * Process-wide rather than per activity because an activity can be destroyed and recreated
+     * inside a live process, and the question this answers is whether the process was already
+     * serving someone. It is true for the first open even if a message had started the process
+     * earlier, since no open had preceded it.
+     */
+    fun markOpened(): Boolean = !openedInThisProcess.getAndSet(true)
+
     private val analyticsPrefs by lazy {
         getSharedPreferences("analytics", MODE_PRIVATE)
     }
