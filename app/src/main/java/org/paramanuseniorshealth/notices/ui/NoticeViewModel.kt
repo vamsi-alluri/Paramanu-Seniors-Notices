@@ -181,7 +181,7 @@ class NoticeViewModel(
         _downloadingPdf.value = _downloadingPdf.value + notice.id
         viewModelScope.launch {
             try {
-                val file = notices.pdfFile(notice)
+                val file = notices.pdfFile(notice, forOpening = true)
                 if (file == null || !open(file)) {
                     // Either the download failed or nothing can open a PDF. Both end at the
                     // website, which needs a connection -- but so did getting this far.

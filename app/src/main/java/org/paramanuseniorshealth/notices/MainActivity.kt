@@ -24,6 +24,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import android.os.SystemClock
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -202,6 +207,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * What is remembered about a card from the moment it came on screen, so that the report does not
+ * depend on the notice still being in the list when the card leaves. [shownAt] is on the monotonic
+ * clock, which a wall-clock change cannot move backwards.
+ */
+private class ShownCard(
+    val shownAt: Long,
+    val position: Int,
+    val hasImage: Boolean,
+    val hasPdf: Boolean,
+)
+
 @Composable
 private fun NoticesApp(
     tappedLogId: String?,
@@ -235,6 +252,71 @@ private fun NoticesApp(
     // scale change until the next recomposition.
     val testTitle = stringResource(R.string.test_notification_title)
     val testBody = stringResource(R.string.test_notification_body)
+
+    // How long each notice card stays on screen, which is what says which notice holds attention.
+    //
+    // Read from the hoisted list state rather than from the rows: NoticeRow does disk scans on
+    // every recomposition, and nothing here may run per frame. The flow only emits when the set of
+    // visible ids changes, so this logs at most once per card per continuous stretch on screen.
+    //
+    // The list state outlives the list. Its last layout is still readable while the viewer or
+    // Settings is up and while the app is in the background, so left alone every visible card
+    // would go on accruing time it was not being looked at. The effect is therefore bound to the
+    // notice screen being the one showing and to the activity being started; leaving either ends
+    // the stretch and reports it, and coming back begins a new one.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val onNoticeList = screen is Screen.Notices
+    LaunchedEffect(onNoticeList) {
+        if (!onNoticeList) return@LaunchedEffect
+        val analytics = (context.applicationContext as NoticesApplication).analytics
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val shown = mutableMapOf<Long, ShownCard>()
+            fun report(ids: Collection<Long>, now: Long) {
+                ids.toList().forEach { id ->
+                    val card = shown.remove(id) ?: return@forEach
+                    analytics.log(
+                        AnalyticsEvent.NoticeCardVisible(
+                            noticeId = id,
+                            visibleMs = now - card.shownAt,
+                            hasImage = card.hasImage,
+                            hasPdf = card.hasPdf,
+                            position = card.position,
+                        )
+                    )
+                }
+            }
+            try {
+                snapshotFlow {
+                    // Keys are a String for the office-info header and a Long for each notice, so
+                    // only Long keys are notices. Ids no longer in the list are dropped too: a
+                    // list that has emptied stops composing but keeps its last layout.
+                    val known = notices.mapTo(HashSet()) { it.id }
+                    noticeListState.layoutInfo.visibleItemsInfo
+                        .mapNotNull { (it.key as? Long)?.takeIf { id -> id in known } }
+                }
+                    .distinctUntilChanged()
+                    .collect { visible ->
+                        val now = SystemClock.elapsedRealtime()
+                        report(shown.keys - visible.toSet(), now)
+                        visible.forEach { id ->
+                            if (id in shown) return@forEach
+                            val index = notices.indexOfFirst { it.id == id }
+                            if (index < 0) return@forEach
+                            val notice = notices[index]
+                            shown[id] = ShownCard(
+                                shownAt = now,
+                                // The first notice is 1, as a reader counts, not the list index.
+                                position = index + 1,
+                                hasImage = !notice.imageUrl.isNullOrBlank(),
+                                hasPdf = !notice.pdfUrl.isNullOrBlank(),
+                            )
+                        }
+                    }
+            } finally {
+                report(shown.keys, SystemClock.elapsedRealtime())
+            }
+        }
+    }
 
     // Opens the notice the user tapped: highlight it, scroll to it. Keyed on the id so
     // tapping a second notification while the app is open moves to that one.

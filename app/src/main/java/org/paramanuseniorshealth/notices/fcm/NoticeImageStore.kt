@@ -271,14 +271,26 @@ object NoticeImageStore {
      * Returns the cached copy immediately when there is one, so a second tap opens instantly. On
      * failure returns null and the caller falls back to opening the URL in a browser -- which needs
      * a connection, but so did this.
+     *
+     * [openedNoticeId] is set only by a caller that is about to open the document, and then a
+     * `pdf_opened` event is logged once the file is in hand -- here, because this is where it is
+     * known whether the file was already on the phone, which the return value does not say. Share
+     * and Save fetch the same file and leave it null, since they do not open anything. A failed
+     * download logs nothing: there was no document to open.
      */
     suspend fun fetchPdf(
         context: Context,
         pdfUrl: String,
         logId: String,
         origin: FetchOrigin = FetchOrigin(),
+        openedNoticeId: Long? = null,
     ): File? {
-        cachedPdf(context, logId)?.takeIf { it.length() > 0 }?.let { return it }
+        cachedPdf(context, logId)?.takeIf { it.length() > 0 }?.let {
+            openedNoticeId?.let { id ->
+                analyticsOf(context).log(AnalyticsEvent.PdfOpened(id, it.length(), wasCached = true))
+            }
+            return it
+        }
 
         return withTimeoutOrNull(TAP_TIMEOUT_MS) {
             withContext(Dispatchers.IO) {
@@ -297,6 +309,11 @@ object NoticeImageStore {
                     moveInto(scratch, target)
 
                     prunePdfs(context)
+                    openedNoticeId?.let { id ->
+                        analyticsOf(context).log(
+                            AnalyticsEvent.PdfOpened(id, target.length(), wasCached = false)
+                        )
+                    }
                     target
                 }.onFailure { Log.w(TAG, "PDF download failed for $pdfUrl", it) }
                     .getOrNull()

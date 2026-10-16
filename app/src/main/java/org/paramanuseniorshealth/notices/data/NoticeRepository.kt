@@ -114,11 +114,16 @@ class NoticeRepository(
      * Lives here rather than in the view model because it needs a Context and the view model
      * deliberately holds none. Returns null when there is no PDF, no logId to file it under, or the
      * download failed -- callers fall back to opening the URL in a browser.
+     *
+     * [forOpening] is true for a caller that will hand the file to a PDF viewer, as opposed to
+     * Share and Save, which fetch the same file; only the former is reported as an open.
      */
-    suspend fun pdfFile(notice: NoticeEntity): File? {
+    suspend fun pdfFile(notice: NoticeEntity, forOpening: Boolean = false): File? {
         val url = notice.pdfUrl?.takeIf { it.isNotBlank() } ?: return null
         val logId = notice.logId ?: return null
-        return NoticeImageStore.fetchPdf(context, url, logId)
+        return NoticeImageStore.fetchPdf(
+            context, url, logId, openedNoticeId = notice.id.takeIf { forOpening },
+        )
     }
 
     suspend fun clear(notices: List<NoticeEntity>) {
