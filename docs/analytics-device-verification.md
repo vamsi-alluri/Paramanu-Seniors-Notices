@@ -148,6 +148,20 @@ Limits of the original capture, stated plainly:
 
 ## Commands that are easy to get wrong
 
+**Install the APK from `app/build/outputs/apk/debug/app-debug.apk`, never from
+`app/build/intermediates/apk/debug/`.** Both paths exist and hold a file of the same name. The
+intermediates copy is not refreshed by every build and can be hours or days old, and `adb install`
+reports `Success` either way — so the walk silently tests code that is not the code you just wrote,
+and the conclusions look real. This cost an hour on 2026-10-17: three "verifications" of a switch
+whose wiring was not in the installed binary at all. Check it before believing a result:
+
+```
+adb shell dumpsys package org.paramanuseniorshealth.notices | grep -E "versionCode|lastUpdateTime"
+```
+
+`versionCode` must match `app/build.gradle`, and `lastUpdateTime` must be the install you just did.
+`app/build/outputs/apk/debug/output-metadata.json` states the versionCode the build actually produced.
+
 `adb` is **not on PATH** on this machine. Use the full path:
 
 ```

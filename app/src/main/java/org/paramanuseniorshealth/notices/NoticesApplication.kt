@@ -1,6 +1,7 @@
 package org.paramanuseniorshealth.notices
 
 import android.app.Application
+import android.util.Log
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
@@ -74,7 +75,9 @@ class NoticesApplication : Application() {
         // that ran a build where the kill switch drove Crashlytics has `false` written into
         // com.google.firebase.crashlytics.xml, and a persisted value wins over the manifest for
         // ever. Writing true once is what reaches those installs; after that it is a no-op.
-        runCatching { FirebaseCrashlytics.getInstance().isCrashlyticsCollectionEnabled = true }
+        guarded("enable crash reporting") {
+            FirebaseCrashlytics.getInstance().isCrashlyticsCollectionEnabled = true
+        }
 
         // Must exist before the first notification is posted, and the FCM service can start without
         // an Activity ever having run, so the channel is created here.
@@ -124,7 +127,25 @@ class NoticesApplication : Application() {
      */
     private fun applyCollectionSwitch(enabled: Boolean) {
         analytics.setEnabled(enabled)
-        runCatching { FirebaseMessaging.getInstance().setDeliveryMetricsExportToBigQuery(enabled) }
+        guarded("set delivery logging $enabled") {
+            FirebaseMessaging.getInstance().setDeliveryMetricsExportToBigQuery(enabled)
+        }
+    }
+
+    /**
+     * Runs [block], and says so when it fails rather than swallowing it.
+     *
+     * These calls must never break app start, which is why they are caught at all. But a silent
+     * catch here is worse than it looks: the privacy policy says one switch governs what is
+     * collected, so a setter that quietly does nothing makes a published promise untrue with no
+     * trace anywhere. [FirebaseAnalyticsSink] draws the same line for the event path.
+     */
+    private inline fun guarded(what: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not $what: $e")
+        }
     }
 
     /**
@@ -164,6 +185,10 @@ class NoticesApplication : Application() {
      * Idempotent: the Room insert ignores a duplicate `logId`, so a repeated revoke broadcast
      * cannot post twice.
      */
+    private companion object {
+        const val TAG = "NoticesApplication"
+    }
+
     suspend fun announceRevocation() {
         val title = getString(R.string.revoked_notification_title)
         val body = getString(R.string.revoked_notification_body)
