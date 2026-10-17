@@ -71,9 +71,20 @@ over an older build.
 - **`firebase_messaging` is not empty by default**: `MESSAGE_ACCEPTED` rows arrive server-side from
   the moment the link exists, with no app change and no flag. Only `MESSAGE_DELIVERED` depends on
   the app.
-- **Apps Script / stage 1**: being attached to a GCP project using the **utils domain as a bridge**,
-  because `paramanuseniorshealth.org`'s Search Console sits under another account and Cloudflare DNS
-  access is unavailable for ~2 days. Nothing is to be built in utils; it is a domain bridge only.
+- **Apps Script / stage 1: done.** Attached to a standard GCP project, using the **utils domain as a
+  bridge** because `paramanuseniorshealth.org`'s Search Console sits under another account and
+  Cloudflare DNS access is unavailable for ~2 days. Nothing is to be built in utils; it is a domain
+  bridge only.
+  **It worked once the logo was removed.** A custom logo on the consent screen triggers Google's
+  brand verification review; with no logo and no sensitive scopes there is nothing to review. The
+  consent screen shows the app as **unverified**, which is expected and harmless — it produces a
+  one-time "Advanced → Go to (unsafe)" interstitial for the only person who will ever authorize it.
+  Do not upload a logo later, including after the move to `auth.paramanuseniorshealth.org`: that is
+  what puts it back in a review queue.
+  **Still to check:** whether the consent screen is in Testing or Production. The unverified screen
+  looks the same in both, and Testing is the one carrying the ~7-day token expiry against a
+  per-minute trigger. Also still open from #12's stage 1 acceptance: confirm executions appear in
+  Cloud Logging, and record the project number in `docs/SYSTEM.md`.
 
 ## Policy and Terms
 
