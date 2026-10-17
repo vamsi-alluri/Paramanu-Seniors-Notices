@@ -136,3 +136,16 @@ Outstanding on the documents:
   rests on the code and on the positive Remote Config evidence, not on a device-level negative.
 - **`UrlFetchApp` quota is account-wide, not per project.** Attaching Apps Script to a different GCP
   project buys visibility into it, never relief from it.
+
+## One known defect in this branch's history
+
+`3b88365` swept in **`docs/privacy-policy.md`**, which is Vamsi's edit, not Claude's — the commit
+used `git add -A app docs` instead of naming files. That commit carries a `Co-Authored-By: Claude`
+trailer and its message does not mention the file at all, so the history claims authorship of a
+change Claude did not write and hides that it is in there. That is the exact thing
+`dont-commit-or-coauthor-vamsis-code` exists to prevent.
+
+The branch is local and unpushed, so it is cheap to fix: rebase `3b88365` into two commits — the
+`NoticesApplication` guard and the runbook note (Claude's, trailer kept) and the `privacy-policy.md`
+edit (Vamsi's, no trailer). Not done unasked, because rewriting history is his call. Recorded here
+so it is not quietly forgotten.
