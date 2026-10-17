@@ -247,11 +247,17 @@ Firebase Remote Config, Boolean parameter: analytics_enabled = true | false
 - **Turning it off is not instantaneous, and is now slower.** Both SDKs persist the last runtime
   `true`, so after the owner flips the parameter off, a device keeps collecting until a fetch
   brings the new value down — up to the six-hour window, and longer on a phone that does not open
-  the app. The activated value is applied synchronously at process start, so there is no window
-  *within* a launch; the delay is purely how long the new value takes to arrive. The policy
-  therefore says "within a short time", and nothing should be written that implies a stop at the
-  moment of the flip. **Before the policy is published, confirm six hours still reads honestly as
-  "a short time"** (§12 item 4) — it is defensible, but it is the wording that has to carry it.
+  the app. On a phone that has fetched before, the activated value is applied from local storage at
+  process start, so there is no window *within* a launch in which the gate moves toward **on**; the
+  delay is purely how long the new value takes to arrive. **The exception is the first launch after
+  an install**, where there is no activated value yet: the gate starts shut and opens ~600 ms in
+  when the first fetch returns, which is the whole of §9 item 22. That window can only move toward
+  on, never toward off, so it costs measurements rather than leaking them. The policy therefore
+  says the phone stops the next time the app is opened and in any case within a few hours, and
+  nothing should be written that implies a stop at the moment of the flip.
+  *(Policy rewritten 2026-10-17; the "within a short time" wording it previously carried has been
+  replaced — see `content/privacy-policy-app.md` in the website repo, which is the live document.
+  `docs/privacy-policy.md` in this repo is not.)*
 - **Its own node**, not under `/dispensaries/…` — it is not dispensary-scoped, and putting it there
   would force the future multi-dispensary seam to carry it.
 - `database.rules.json` grants world read, no client write.
@@ -402,7 +408,14 @@ confident wrong answer.
 
 **Found on device, 2026-10-16**
 
-22. **The first launch after an install logs nothing.** The gate opens only when the config read
+22. **The first launch after an install logs nothing.** *(Re-measured 2026-10-17 after the switch
+    moved to Remote Config: the finding stands, the cause and the number changed. The gate now
+    opens when the **fetch** returns, not an RTDB read — measured at **~600 ms** on SM_S928U1,
+    still after the first screen composes. Observed on a `pm clear` launch: `measurement enabled:
+    false` at 02:24:15.370, `onActivityCreated` at .379, `Activity resumed` at .393, and
+    `measurement enabled: true` only at .995 — with no `activation_shown` in the capture. Every
+    consequence below is unchanged.)*
+    The gate opens only when the config read
     returns, measured at 752 ms after process start, which is after the first screen has composed.
     On that one launch `app_open_source`, `network_state_on_open` and `activation_shown` are
     dropped — observed, not inferred: all three fired on the next launch, from the cached value,
