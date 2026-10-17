@@ -110,6 +110,19 @@
             android:value="false" />
 
         <!--
+          The same default again, for FCM's delivery logging to BigQuery, which is the one
+          measurement in this app that happens when nobody has opened it, because it runs in the
+          message receive path. Off here, and turned on only by the runtime setter in
+          NoticesApplication, which
+          writes to the messaging SDK's own preferences and takes precedence over this value.
+          Firebase's own guidance prefers the per-instance runtime call over this flag for exactly
+          that reason: it is what lets the kill switch govern delivery logging too.
+        -->
+        <meta-data
+            android:name="delivery_metrics_exported_to_big_query_enabled"
+            android:value="false" />
+
+        <!--
           Lets the photo viewer read a cached image without the app copying it into shared storage.
           The grant is read-only and per-Intent: the viewer receives a content:// URI it can display
           and pass onward to a share target, and loses access when the task ends.

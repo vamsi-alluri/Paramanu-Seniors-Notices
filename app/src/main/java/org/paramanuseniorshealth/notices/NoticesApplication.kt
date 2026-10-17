@@ -2,6 +2,7 @@ package org.paramanuseniorshealth.notices
 
 import android.app.Application
 import com.google.firebase.crashlytics.FirebaseCrashlytics
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -91,16 +92,26 @@ class NoticesApplication : Application() {
     }
 
     /**
-     * The one place the switch is applied, so analytics and crash reporting cannot disagree.
+     * The one place the switch is applied, so the three things it governs cannot disagree.
      *
-     * Crashlytics is set separately from [analytics] because it is a different SDK with its own
-     * flag; guarding one would leave the other reporting while the app called itself off. Its
-     * failure is swallowed for the same reason [Analytics.setEnabled] swallows the sink's: nothing
-     * here may be able to break app start.
+     * Crashlytics and FCM delivery logging are set separately from [analytics] because each is a
+     * different SDK with its own flag; guarding one would leave the others reporting while the app
+     * called itself off. Each failure is swallowed for the same reason [Analytics.setEnabled]
+     * swallows the sink's: nothing here may be able to break app start.
+     *
+     * Delivery logging is applied on **every** call, in both directions, and not only when turning
+     * it on. The messaging SDK persists the runtime value in its own preferences and prefers it
+     * over the manifest default from then on, so a value set once would otherwise stick -- leaving
+     * delivery logging running on a phone whose switch had since been turned off.
+     *
+     * It is also the one measurement here that does not need anybody to open the app: it runs in
+     * the message receive path, so it reports on a phone that merely received a notice. That makes
+     * it the most important of the three to turn off promptly, not the least.
      */
     private fun applyCollectionSwitch(enabled: Boolean) {
         analytics.setEnabled(enabled)
         runCatching { FirebaseCrashlytics.getInstance().isCrashlyticsCollectionEnabled = enabled }
+        runCatching { FirebaseMessaging.getInstance().setDeliveryMetricsExportToBigQuery(enabled) }
     }
 
     /**
