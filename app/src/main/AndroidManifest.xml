@@ -98,16 +98,18 @@
             android:value="false" />
 
         <!--
-          The same default for Crashlytics, for the same reason: it too initialises through its own
-          component init before NoticesApplication.onCreate can close the gate, and this default guards
-          against a crash early in startup being reported while collection is meant to be off. That
-          is inferred from the analytics case, not observed for Crashlytics. The
-          runtime setter in NoticesApplication still overrides it, so the kill switch works in
-          both directions.
+          Crashlytics ships ON, unlike the other two, and is not governed by the measurement switch.
+          Crash reporting is diagnostics rather than behaviour: it records that the app broke and
+          what it was doing, never what the reader looked at. An app that runs unattended for four
+          hundred people cannot afford to be blind to a crash loop for the long stretches when
+          measurement is switched off.
+          True here rather than only at runtime because the SDK initialises through its own
+          component init, before NoticesApplication.onCreate: a crash in early startup is exactly
+          the one worth having, and a runtime-only enable would miss it.
         -->
         <meta-data
             android:name="firebase_crashlytics_collection_enabled"
-            android:value="false" />
+            android:value="true" />
 
         <!--
           The same default again, for FCM's delivery logging to BigQuery, which is the one

@@ -67,6 +67,15 @@ class NoticesApplication : Application() {
     override fun onCreate() {
         super.onCreate()
 
+        // Crash reporting runs always, and is deliberately not part of applyCollectionSwitch: it
+        // says the app broke, never what anyone read, and the switch spends most of its life off.
+        //
+        // Set explicitly rather than left to the manifest, because the setter persists. Every phone
+        // that ran a build where the kill switch drove Crashlytics has `false` written into
+        // com.google.firebase.crashlytics.xml, and a persisted value wins over the manifest for
+        // ever. Writing true once is what reaches those installs; after that it is a no-op.
+        runCatching { FirebaseCrashlytics.getInstance().isCrashlyticsCollectionEnabled = true }
+
         // Must exist before the first notification is posted, and the FCM service can start without
         // an Activity ever having run, so the channel is created here.
         NoticeNotifications.create(this)
@@ -92,12 +101,17 @@ class NoticesApplication : Application() {
     }
 
     /**
-     * The one place the switch is applied, so the three things it governs cannot disagree.
+     * The one place the switch is applied, so the two things it governs cannot disagree.
      *
-     * Crashlytics and FCM delivery logging are set separately from [analytics] because each is a
-     * different SDK with its own flag; guarding one would leave the others reporting while the app
-     * called itself off. Each failure is swallowed for the same reason [Analytics.setEnabled]
-     * swallows the sink's: nothing here may be able to break app start.
+     * Those two are GA4 and FCM delivery logging -- what people did, and whether notices arrived.
+     * **Crashlytics is deliberately not here**: it reports that the app broke, not what anyone
+     * read, and it runs always (see [onCreate]). Grouping it with the behavioural measurement
+     * would have meant no crash reports at all for the long stretches when the switch is off.
+     *
+     * Delivery logging is set separately from [analytics] because it is a different SDK with its
+     * own flag; guarding one would leave the other reporting while the app called itself off. Each
+     * failure is swallowed for the same reason [Analytics.setEnabled] swallows the sink's: nothing
+     * here may be able to break app start.
      *
      * Delivery logging is applied on **every** call, in both directions, and not only when turning
      * it on. The messaging SDK persists the runtime value in its own preferences and prefers it
@@ -110,7 +124,6 @@ class NoticesApplication : Application() {
      */
     private fun applyCollectionSwitch(enabled: Boolean) {
         analytics.setEnabled(enabled)
-        runCatching { FirebaseCrashlytics.getInstance().isCrashlyticsCollectionEnabled = enabled }
         runCatching { FirebaseMessaging.getInstance().setDeliveryMetricsExportToBigQuery(enabled) }
     }
 
