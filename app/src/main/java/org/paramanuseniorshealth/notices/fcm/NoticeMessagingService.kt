@@ -94,6 +94,7 @@ class NoticeMessagingService : FirebaseMessagingService() {
 
             app.analytics.log(
                 AnalyticsEvent.NoticeReceived(
+                    logId = logId,
                     hasImage = imageUrl != null,
                     hasPdf = pdfUrl != null,
                     isNew = isNew,

@@ -288,7 +288,7 @@ private fun NoticesApp(
             fun report(ended: List<CardStretch>) = ended.forEach {
                 analytics.log(
                     AnalyticsEvent.NoticeCardVisible(
-                        noticeId = it.noticeId,
+                        logId = it.logId,
                         visibleMs = it.visibleMs,
                         hasImage = it.hasImage,
                         hasPdf = it.hasPdf,
@@ -310,6 +310,7 @@ private fun NoticesApp(
                                 val index = visible.notices.indexOfFirst { it.id == id }
                                 if (index < 0) null else visible.notices[index].let {
                                     CardFacts(
+                                        logId = it.logId,
                                         position = index + 1,
                                         hasImage = !it.imageUrl.isNullOrBlank(),
                                         hasPdf = !it.pdfUrl.isNullOrBlank(),

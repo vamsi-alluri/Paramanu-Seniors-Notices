@@ -6,12 +6,26 @@ package org.paramanuseniorshealth.notices.analytics
  * [position] is 1-based among notices and excludes the office-info header, so it is not a
  * `LazyColumn` index. It is captured when the card appears and not revised: a notice arriving
  * above a visible card makes it stale, deliberately, since it is where the reader met the card.
+ *
+ * [logId] is the sender's id for the notice and the only thing reported that names it. It is read
+ * here, with the rest of the facts, rather than looked up when the stretch ends: by then the
+ * notice may have left the list.
  */
-data class CardFacts(val position: Int, val hasImage: Boolean, val hasPdf: Boolean)
+data class CardFacts(
+    val logId: String?,
+    val position: Int,
+    val hasImage: Boolean,
+    val hasPdf: Boolean,
+)
 
-/** One continuous stretch a card was on screen. */
+/**
+ * One continuous stretch a card was on screen.
+ *
+ * Carries [logId] and not the rowid it was tracked under: the rowid is this class's map key
+ * upstream, a handle on a row in one phone's database, and means nothing to any other phone.
+ */
 data class CardStretch(
-    val noticeId: Long,
+    val logId: String?,
     val visibleMs: Long,
     val hasImage: Boolean,
     val hasPdf: Boolean,
@@ -60,7 +74,7 @@ class CardDwellTracker {
     private fun finish(id: Long, now: Long): CardStretch {
         val entry = shown.remove(id)!!
         return CardStretch(
-            noticeId = id,
+            logId = entry.facts.logId,
             visibleMs = now - entry.shownAt,
             hasImage = entry.facts.hasImage,
             hasPdf = entry.facts.hasPdf,

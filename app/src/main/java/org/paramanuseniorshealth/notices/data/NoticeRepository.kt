@@ -121,9 +121,7 @@ class NoticeRepository(
     suspend fun pdfFile(notice: NoticeEntity, forOpening: Boolean = false): File? {
         val url = notice.pdfUrl?.takeIf { it.isNotBlank() } ?: return null
         val logId = notice.logId ?: return null
-        return NoticeImageStore.fetchPdf(
-            context, url, logId, openedNoticeId = notice.id.takeIf { forOpening },
-        )
+        return NoticeImageStore.fetchPdf(context, url, logId, forOpening = forOpening)
     }
 
     suspend fun clear(notices: List<NoticeEntity>) {

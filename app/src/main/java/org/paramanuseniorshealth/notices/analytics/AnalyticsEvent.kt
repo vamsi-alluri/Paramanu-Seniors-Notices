@@ -15,6 +15,20 @@ sealed interface AnalyticsEvent {
     val name: String
     val params: Map<String, Any>
 
+    /*
+     * A notice is identified by `log_id` and by nothing else. It is the sender's own id --
+     * `nextLogId_()` in Code.gs, epoch millis at send time -- and `/sent/<logId>` is keyed by it,
+     * so a row carrying it joins back to the notice that was actually sent. The Room rowid was
+     * reported as `notice_id` until 0.8.0 and is not reported any more: it is assigned per device
+     * in arrival order, so the same number meant a different notice on every handset and no two
+     * phones' rows could be compared. The rowid survives inside the app as the list key, which is
+     * all it was ever fit to be.
+     *
+     * `logId` is nullable because NoticeEntity.logId is: the sender may omit it, and the unique
+     * index permits it. Such a notice reports no identifier at all rather than falling back to the
+     * rowid -- one notion of notice identity, never two.
+     */
+
     data class FetchPolicyDecision(
         val kind: String,
         val metered: Boolean,
@@ -85,6 +99,7 @@ sealed interface AnalyticsEvent {
     }
 
     data class NoticeReceived(
+        val logId: String?,
         val hasImage: Boolean,
         val hasPdf: Boolean,
         val isNew: Boolean,
@@ -93,6 +108,7 @@ sealed interface AnalyticsEvent {
     ) : AnalyticsEvent {
         override val name = "notice_received"
         override val params = buildMap {
+            logId?.let { put("log_id", it) }
             put("has_image", hasImage.asParam())
             put("has_pdf", hasPdf.asParam())
             put("is_new", isNew.asParam())
@@ -126,39 +142,39 @@ sealed interface AnalyticsEvent {
     }
 
     data class NoticeCardVisible(
-        val noticeId: Long,
+        val logId: String?,
         val visibleMs: Long,
         val hasImage: Boolean,
         val hasPdf: Boolean,
         val position: Int,
     ) : AnalyticsEvent {
         override val name = "notice_card_visible"
-        override val params = mapOf<String, Any>(
-            "notice_id" to noticeId,
-            "visible_ms" to visibleMs,
-            "has_image" to hasImage.asParam(),
-            "has_pdf" to hasPdf.asParam(),
-            "position" to position.toLong(),
-        )
+        override val params = buildMap {
+            logId?.let { put("log_id", it) }
+            put("visible_ms", visibleMs)
+            put("has_image", hasImage.asParam())
+            put("has_pdf", hasPdf.asParam())
+            put("position", position.toLong())
+        }
     }
 
     data class ImageViewerClosed(
-        val noticeId: Long,
+        val logId: String?,
         val durationMs: Long,
         val maxScale: Float,
     ) : AnalyticsEvent {
         override val name = "image_viewer_closed"
-        override val params = mapOf<String, Any>(
-            "notice_id" to noticeId,
-            "duration_ms" to durationMs,
-            "max_scale" to maxScale.toDouble(),
-        )
+        override val params = buildMap {
+            logId?.let { put("log_id", it) }
+            put("duration_ms", durationMs)
+            put("max_scale", maxScale.toDouble())
+        }
     }
 
-    data class PdfOpened(val noticeId: Long, val sizeBytes: Long?, val wasCached: Boolean) : AnalyticsEvent {
+    data class PdfOpened(val logId: String, val sizeBytes: Long?, val wasCached: Boolean) : AnalyticsEvent {
         override val name = "pdf_opened"
         override val params = buildMap {
-            put("notice_id", noticeId)
+            put("log_id", logId)
             put("was_cached", wasCached.asParam())
             sizeBytes?.let { put("size_bytes", it) }
         }

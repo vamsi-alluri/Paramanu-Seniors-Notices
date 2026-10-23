@@ -18,12 +18,12 @@ class AnalyticsEventTest {
         AnalyticsEvent.NetworkStateOnOpen(metered = true, roaming = false),
         AnalyticsEvent.AttachmentFetchStart("pdf", 1L, 30L, 1L, 2L, 0),
         AnalyticsEvent.AttachmentFetchEnd("pdf", 1L, 250L, "fetched", 200),
-        AnalyticsEvent.NoticeReceived(hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = 10L, msSinceProcessStart = 20L),
+        AnalyticsEvent.NoticeReceived(logId = "1792473610441", hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = 10L, msSinceProcessStart = 20L),
         AnalyticsEvent.NotificationTapped(msSinceShown = 5L, coldStart = true, msSinceProcessStart = 30L),
         AnalyticsEvent.AppOpen(source = "launcher"),
-        AnalyticsEvent.NoticeCardVisible(noticeId = 1L, visibleMs = 900L, hasImage = true, hasPdf = false, position = 3),
-        AnalyticsEvent.ImageViewerClosed(noticeId = 1L, durationMs = 400L, maxScale = 2.5f),
-        AnalyticsEvent.PdfOpened(noticeId = 1L, sizeBytes = 1L, wasCached = true),
+        AnalyticsEvent.NoticeCardVisible(logId = "1792473610441", visibleMs = 900L, hasImage = true, hasPdf = false, position = 3),
+        AnalyticsEvent.ImageViewerClosed(logId = "1792473610441", durationMs = 400L, maxScale = 2.5f),
+        AnalyticsEvent.PdfOpened(logId = "1792473610441", sizeBytes = 1L, wasCached = true),
         AnalyticsEvent.ActivationShown(hasCode = false),
         AnalyticsEvent.ActivationSubmitted,
         AnalyticsEvent.ActivationResult(result = "offline", offlineCause = "timeout"),
@@ -116,6 +116,14 @@ class AnalyticsEventTest {
             // (no uid from anonymous sign-in, transport exception, 20-second timeout).
             "offline_cause" to setOf("no_uid", "transport", "timeout"),
         )
+
+        // The one string whose value cannot be a closed set: log_id is the sender's own id for a
+        // notice, and a new one is minted per send. It is pinned by shape instead -- the epoch
+        // millis nextLogId_() produces, digits only. That is what keeps the guard meaningful: a
+        // title or a body put here would not be digits, and this test would fail. Widening this
+        // pattern is as privacy-relevant as widening a vocabulary above.
+        val patternVocabulary = mapOf("log_id" to Regex("""^\d{10,20}$"""))
+
         val forbiddenInKey = listOf("title", "body", "text", "message")
         for (event in allEvents) {
             for ((key, value) in event.params) {
@@ -125,9 +133,20 @@ class AnalyticsEventTest {
                 when (value) {
                     is Long, is Double -> Unit
                     is String -> {
-                        val allowed = stringVocabulary[key]
-                        assertTrue("${event.name} carries a String in '$key' -- only ${stringVocabulary.keys} may", allowed != null)
-                        assertTrue("${event.name} '$key' = \"$value\" is outside its vocabulary $allowed", value in allowed!!)
+                        val pattern = patternVocabulary[key]
+                        if (pattern != null) {
+                            assertTrue(
+                                "${event.name} '$key' = \"$value\" does not match its shape $pattern",
+                                pattern.matches(value),
+                            )
+                        } else {
+                            val allowed = stringVocabulary[key]
+                            assertTrue(
+                                "${event.name} carries a String in '$key' -- only ${stringVocabulary.keys + patternVocabulary.keys} may",
+                                allowed != null,
+                            )
+                            assertTrue("${event.name} '$key' = \"$value\" is outside its vocabulary $allowed", value in allowed!!)
+                        }
                     }
                     else -> throw AssertionError("${event.name} '$key' has unsupported type ${value::class.simpleName}")
                 }
@@ -143,9 +162,14 @@ class AnalyticsEventTest {
             AnalyticsEvent.FetchPolicyDecision("pdf", true, false, null, "reachable", false) to listOf("size_bytes"),
             AnalyticsEvent.AttachmentFetchStart("pdf", null, null, null, 2L, 0) to listOf("size_bytes", "jitter_seconds", "enqueued_at_ms"),
             AnalyticsEvent.AttachmentFetchEnd("pdf", null, 250L, "fetched", null) to listOf("size_bytes", "http_status"),
-            AnalyticsEvent.NoticeReceived(hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = null, msSinceProcessStart = 20L) to listOf("delivery_lag_ms"),
+            AnalyticsEvent.NoticeReceived(logId = "1792473610441", hasImage = true, hasPdf = false, isNew = true, deliveryLagMs = null, msSinceProcessStart = 20L) to listOf("delivery_lag_ms"),
             AnalyticsEvent.NotificationTapped(msSinceShown = null, coldStart = true, msSinceProcessStart = 30L) to listOf("ms_since_shown"),
-            AnalyticsEvent.PdfOpened(noticeId = 1L, sizeBytes = null, wasCached = true) to listOf("size_bytes"),
+            AnalyticsEvent.PdfOpened(logId = "1792473610441", sizeBytes = null, wasCached = true) to listOf("size_bytes"),
+            // A notice the sender gave no logId reports no identifier at all. It must not fall
+            // back to the Room rowid, which names a different notice on every handset.
+            AnalyticsEvent.NoticeReceived(logId = null, hasImage = false, hasPdf = false, isNew = true, deliveryLagMs = 1L, msSinceProcessStart = 2L) to listOf("log_id", "notice_id"),
+            AnalyticsEvent.NoticeCardVisible(logId = null, visibleMs = 900L, hasImage = false, hasPdf = false, position = 1) to listOf("log_id", "notice_id"),
+            AnalyticsEvent.ImageViewerClosed(logId = null, durationMs = 400L, maxScale = 1f) to listOf("log_id", "notice_id"),
             AnalyticsEvent.ActivationResult(result = "offline", offlineCause = null) to listOf("offline_cause"),
         )
         for ((event, keys) in cases) {
@@ -158,9 +182,9 @@ class AnalyticsEventTest {
     @Test
     fun `a real zero is a measurement and stays present`() {
         // The converse: absence means unknown, so a measured zero must not collapse into it.
-        val size = AnalyticsEvent.PdfOpened(noticeId = 1L, sizeBytes = 0L, wasCached = true)
+        val size = AnalyticsEvent.PdfOpened(logId = "1792473610441", sizeBytes = 0L, wasCached = true)
         assertEquals(0L, size.params["size_bytes"])
-        val lag = AnalyticsEvent.NoticeReceived(hasImage = false, hasPdf = false, isNew = true, deliveryLagMs = 0L, msSinceProcessStart = 0L)
+        val lag = AnalyticsEvent.NoticeReceived(logId = "1792473610441", hasImage = false, hasPdf = false, isNew = true, deliveryLagMs = 0L, msSinceProcessStart = 0L)
         assertEquals(0L, lag.params["delivery_lag_ms"])
         val start = AnalyticsEvent.AttachmentFetchStart("pdf", null, 0L, 5L, 6L, 0)
         assertEquals(0L, start.params["jitter_seconds"]) // rolled zero, unlike a sweep's absence

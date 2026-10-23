@@ -101,7 +101,7 @@ fun NoticeViewerScreen(
     // callback below, which runs on every pinch frame: nothing there may log, and nothing reads
     // this until the screen is left.
     val peak = remember { PeakScale() }
-    val noticeId by rememberUpdatedState(notice?.id)
+    val logId by rememberUpdatedState(notice?.logId)
     val lifecycleOwner = LocalLifecycleOwner.current
 
     // Reports how long the viewer was open, and is this screen's own effect rather than a hook on
@@ -110,9 +110,12 @@ fun NoticeViewerScreen(
     // screen overnight, or put in a pocket, is not someone reading.
     //
     // A configuration change disposes and recreates this screen, so it reports twice, each covering
-    // its own part of one viewing. Durations for a notice must therefore be SUMMED per notice id,
+    // its own part of one viewing. Durations for a notice must therefore be SUMMED per log id,
     // never maxed: several rows can belong to one reading session (a rotation, or a trip out and
     // back), and a reader can also open the same notice twice.
+    //
+    // A notice the sender gave no logId reports nothing at all, since there would be no way to say
+    // which notice was read.
     //
     // A process killed while in the background reports nothing; the event is written on leaving,
     // and there is no leaving to observe. The longest sessions are the likeliest to be killed, so
@@ -132,10 +135,10 @@ fun NoticeViewerScreen(
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
             val openMs = dwell.finish()
-            noticeId?.let { id ->
+            logId?.let { id ->
                 (context.applicationContext as NoticesApplication).analytics.log(
                     AnalyticsEvent.ImageViewerClosed(
-                        noticeId = id,
+                        logId = id,
                         durationMs = openMs,
                         maxScale = peak.value,
                     )

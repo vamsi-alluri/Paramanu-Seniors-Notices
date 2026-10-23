@@ -13,6 +13,7 @@ import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * Where a fetch came from, carried to [NoticeImageStore.download] so that the start event is
@@ -232,7 +233,7 @@ object NoticeImageStore {
         kind: String,
         eventKind: String,
         origin: FetchOrigin,
-    ): Bitmap? = withTimeoutOrNull(TIMEOUT_MS) {
+    ): Bitmap? = withTimeoutOrNull(TIMEOUT_MS.milliseconds) {
         withContext(Dispatchers.IO) {
             val scratch = File.createTempFile("notice_$logId-$kind", ".part", context.cacheDir)
             try {
@@ -272,7 +273,7 @@ object NoticeImageStore {
      * failure returns null and the caller falls back to opening the URL in a browser -- which needs
      * a connection, but so did this.
      *
-     * [openedNoticeId] is set only by a caller that is about to open the document, and then a
+     * [forOpening] is set only by a caller that is about to open the document, and then a
      * `pdf_opened` event is logged once the file is in hand -- here, because this is where it is
      * known whether the file was already on the phone, which the return value does not say. Share
      * and Save fetch the same file and leave it null, since they do not open anything. A failed
@@ -286,16 +287,16 @@ object NoticeImageStore {
         pdfUrl: String,
         logId: String,
         origin: FetchOrigin = FetchOrigin(),
-        openedNoticeId: Long? = null,
+        forOpening: Boolean = false,
     ): File? {
         cachedPdf(context, logId)?.takeIf { it.length() > 0 }?.let {
-            openedNoticeId?.let { id ->
-                analyticsOf(context).log(AnalyticsEvent.PdfOpened(id, it.length(), wasCached = true))
+            if (forOpening) {
+                analyticsOf(context).log(AnalyticsEvent.PdfOpened(logId, it.length(), wasCached = true))
             }
             return it
         }
 
-        return withTimeoutOrNull(TAP_TIMEOUT_MS) {
+        return withTimeoutOrNull(TAP_TIMEOUT_MS.milliseconds) {
             withContext(Dispatchers.IO) {
                 runCatching {
                     val target = File(fileDirectory(context), "${stem(logId, "doc")}.pdf")
@@ -312,9 +313,9 @@ object NoticeImageStore {
                     moveInto(scratch, target)
 
                     prunePdfs(context)
-                    openedNoticeId?.let { id ->
+                    if (forOpening) {
                         analyticsOf(context).log(
-                            AnalyticsEvent.PdfOpened(id, target.length(), wasCached = false)
+                            AnalyticsEvent.PdfOpened(logId, target.length(), wasCached = false)
                         )
                     }
                     target
@@ -372,7 +373,7 @@ object NoticeImageStore {
         /** The size the sender published for the document, if it did; reported on the start event. */
         sizeBytes: Long? = null,
     ): PdfFetch? =
-        withTimeoutOrNull(WORKER_TIMEOUT_MS) {
+        withTimeoutOrNull(WORKER_TIMEOUT_MS.milliseconds) {
             withContext(Dispatchers.IO) {
                 // Named differently from fetchPdf's "notice_$logId-doc.part" for the identical
                 // reason given at [tapInitiated] above, and differently again between a worker call
