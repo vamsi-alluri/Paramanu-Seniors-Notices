@@ -9,6 +9,7 @@ import org.paramanuseniorshealth.notices.activation.ActivationRefreshWorker
 import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.activation.ActivationState
 import org.paramanuseniorshealth.notices.activation.Importance
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 
 class NoticeMessagingService : FirebaseMessagingService() {
 
@@ -89,6 +90,28 @@ class NoticeMessagingService : FirebaseMessagingService() {
                 pdfThumbUrl = pdfThumbUrl,
                 pdfPages = pdfPages,
                 pdfBytes = pdfBytes,
+            )
+
+            app.analytics.log(
+                AnalyticsEvent.NoticeReceived(
+                    logId = logId,
+                    hasImage = imageUrl != null,
+                    hasPdf = pdfUrl != null,
+                    isNew = isNew,
+                    // message.sentTime is the sender's clock, so this is the only honest source
+                    // for delivery lag. The receivedAt stored on a notice is not: it is parsed from
+                    // the logId and is the same on every phone. Zero means FCM did not say, which
+                    // is a missing measurement rather than a lag of nothing: absence here means
+                    // no sentTime was supplied, never a bad one.
+                    //
+                    // The lag spans two clocks, so a negative value is kept on purpose. It means
+                    // this device's clock is behind FCM's, by about that much. Filter such rows out
+                    // of any transit-time percentile instead of dropping them here, where the fact
+                    // could not be recovered.
+                    deliveryLagMs = message.sentTime.takeIf { it > 0 }
+                        ?.let { System.currentTimeMillis() - it },
+                    msSinceProcessStart = System.currentTimeMillis() - app.processStartedAt,
+                )
             )
 
             // Nothing is downloaded here any more.

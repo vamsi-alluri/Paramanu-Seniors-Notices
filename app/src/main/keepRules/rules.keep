@@ -4,6 +4,10 @@
 # For more details, see
 #   https://d.android.com/r/tools/r8/keep-rules
 
+# Suppress missing class warnings for AdvertisingIdClient, which is deliberately excluded
+# from firebase-analytics in build.gradle to ensure no advertising ID is collected.
+-dontwarn com.google.android.gms.ads.identifier.**
+
 # If your project uses WebView with JS, uncomment the following
 # and specify the fully qualified class name to the JavaScript interface
 # class:

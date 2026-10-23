@@ -1,6 +1,7 @@
 package org.paramanuseniorshealth.notices.ui
 
 import android.net.Uri
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -23,10 +24,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,9 +41,15 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.R
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
+import org.paramanuseniorshealth.notices.analytics.ViewerDwell
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.fcm.NoticeImageStore
 import java.io.File
@@ -87,10 +96,62 @@ fun NoticeViewerScreen(
     var scale by remember { mutableStateOf(1f) }
     var offsetX by remember { mutableStateOf(0f) }
     var offsetY by remember { mutableStateOf(0f) }
+
+    // The largest zoom reached, for the close event. A plain holder written from the transform
+    // callback below, which runs on every pinch frame: nothing there may log, and nothing reads
+    // this until the screen is left.
+    val peak = remember { PeakScale() }
+    val logId by rememberUpdatedState(notice?.logId)
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    // Reports how long the viewer was open, and is this screen's own effect rather than a hook on
+    // the back path: that path is shared with Settings and sees neither backgrounding nor a
+    // configuration change. Only time with the activity started counts. A phone left on this
+    // screen overnight, or put in a pocket, is not someone reading.
+    //
+    // A configuration change disposes and recreates this screen, so it reports twice, each covering
+    // its own part of one viewing. Durations for a notice must therefore be SUMMED per log id,
+    // never maxed: several rows can belong to one reading session (a rotation, or a trip out and
+    // back), and a reader can also open the same notice twice.
+    //
+    // A notice the sender gave no logId reports nothing at all, since there would be no way to say
+    // which notice was read.
+    //
+    // A process killed while in the background reports nothing; the event is written on leaving,
+    // and there is no leaving to observe. The longest sessions are the likeliest to be killed, so
+    // the recorded durations are biased slightly short. There is no upper bound beyond the started
+    // gate: a phone left foregrounded on this screen can accrue hours, so queries should cap. The
+    // arithmetic lives in ViewerDwell, which is tested.
+    DisposableEffect(lifecycleOwner) {
+        val dwell = ViewerDwell(SystemClock::elapsedRealtime)
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_START -> dwell.started()
+                Lifecycle.Event.ON_STOP -> dwell.stopped()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            val openMs = dwell.finish()
+            logId?.let { id ->
+                (context.applicationContext as NoticesApplication).analytics.log(
+                    AnalyticsEvent.ImageViewerClosed(
+                        logId = id,
+                        durationMs = openMs,
+                        maxScale = peak.value,
+                    )
+                )
+            }
+        }
+    }
+
     val transform = rememberTransformableState { zoomChange, panChange, _ ->
         // Floor of 1 so the page can never be pinched smaller than the frame and lost; ceiling of 6
         // is enough to read body text on an A4 scan at arm's length.
         scale = (scale * zoomChange).coerceIn(1f, 6f)
+        peak.value = maxOf(peak.value, scale)
         offsetX += panChange.x
         offsetY += panChange.y
         if (scale == 1f) {
@@ -165,6 +226,11 @@ fun NoticeViewerScreen(
             }
         }
     }
+}
+
+/** The largest zoom reached in one viewing. A class rather than state: no composition reads it. */
+private class PeakScale {
+    var value = 1f
 }
 
 /** Share / Save, behind the overflow so the picture keeps the screen. */

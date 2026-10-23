@@ -47,3 +47,19 @@ sealed interface RedeemResult {
     /** Could not reach the backend. Distinct from [NotAccepted] so the user is told to retry. */
     data object Offline : RedeemResult
 }
+
+/**
+ * The value the funnel reports for this outcome.
+ *
+ * Spelled out rather than derived from the class name: these strings are a published vocabulary,
+ * pinned by a test, and deriving them would let a rename change the data silently. The `when` has
+ * no `else`, so a new variant fails to compile here, which is where whoever adds one has to decide
+ * what the funnel should call it.
+ */
+fun RedeemResult.analyticsName(): String = when (this) {
+    RedeemResult.Success -> "success"
+    RedeemResult.Mistyped -> "mistyped"
+    RedeemResult.NotAccepted -> "notaccepted"
+    RedeemResult.SameCode -> "samecode"
+    RedeemResult.Offline -> "offline"
+}

@@ -19,12 +19,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
@@ -34,8 +37,10 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.R
 import org.paramanuseniorshealth.notices.activation.ActivationCode
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import org.paramanuseniorshealth.notices.activation.RedeemResult
 
 /**
@@ -53,6 +58,7 @@ fun ActivationScreen(
     onErrorDismissed: () -> Unit,
     modifier: Modifier = Modifier,
     prefill: String = "",
+    hasCode: Boolean = false,
 ) {
     // Held unpunctuated. The dash is painted by CodeDashTransformation, so it cannot be deleted,
     // retyped, or land in the middle of a paste.
@@ -63,6 +69,23 @@ fun ActivationScreen(
     // before it is spent and means a stale link fails where it can be seen.
     var code by remember(prefill) { mutableStateOf(CodeDashTransformation.clean(prefill)) }
     val complete = code.length == ActivationCode.LENGTH
+
+    // Once per appearance. The screen recomposes on every keystroke and keyboard change, and
+    // onValueChange runs per character, so neither may log. Keyed on Unit, so a later change of
+    // [prefill] is not a new appearance. The flag is saved state so that an activity recreation
+    // with this screen up does not count the same appearance again; it is dropped when the screen
+    // is left, so coming back is a new appearance. [hasCode] is re-entry from Settings as against a
+    // fresh install: the phone holds a working code. A revoked phone does hold a stored code, but it
+    // counts as not having one, because it is the phone a replacement slip is for.
+    val context = LocalContext.current
+    var shownReported by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (shownReported) return@LaunchedEffect
+        shownReported = true
+        (context.applicationContext as NoticesApplication).analytics.log(
+            AnalyticsEvent.ActivationShown(hasCode = hasCode)
+        )
+    }
 
     Column(
         modifier = modifier

@@ -5,15 +5,22 @@
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!--
-      The advertising ID is explicitly removed, not merely unused.
+      The advertising ID is explicitly removed, not merely unused. Two different permissions are
+      removed for the same reason: the GMS AD_ID one (from play-services-ads-identifier) and the
+      Android 13+ AdServices one (from play-services-measurement's AdServices support). This app
+      reads the advertising ID through neither API.
 
       Play reads the merged manifest: any dependency declaring AD_ID forces a "yes" on the
       advertising-ID question in the Data Safety form, which would contradict this app's listing
-      ("does not ask for ... and none is collected"). firebase-analytics pulled it in and has been
-      removed; this keeps the guarantee if a transitive dependency reintroduces it later.
+      ("does not ask for ... and none is collected"). firebase-analytics does pull it in, and is
+      present again; the Gradle exclude of play-services-ads-identifier is what keeps that
+      dependency out, and this removal keeps the guarantee if another path reintroduces it.
     -->
     <uses-permission
         android:name="com.google.android.gms.permission.AD_ID"
+        tools:node="remove" />
+    <uses-permission
+        android:name="android.permission.ACCESS_ADSERVICES_AD_ID"
         tools:node="remove" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
@@ -68,6 +75,54 @@
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
             android:value="notices_default" />
+
+        <!--
+          Belt and braces with the AD_ID permission removal above: this tells the Analytics SDK
+          itself never to collect the advertising identifier, so the guarantee does not rest on
+          dependency resolution alone.
+        -->
+        <meta-data
+            android:name="google_analytics_adid_collection_enabled"
+            android:value="false" />
+
+        <!--
+          Ships the Analytics SDK switched off. This is not redundant with setEnabled() in
+          NoticesApplication.onCreate: the SDK initialises through its own component init, before
+          onCreate runs, and without this it starts enabled and can emit first_open, which fires
+          once per installation and can never be suppressed afterwards, before our gate closes.
+          The manifest value is only the startup default; setAnalyticsCollectionEnabled(true) at
+          runtime overrides it and persists, so the kill switch still works in both directions.
+        -->
+        <meta-data
+            android:name="firebase_analytics_collection_enabled"
+            android:value="false" />
+
+        <!--
+          Crashlytics ships ON, unlike the other two, and is not governed by the measurement switch.
+          Crash reporting is diagnostics rather than behaviour: it records that the app broke and
+          what it was doing, never what the reader looked at. An app that runs unattended for four
+          hundred people cannot afford to be blind to a crash loop for the long stretches when
+          measurement is switched off.
+          True here rather than only at runtime because the SDK initialises through its own
+          component init, before NoticesApplication.onCreate: a crash in early startup is exactly
+          the one worth having, and a runtime-only enable would miss it.
+        -->
+        <meta-data
+            android:name="firebase_crashlytics_collection_enabled"
+            android:value="true" />
+
+        <!--
+          The same default again, for FCM's delivery logging to BigQuery, which is the one
+          measurement in this app that happens when nobody has opened it, because it runs in the
+          message receive path. Off here, and turned on only by the runtime setter in
+          NoticesApplication, which
+          writes to the messaging SDK's own preferences and takes precedence over this value.
+          Firebase's own guidance prefers the per-instance runtime call over this flag for exactly
+          that reason: it is what lets the kill switch govern delivery logging too.
+        -->
+        <meta-data
+            android:name="delivery_metrics_exported_to_big_query_enabled"
+            android:value="false" />
 
         <!--
           Lets the photo viewer read a cached image without the app copying it into shared storage.

@@ -25,12 +25,16 @@ import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.activation.ActivationState
 import org.paramanuseniorshealth.notices.activation.Dispensary
 import org.paramanuseniorshealth.notices.activation.RedeemResult
+import org.paramanuseniorshealth.notices.activation.analyticsName
+import org.paramanuseniorshealth.notices.analytics.Analytics
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.InfoRepository
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.data.OfficeInfo
 import org.paramanuseniorshealth.notices.fcm.AttachmentWorker
+import org.paramanuseniorshealth.notices.fcm.NetworkStatus
 
 /** Where the user is. Deliberately a state machine rather than a navigation graph: four
  *  destinations do not justify a navigation dependency, and the code screen is a gate rather
@@ -50,6 +54,7 @@ class NoticeViewModel(
     info: InfoRepository,
     private val welcomeTitle: String,
     private val welcomeBody: String,
+    private val analytics: Analytics,
 ) : ViewModel() {
 
     val allNotices: StateFlow<List<NoticeEntity>> = notices.notices
@@ -177,7 +182,7 @@ class NoticeViewModel(
         _downloadingPdf.value = _downloadingPdf.value + notice.id
         viewModelScope.launch {
             try {
-                val file = notices.pdfFile(notice)
+                val file = notices.pdfFile(notice, forOpening = true)
                 if (file == null || !open(file)) {
                     // Either the download failed or nothing can open a PDF. Both end at the
                     // website, which needs a connection -- but so did getting this far.
@@ -391,6 +396,21 @@ class NoticeViewModel(
      * this view model -- a ViewModel holding a Context outlives the Activity and leaks it.
      */
     fun onResumed(context: Context) {
+        // Once per foreground, here, and not in AttachmentWorker: the worker re-reads these inside
+        // its per-notice loop, so logging there would emit one event per notice in a sweep and
+        // inflate every ratio built from this event.
+        //
+        // Read on the main thread, which is fine here: these are two system-service calls, once
+        // per foreground. The worker wraps the same calls in Dispatchers.IO because its doWork
+        // runs on Default and sits next to a blocking HEAD probe -- not because the calls are
+        // unsafe on main -- so that wrapping is no rule broken here, and should not be copied or
+        // removed.
+        analytics.log(
+            AnalyticsEvent.NetworkStateOnOpen(
+                metered = NetworkStatus.isMetered(context),
+                roaming = NetworkStatus.isRoaming(context),
+            )
+        )
         AttachmentWorker.enqueueCatchUp(context)
         AttachmentWorker.enqueueWifiCatchUp(context)
 
@@ -434,9 +454,22 @@ class NoticeViewModel(
     fun redeem(rawCode: String) {
         if (_redeeming.value) return
         _redeeming.value = true
+        // After the guard, so taps made while a redemption is in flight are not counted. An upper
+        // bound on attempts rather than an exact count: if the view model is cleared mid-flight
+        // there is a submission with no result.
+        analytics.log(AnalyticsEvent.ActivationSubmitted)
         _redeemError.value = null
         viewModelScope.launch {
-            when (val result = activation.redeem(rawCode)) {
+            val result = activation.redeem(rawCode)
+            // The one place every outcome passes through. Only the result's name is sent, never the
+            // code.
+            analytics.log(
+                AnalyticsEvent.ActivationResult(
+                    result = result.analyticsName(),
+                    offlineCause = activation.lastOfflineCause.takeIf { result is RedeemResult.Offline },
+                )
+            )
+            when (result) {
                 RedeemResult.Success -> {
                     // redeem() has already read the dispensary -- its topics and its banner -- and
                     // subscribed to the defaults, so Settings and the header are ready. A sole
@@ -549,6 +582,7 @@ class NoticeViewModel(
                     // and the view model keeps no Context.
                     welcomeTitle = app.getString(R.string.welcome_title),
                     welcomeBody = app.getString(R.string.welcome_body),
+                    analytics = app.analytics,
                 )
             }
         }

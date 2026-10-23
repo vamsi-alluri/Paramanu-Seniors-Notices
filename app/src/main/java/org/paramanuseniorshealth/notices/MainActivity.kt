@@ -24,6 +24,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import android.os.SystemClock
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -32,6 +37,10 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import org.paramanuseniorshealth.notices.activation.ActivationLink
+import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
+import org.paramanuseniorshealth.notices.analytics.CardDwellTracker
+import org.paramanuseniorshealth.notices.analytics.CardFacts
+import org.paramanuseniorshealth.notices.analytics.CardStretch
 import org.paramanuseniorshealth.notices.data.NoticeEntity
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
@@ -73,6 +82,9 @@ class MainActivity : ComponentActivity() {
 
         persistFromNotificationIntent(intent)
         readActivationLink(intent)
+        // A recreated activity (rotation, process death) is handed the same intent again, with the
+        // same tap in it. That is the one action being replayed, not a second open.
+        if (savedInstanceState == null) logOpen(intent)
 
         setContent {
             ParamanuNoticesTheme {
@@ -94,6 +106,58 @@ class MainActivity : ComponentActivity() {
         setIntent(intent)
         persistFromNotificationIntent(intent)
         readActivationLink(intent)
+        logOpen(intent)
+    }
+
+    /**
+     * Records how the app was opened and, for a tap, how long after posting it happened.
+     *
+     * Called from exactly one of [onCreate] and [onNewIntent] for any one launch intent: the system
+     * delivers an intent to a new instance or to a running one, never both.
+     *
+     * The cold-start flag comes from the application, not from which of the two callers this is: a
+     * restored task can reach here through [onNewIntent] while its process is brand new.
+     *
+     * Intents the system replays from recents carry their original extras, and with them an
+     * instant from some earlier tap. They are counted as a launcher open instead.
+     *
+     * Only opens that deliver an intent are counted. Returning to a live, stopped task fires
+     * neither callback, so launcher opens are a lower bound. Detecting those returns on ON_START was
+     * rejected on purpose: this app hands PDFs to an external viewer, which stops this activity, so
+     * every return from reading a PDF would be recorded as a launcher open and inflate the number
+     * the detection was meant to correct.
+     */
+    private fun logOpen(intent: Intent?) {
+        val app = application as NoticesApplication
+        val coldStart = app.markOpened()
+        val replayed = (intent?.flags ?: 0) and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY != 0
+        val extras = intent?.extras.takeUnless { replayed }
+        val logId = extras?.getString(NoticeNotifications.EXTRA_LOG_ID)
+        val source = when {
+            logId != null -> "notification"
+            !replayed && intent?.action == Intent.ACTION_VIEW -> "link"
+            else -> "launcher"
+        }
+        // source = notification counts every notification door, including the local test and
+        // revocation ones. notification_tapped below counts notice notifications only. The two are
+        // deliberately not the same denominator, so do not divide one by the other for a tap rate.
+        app.analytics.log(AnalyticsEvent.AppOpen(source))
+        // Local notifications (test, revocation) carry a logId too, so presence alone would not
+        // keep them out; the prefix is what marks them as not being notices.
+        if (logId != null && !logId.startsWith(NoticeRepository.LOCAL_LOG_ID_PREFIX)) {
+            val postedAt = extras?.getLong(NoticeNotifications.EXTRA_POSTED_AT, 0L) ?: 0L
+            app.analytics.log(
+                AnalyticsEvent.NotificationTapped(
+                    // A wall-clock change can put the posting in the future; a negative interval
+                    // is corrupt rather than unknown, so it is left out like any missing one.
+                    msSinceShown = postedAt.takeIf { it > 0 }
+                        ?.let { System.currentTimeMillis() - it }
+                        ?.takeIf { it >= 0 },
+                    coldStart = coldStart,
+                    msSinceProcessStart = System.currentTimeMillis() - app.processStartedAt,
+                )
+            )
+        }
     }
 
     /**
@@ -146,6 +210,18 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+/**
+ * The visible keys together with the list they were read against. Equal when the keys match and
+ * the list is the same instance, which is cheap to test on every layout change; comparing the
+ * list's contents would walk every notice per scroll frame.
+ */
+private class VisibleKeys(val keys: List<Any?>, val notices: List<NoticeEntity>) {
+    override fun equals(other: Any?) =
+        other is VisibleKeys && keys == other.keys && notices === other.notices
+
+    override fun hashCode() = keys.hashCode()
+}
+
 @Composable
 private fun NoticesApp(
     tappedLogId: String?,
@@ -180,6 +256,75 @@ private fun NoticesApp(
     val testTitle = stringResource(R.string.test_notification_title)
     val testBody = stringResource(R.string.test_notification_body)
 
+    // How long each notice card stays on screen, which is what says which notice holds attention.
+    //
+    // Read from the hoisted list state rather than from the rows: NoticeRow does disk scans on
+    // every recomposition, and nothing here may run per frame. The flow emits when the set of
+    // visible ids changes and also on every new notices-list instance (VisibleKeys.equals compares
+    // the list by identity), so the lookups run more often than the ids change; the tracker still
+    // logs at most once per card per continuous stretch on screen.
+    //
+    // No minimum duration is applied, on purpose. A fling past a card yields a very short row, and
+    // such rows are expected: filter them in the query. A floor here would be irreversible and
+    // would also drop the genuine case of a reader glancing at a card and moving on.
+    //
+    // visibleMs has no upper bound beyond the STARTED gate described next: a phone left foregrounded
+    // on the list can accrue hours, so queries should cap. position is where the card was when it
+    // appeared and is not revised, so it is stale if a notice arrives above a visible card. The
+    // arithmetic lives in CardDwellTracker, which is tested; this is its caller.
+    //
+    // The list state outlives the list. Its last layout is still readable while the viewer or
+    // Settings is up and while the app is in the background, so left alone every visible card
+    // would go on accruing time it was not being looked at. The effect is therefore bound to the
+    // notice screen being the one showing and to the activity being started; leaving either ends
+    // the stretch and reports it, and coming back begins a new one.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val onNoticeList = screen is Screen.Notices
+    LaunchedEffect(onNoticeList) {
+        if (!onNoticeList) return@LaunchedEffect
+        val analytics = (context.applicationContext as NoticesApplication).analytics
+        lifecycleOwner.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            val tracker = CardDwellTracker()
+            fun report(ended: List<CardStretch>) = ended.forEach {
+                analytics.log(
+                    AnalyticsEvent.NoticeCardVisible(
+                        logId = it.logId,
+                        visibleMs = it.visibleMs,
+                        hasImage = it.hasImage,
+                        hasPdf = it.hasPdf,
+                        position = it.position,
+                    )
+                )
+            }
+            try {
+                // The block below runs on every layout change, which includes every scroll frame,
+                // so it only collects the keys; the lookups run in collect, after
+                // distinctUntilChanged has dropped the frames where nothing changed.
+                snapshotFlow { VisibleKeys(noticeListState.layoutInfo.visibleItemsInfo.map { it.key }, notices) }
+                    .distinctUntilChanged()
+                    .collect { visible ->
+                        report(
+                            tracker.update(visible.keys, SystemClock.elapsedRealtime()) { id ->
+                                // Ids no longer in the list are not tracked: a list that has
+                                // emptied stops composing but keeps its last layout.
+                                val index = visible.notices.indexOfFirst { it.id == id }
+                                if (index < 0) null else visible.notices[index].let {
+                                    CardFacts(
+                                        logId = it.logId,
+                                        position = index + 1,
+                                        hasImage = !it.imageUrl.isNullOrBlank(),
+                                        hasPdf = !it.pdfUrl.isNullOrBlank(),
+                                    )
+                                }
+                            }
+                        )
+                    }
+            } finally {
+                report(tracker.flush(SystemClock.elapsedRealtime()))
+            }
+        }
+    }
+
     // Opens the notice the user tapped: highlight it, scroll to it. Keyed on the id so
     // tapping a second notification while the app is open moves to that one.
     LaunchedEffect(tappedLogId) {
@@ -208,7 +353,14 @@ private fun NoticesApp(
     // Re-check whenever the app comes forward. Previously the only check was in the view model's
     // init, which survives a trip through recents -- so a user whose code had been restored had to
     // know to swipe the app away and reopen it, which nobody knows.
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.onResumed(context.applicationContext) }
+    //
+    // The analytics kill switch is re-read on the same event, so turning it off reaches a phone whose
+    // process has been alive for days and not only the next cold start. Not throttled here, because
+    // Remote Config already is: inside its fetch window this costs no network at all.
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        viewModel.onResumed(context.applicationContext)
+        (context.applicationContext as NoticesApplication).refreshAnalyticsSwitch()
+    }
 
     // The permission prompt is deliberately not raised on the code screen: asking before the user
     // has any reason to expect notices is how a denial happens, and on Android 13+ a denial
@@ -269,6 +421,7 @@ private fun NoticesApp(
                 error = redeemError,
                 onErrorDismissed = viewModel::dismissRedeemError,
                 prefill = deepLinkCode.orEmpty(),
+                hasCode = alreadyActivated,
             )
         }
 
