@@ -264,7 +264,7 @@ The activation code, the ID token, the request body, the `note` field and error 
 
 ### Alert: `code_management server errors`
 
-Fires when more than 3 ERROR-severity entries land in a 15 minute window, then closes itself after an hour of quiet. Cloud Run also writes its own ERROR request log for every 5xx, so one failed request is normally two entries; more than 3 therefore means at least two failed requests in 15 minutes, and it also catches faults the app cannot log itself (crash on start, out of memory). With about 400 users opening the app a few times a day, a single isolated blip does not page, and a real outage shows up within minutes of the first couple of users.
+Fires when more than 3 ERROR-severity entries land in a 15 minute window, then closes itself after an hour of quiet. Cloud Run also writes its own ERROR request log for every 5xx, so one failed request is normally two entries; more than 3 therefore means at least two failed requests in 15 minutes, for a fault the app logs itself. Faults the app cannot log (crash on start, out of memory) leave only the Cloud Run request entry, one per request, so those need 4 failed requests in 15 minutes to page. With about 400 users opening the app a few times a day, a single isolated blip does not page, and a real outage shows up within minutes of the first couple of users.
 
 Create it once. Every command names the project explicitly.
 
@@ -274,7 +274,7 @@ gcloud beta monitoring channels create \
   --project paramanu-seniors \
   --display-name="Owner email" \
   --type=email \
-  --channel-labels=email_address=42893086+vamsi-alluri@users.noreply.github.com
+  --channel-labels=email_address=OWNER_EMAIL   # replace OWNER_EMAIL with your address; do not commit it
 # Note the "name" it prints: projects/paramanu-seniors/notificationChannels/NNN
 
 # 2. Log-based metric counting ERROR entries from the service.
@@ -284,6 +284,7 @@ gcloud logging metrics create code_management_server_errors \
   --log-filter='resource.type="cloud_run_revision" AND resource.labels.service_name="codemanagement" AND severity>=ERROR'
 
 # 3. Alert policy on that metric. Replace CHANNEL with the name from step 1.
+# Run from any scratch directory outside the repo; the file is deleted at the end.
 cat > code-management-alert.json <<'JSON'
 {
   "displayName": "code_management server errors",
@@ -310,6 +311,7 @@ JSON
 gcloud alpha monitoring policies create \
   --project paramanu-seniors \
   --policy-from-file=code-management-alert.json
+rm code-management-alert.json
 ```
 
 The filter assumes the Cloud Run service is `codemanagement` (see section 3; still unverified). A log-based metric only counts entries written after it exists, so create it before the verification below.

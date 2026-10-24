@@ -51,7 +51,19 @@ const call = (route: string, code: unknown = SECRET_CODE) =>
     body: JSON.stringify({ code }),
   });
 
-const severities = () => entries.map((e) => e.severity);
+// Everything a real logger could serialise from the captured entries. JSON.stringify alone
+// renders an Error as {}, so Error values are expanded to name, message and stack here.
+function reachableText(value: unknown, seen = new Set<unknown>()): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return String(value);
+  if (seen.has(value)) return "";
+  seen.add(value);
+  const own = value instanceof Error ? [value.name, value.message, value.stack ?? ""] : [];
+  const nested = Object.entries(value).flatMap(([k, v]) => [k, reachableText(v, seen)]);
+  return [...own, ...nested].join("\n");
+}
+
+const severities =() => entries.map((e) => e.severity);
 
 describe("route outcome logging", () => {
   it("logs a normal answer at info", async () => {
@@ -106,18 +118,24 @@ describe("route outcome logging", () => {
       throw new Error(`failed reading codes/${SECRET_CODE}`);
     };
     status = async () => ({ status: "active", note: "holder details" });
+    const BAD_CODE = "a/b";
     await call("status");
     await call("activate");
+    // The malformed-code path must run while the token still verifies, or it answers 401.
+    expect((await call("activate", BAD_CODE)).status).toBe(400);
     verify = async () => {
       throw new AuthError("invalid_token");
     };
-    await call("status");
-    await call("activate", "a/b");
-    const everything = JSON.stringify(entries);
-    expect(entries.length).toBe(4);
-    expect(everything).not.toContain(SECRET_CODE);
-    expect(everything).not.toContain(SECRET_TOKEN);
-    expect(everything).not.toContain("holder details");
-    expect(everything).not.toContain("failed reading");
+    expect((await call("status")).status).toBe(401);
+    expect(entries.map((e) => e.fields.outcome)).toEqual([
+      "active",
+      "fault",
+      "invalid_code",
+      "unauthorized",
+    ]);
+    const everything = reachableText(entries);
+    for (const secret of [SECRET_CODE, BAD_CODE, SECRET_TOKEN, "holder details", "failed reading"]) {
+      expect(everything).not.toContain(secret);
+    }
   });
 });
