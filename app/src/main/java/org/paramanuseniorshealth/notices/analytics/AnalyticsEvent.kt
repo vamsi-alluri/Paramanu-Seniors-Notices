@@ -202,6 +202,27 @@ sealed interface AnalyticsEvent {
             offlineCause?.let { put("offline_cause", it) }
         }
     }
+
+    /**
+     * One `code_management` call, reported by HttpCodeManagementApi itself so no caller can forget.
+     * [operation] is "status" or "activate"; [durationMs] is what the caller waited. [httpStatus]
+     * is absent whenever no response arrived (no URL, no token, timeout, transport failure).
+     * Nothing identifying: never the token, the code, the body or the holder's note.
+     */
+    data class CodeManagementCall(
+        val operation: String,
+        val outcome: String,
+        val durationMs: Long,
+        val httpStatus: Int?,
+    ) : AnalyticsEvent {
+        override val name = "code_management_call"
+        override val params = buildMap {
+            put("operation", operation)
+            put("outcome", outcome)
+            put("duration_ms", durationMs)
+            httpStatus?.let { put("http_status", it.toLong()) }
+        }
+    }
 }
 
 /** GA4 has no boolean parameter type, and a string "true" cannot be aggregated arithmetically. */
