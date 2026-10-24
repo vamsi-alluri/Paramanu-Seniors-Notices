@@ -8,7 +8,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import org.paramanuseniorshealth.notices.analytics.Analytics
 import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
-import org.paramanuseniorshealth.notices.analytics.analyticsName
 import org.paramanuseniorshealth.notices.data.awaitResult
 import java.net.HttpURLConnection
 import java.net.URL
@@ -31,7 +30,19 @@ class HttpCodeManagementApi(
     /** Null means no signed-in user. Injected so the never-throw behaviour is testable on the JVM. */
     private val tokenProvider: suspend () -> String? = ::firebaseToken,
     private val timeoutMs: Long = CALL_TIMEOUT_MS,
+    /**
+     * Test seam for the request itself: (route, code, token) to the parsed reply. Null means the real
+     * `HttpURLConnection` call, which stays untested on the JVM. To report a status and then fail,
+     * throw [ResponseReadFailed].
+     */
+    private val transport: ((String, String, String) -> Reply)? = null,
 ) : CodeManagementApi {
+
+    /** A response as read off the wire: the status line and the body as a JSON object, if it was one. */
+    class Reply(val httpStatus: Int, val body: Map<String, Any?>?)
+
+    /** The status line was read and then the body failed; carries the status so it is still reported. */
+    class ResponseReadFailed(val httpStatus: Int, cause: Throwable) : Exception(cause)
 
     /** What one call came to; [httpStatus] is null whenever no response was read. */
     private class Attempt(val result: CodeManagementResult, val httpStatus: Int? = null)
@@ -46,9 +57,13 @@ class HttpCodeManagementApi(
      * way to return from a call without passing through the one [Analytics.log] below.
      *
      * Timed with the monotonic `System.nanoTime()` from entry to just before the report, so the
-     * number is what the caller waited: token fetch (a forced refresh) included, and a timeout
-     * reads as roughly the timeout. A caller cancelled mid-call is not reported; it never got an
-     * answer to measure.
+     * number is what the caller waited: token fetch (a forced refresh) included. A timeout reads
+     * as roughly the timeout only when it fired during the token wait. Once the request is inside
+     * `post` the coroutine timeout cannot interrupt the blocking socket, so a stalled call runs to
+     * the socket timeouts (3s connect + 3s read; a trickling body is unbounded) and `duration_ms`
+     * may well exceed [timeoutMs]. Related quirk: a response that arrives after the timeout has
+     * fired is reported as `inconclusive` with no `http_status`. A caller cancelled mid-call is
+     * not reported; it never got an answer to measure.
      */
     private suspend fun call(route: String, code: String): CodeManagementResult {
         val startedAt = System.nanoTime()
@@ -82,10 +97,14 @@ class HttpCodeManagementApi(
         if (token == null) {
             Attempt(CodeManagementResult.Inconclusive)
         } else {
-            withContext(Dispatchers.IO) { post(route, code, token) }
+            val reply = withContext(Dispatchers.IO) { (transport ?: ::httpPost)(route, code, token) }
+            Attempt(CodeManagementResponse.parse(reply.httpStatus, reply.body), reply.httpStatus)
         }
     } catch (e: CancellationException) {
         throw e
+    } catch (e: ResponseReadFailed) {
+        log("code_management $route failed after HTTP ${e.httpStatus}: ${(e.cause ?: e).javaClass.simpleName}")
+        Attempt(CodeManagementResult.Inconclusive, e.httpStatus)
     } catch (e: Exception) {
         log("code_management $route failed: ${e.javaClass.simpleName}")
         Attempt(CodeManagementResult.Inconclusive)
@@ -97,7 +116,7 @@ class HttpCodeManagementApi(
         runCatching { Log.w(TAG, message) }
     }
 
-    private fun post(route: String, code: String, token: String): Attempt {
+    private fun httpPost(route: String, code: String, token: String): Reply {
         val connection = (URL("${baseUrl.trim().trimEnd('/')}/$route").openConnection() as HttpURLConnection).apply {
             // HttpURLConnection has no single call timeout. These two sum to the 6 second budget,
             // so the worst case is connect plus read (6s) -- and a slow trickle that beats each
@@ -113,10 +132,17 @@ class HttpCodeManagementApi(
         try {
             connection.outputStream.use { it.write(JSONObject().put("code", code).toString().toByteArray()) }
             val httpStatus = connection.responseCode
-            val stream = if (httpStatus < 400) connection.inputStream else connection.errorStream
-            val body = stream?.use { readCapped(it) }
             runCatching { Log.i(TAG, "code_management $route -> HTTP $httpStatus") }
-            return Attempt(CodeManagementResponse.parse(httpStatus, toMap(body)), httpStatus)
+            // The status line has been read: whatever goes wrong from here must carry it out, so a
+            // 5xx with an unreadable body is not mistaken for "never reached the server".
+            try {
+                val stream = if (httpStatus < 400) connection.inputStream else connection.errorStream
+                val body = stream?.use { readCapped(it) }
+                return Reply(httpStatus, toMap(body))
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                throw ResponseReadFailed(httpStatus, e)
+            }
         } finally {
             connection.disconnect()
         }

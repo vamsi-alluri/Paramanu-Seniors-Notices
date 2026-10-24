@@ -6,8 +6,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.paramanuseniorshealth.notices.activation.CodeManagementResult
 import org.paramanuseniorshealth.notices.activation.PublicCode
+import org.paramanuseniorshealth.notices.activation.analyticsName
 import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
-import org.paramanuseniorshealth.notices.analytics.analyticsName
 
 class AnalyticsEventTest {
 

@@ -201,8 +201,53 @@ class CodeManagementApiTest {
     private fun api(
         url: String = https,
         timeoutMs: Long = 6_000,
+        transport: ((String, String, String) -> HttpCodeManagementApi.Reply)? = null,
         tokenProvider: suspend () -> String?,
-    ) = HttpCodeManagementApi(url, analytics, tokenProvider, timeoutMs)
+    ) = HttpCodeManagementApi(url, analytics, tokenProvider, timeoutMs, transport)
+
+    private fun assertLoggedWithStatus(operation: String, outcome: String, status: Long) {
+        assertEquals(1, sink.events.size)
+        val params = sink.events.single().second
+        assertEquals(operation, params["operation"])
+        assertEquals(outcome, params["outcome"])
+        assertEquals(status, params["http_status"])
+        assertEquals(setOf("operation", "outcome", "duration_ms", "http_status"), params.keys)
+    }
+
+    @Test
+    fun `a 200 active reply logs active with status 200`() = runBlocking {
+        val r = api(transport = { _, _, _ -> HttpCodeManagementApi.Reply(200, active()) }) { "t" }.status("A")
+        assertTrue(r is CodeManagementResult.Active)
+        assertLoggedWithStatus("status", "active", 200)
+    }
+
+    @Test
+    fun `a 409 refused reply logs refused with status 409`() = runBlocking {
+        val reply = HttpCodeManagementApi.Reply(409, mapOf("status" to "refused", "reason" to "already_claimed"))
+        api(transport = { _, _, _ -> reply }) { "t" }.activate("A")
+        assertLoggedWithStatus("activate", "refused", 409)
+    }
+
+    @Test
+    fun `a 500 reply logs inconclusive with status 500`() = runBlocking {
+        api(transport = { _, _, _ -> HttpCodeManagementApi.Reply(500, null) }) { "t" }.status("A")
+        assertLoggedWithStatus("status", "inconclusive", 500)
+    }
+
+    @Test
+    fun `a status followed by a failed body read still logs that status`() = runBlocking {
+        val failing: (String, String, String) -> HttpCodeManagementApi.Reply =
+            { _, _, _ -> throw HttpCodeManagementApi.ResponseReadFailed(503, java.io.IOException("reset")) }
+        val r = api(transport = failing) { "t" }.status("A")
+        assertEquals(CodeManagementResult.Inconclusive, r)
+        assertLoggedWithStatus("status", "inconclusive", 503)
+    }
+
+    @Test
+    fun `a transport that fails before any response logs no status`() = runBlocking {
+        api(transport = { _, _, _ -> throw java.io.IOException("refused") }) { "t" }.status("A")
+        assertLogged("status", "inconclusive")
+    }
 
     /** The single event a call must have produced, with the keys it must and must not carry. */
     private fun assertLogged(operation: String, outcome: String) {

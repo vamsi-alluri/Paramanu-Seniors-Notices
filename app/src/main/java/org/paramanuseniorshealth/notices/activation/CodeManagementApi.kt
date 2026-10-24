@@ -26,6 +26,14 @@ sealed interface CodeManagementResult {
     data object Inconclusive : CodeManagementResult
 }
 
+/** The strings the endpoint's health is queried by; an exhaustive `when`, so a new variant must be named here. */
+fun CodeManagementResult.analyticsName(): String = when (this) {
+    is CodeManagementResult.Active -> "active"
+    CodeManagementResult.Revoked -> "revoked"
+    is CodeManagementResult.Refused -> "refused"
+    CodeManagementResult.Inconclusive -> "inconclusive"
+}
+
 interface CodeManagementApi {
     suspend fun status(code: String): CodeManagementResult
     suspend fun activate(code: String): CodeManagementResult

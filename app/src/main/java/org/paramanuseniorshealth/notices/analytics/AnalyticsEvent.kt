@@ -1,7 +1,5 @@
 package org.paramanuseniorshealth.notices.analytics
 
-import org.paramanuseniorshealth.notices.activation.CodeManagementResult
-
 /**
  * Every measurement the app can report, as a closed set.
  *
@@ -225,14 +223,6 @@ sealed interface AnalyticsEvent {
             httpStatus?.let { put("http_status", it.toLong()) }
         }
     }
-}
-
-/** The strings the endpoint's health is queried by; an exhaustive `when`, so a new variant must be named here. */
-fun CodeManagementResult.analyticsName(): String = when (this) {
-    is CodeManagementResult.Active -> "active"
-    CodeManagementResult.Revoked -> "revoked"
-    is CodeManagementResult.Refused -> "refused"
-    CodeManagementResult.Inconclusive -> "inconclusive"
 }
 
 /** GA4 has no boolean parameter type, and a string "true" cannot be aggregated arithmetically. */
