@@ -1,13 +1,22 @@
-import { afterAll, describe, expect, it } from "vitest";
-import { emulatorAvailable, emulatorDb, seed } from "./emulator";
+import * as admin from "firebase-admin";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { emulatorAvailable, initEmulatorApp, seed } from "./emulator";
+
+// Stand-in for production code in src/: uses bare admin.database(), the default app.
+async function isCodeActive(code: string): Promise<boolean> {
+  const snap = await admin.database().ref(`codes/${code}/active`).get();
+  return snap.val() === true;
+}
 
 // Proves the harness: skipped under plain `npm test`, run by `npm run test:emulator`.
+// Task 3 copies this pattern: initEmulatorApp(), seed(), then call the code under test.
 describe.skipIf(!emulatorAvailable())("RTDB emulator harness", () => {
+  beforeAll(() => initEmulatorApp());
   afterAll(() => seed(null));
 
-  it("seeds data and reads it back through firebase-admin", async () => {
+  it("code using bare admin.database() reads what seed() wrote", async () => {
     await seed({ codes: { abc: { active: true } } });
-    const snap = await emulatorDb().ref("codes/abc").get();
-    expect(snap.val()).toEqual({ active: true });
+    expect(await isCodeActive("abc")).toBe(true);
+    expect(await isCodeActive("missing")).toBe(false);
   });
 });

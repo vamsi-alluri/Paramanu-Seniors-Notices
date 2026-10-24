@@ -6,7 +6,7 @@
     "node": "22"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "test:emulator": "firebase emulators:exec --only database --project demo-paramanu \"vitest run\""
   },
