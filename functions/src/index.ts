@@ -21,7 +21,19 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
+// Behind onRequest the runtime (gen2 functions-framework and the emulator alike) has
+// already drained the request stream through its body parsers: the bytes are on
+// req.rawBody and the parsed value on req.body. Iterating the stream then yields nothing
+// and JSON.parse("") throws, so every call would answer 400. Read what the runtime kept
+// first (rawBody, the authoritative bytes whatever the content type), then a parsed
+// object, and only then the stream, which is what a bare node:http server (the route
+// tests) still needs. test/body-parsed-route.test.ts pins this.
 async function readJson(req: IncomingMessage): Promise<unknown> {
+  const parsed = req as IncomingMessage & { rawBody?: unknown; body?: unknown };
+  if (Buffer.isBuffer(parsed.rawBody)) return JSON.parse(parsed.rawBody.toString("utf8"));
+  if (parsed.body !== null && typeof parsed.body === "object" && !Buffer.isBuffer(parsed.body)) {
+    return parsed.body;
+  }
   const chunks: Buffer[] = [];
   for await (const chunk of req) chunks.push(chunk as Buffer);
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));

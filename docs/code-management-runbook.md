@@ -16,7 +16,7 @@ So the function and the key must exist before any build containing this branch s
 - [ ] 1. Complete the one-time setup in section 2 (WIF, service account, roles).
 - [ ] 2. Merge to `main`; confirm the workflow run is green and the `deploy` job ran.
 - [ ] 3. Get the URL: `gcloud functions describe codeManagement --gen2 --region asia-southeast1 --project paramanu-seniors --format="value(serviceConfig.uri)"`.
-- [ ] 4. Smoke test it: `curl -i "<url>/status"`. An unauthenticated call should be refused by the function itself with a JSON body. A Cloud Run HTML 403 means the public invoker binding is missing; a 404 means the wrong URL.
+- [ ] 4. Smoke test it: `curl -i -X POST "<url>/status"`. An unauthenticated call should be refused by the function itself with a 401 JSON body. A Cloud Run HTML 403 means the public invoker binding is missing; a 404 means the wrong URL. This only proves the function is reachable and public. It CANNOT catch a request-body bug: the function verifies the bearer token before it reads the body, so an unauthenticated probe never reaches the body parsing. The real gate is a call with a genuine ID token, which is the device walk: activate a code on a handset and confirm it comes back active, then confirm a status check answers.
 - [ ] 5. Publish Remote Config key `code_management_base_url` = that https URL, no trailing slash. Publish the template.
 - [ ] 6. Only now upload the app build (Play closed testing, then production).
 - [ ] 7. After rollout, watch the GA4 queries in section 5 the next day.
@@ -186,6 +186,8 @@ ORDER BY day DESC;
 ```
 
 A healthy day is mostly `active` with near-zero `inconclusive`. A high `inconclusive_share` with `http_5xx` > 0 is the function failing: read the Cloud Run logs and consider rollback. High `no_response` with no 5xx points at the phone side (no connectivity, unusable URL, token failure) or the service being unreachable.
+
+A third shape is a malformed-request regression: 100% `inconclusive` with a 4xx `http_status` PRESENT (the function answers 400 to every call). It matches neither signature above, so do not read "no 5xx" as healthy. Add `COUNTIF(http_status BETWEEN 400 AND 499)` to the query when in doubt; a 4xx on `status` or `activate` is never normal traffic from the app, and the cause is the app and function disagreeing about the request. Roll back first, then investigate.
 
 **Silence signature** (no events at all): compare call events with other app activity per day.
 
