@@ -1,9 +1,16 @@
 import { IncomingMessage, ServerResponse } from "node:http";
+import * as admin from "firebase-admin";
 import { onRequest } from "firebase-functions/v2/https";
 
 // Must match the Realtime Database region (paramanu-seniors-default-rtdb is in
 // asia-southeast1) so the function sits next to the data it reads.
 const REGION = "asia-southeast1";
+
+// Default app, once, from the runtime environment (Application Default
+// Credentials; project and database URL come from the environment). No key file.
+if (admin.apps.length === 0) {
+  admin.initializeApp();
+}
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.statusCode = status;
