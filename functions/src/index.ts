@@ -2,7 +2,7 @@ import { IncomingMessage, ServerResponse } from "node:http";
 import * as admin from "firebase-admin";
 import { onRequest } from "firebase-functions/v2/https";
 import { AuthError, verifyBearer } from "./auth";
-import { statusFor } from "./codes";
+import { claim, statusFor } from "./codes";
 
 // Must match the Realtime Database region (paramanu-seniors-default-rtdb is in
 // asia-southeast1) so the function sits next to the data it reads.
@@ -29,15 +29,19 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
 // Codes become RTDB path segments, which cannot hold . $ # [ ] / or be empty.
 const CODE_PATTERN = /^[^.$#[\]/\s]{1,128}$/;
 
-async function status(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  // Identity first, and only from the verified token; the body supplies the code.
+// Identity first, and only from the verified token; the body supplies the code.
+// Answers 401/400 itself and returns null when the request cannot proceed.
+async function caller(
+  req: IncomingMessage,
+  res: ServerResponse,
+): Promise<{ uid: string; code: string } | null> {
   let uid: string;
   try {
     uid = await verifyBearer(req.headers.authorization);
   } catch (e) {
     if (e instanceof AuthError) {
       sendJson(res, e.status, { error: e.message });
-      return;
+      return null;
     }
     throw e;
   }
@@ -49,9 +53,25 @@ async function status(req: IncomingMessage, res: ServerResponse): Promise<void> 
   }
   if (typeof code !== "string" || !CODE_PATTERN.test(code)) {
     sendJson(res, 400, { error: "invalid_code" });
-    return;
+    return null;
   }
-  sendJson(res, 200, await statusFor(uid, code));
+  return { uid, code };
+}
+
+async function status(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const who = await caller(req, res);
+  if (who) sendJson(res, 200, await statusFor(who.uid, who.code));
+}
+
+async function activate(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const who = await caller(req, res);
+  if (!who) return;
+  const outcome = await claim(who.uid, who.code);
+  if (typeof outcome === "string") {
+    sendJson(res, 409, { status: "refused", reason: outcome });
+  } else {
+    sendJson(res, 200, outcome);
+  }
 }
 
 // Plain node http handler so tests can drive it without the Functions runtime.
@@ -61,9 +81,10 @@ export function handle(req: IncomingMessage, res: ServerResponse): void {
     sendJson(res, 200, { ok: true });
     return;
   }
-  if (req.method === "POST" && path === "/status") {
-    // A fault is a 500 (the client reads it as inconclusive), never a "revoked" body.
-    status(req, res).catch(() => {
+  if (req.method === "POST" && (path === "/status" || path === "/activate")) {
+    // A fault is a 500 (the client reads it as inconclusive), never a "revoked" or
+    // "refused" body.
+    (path === "/status" ? status : activate)(req, res).catch(() => {
       if (!res.headersSent) sendJson(res, 500, { error: "internal" });
     });
     return;
