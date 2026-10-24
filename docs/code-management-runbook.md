@@ -244,3 +244,74 @@ The workflow and this runbook were written without pushing to `main` or touching
 2. Push a trivial change under `functions/` to `main`. Confirm the `test` job runs both `npm test` and `npm run test:emulator`, that `deploy` runs only after both pass, and that the function updates.
 3. Exercise the rollback in section 3 once and correct the commands if wrong.
 4. Resolve the assumptions marked unverified above (service name, roles).
+5. Create the outage alert and force a fault to see it fire (section 7). Not done.
+
+## 7. Server-side outage alert (repo owner, manual)
+
+Section 5 is client analytics: it sits behind a kill switch and is off by default, and it can only report what a client managed to send. The case it structurally cannot see is the endpoint being so broken that no client reaches it. This alert is the server-side counterpart and needs no client at all.
+
+### What the function logs
+
+Every `/status` and `/activate` outcome writes one structured entry (`route`, `outcome`, `httpStatus`, and `uid` or `reason` where they apply). Severity is the contract:
+
+| Severity | Outcomes | Paged on? |
+|---|---|---|
+| INFO | `active`, `revoked`, `activated` | no |
+| WARNING | 401 bad or missing token, 400 bad code, 409 refusal | no, this is expected traffic |
+| ERROR | `fault` (an unexpected exception, answered 500) | yes |
+
+The activation code, the ID token, the request body, the `note` field and error messages are never logged. A `fault` carries only the error's class name.
+
+### Alert: `code_management server errors`
+
+Fires when more than 3 ERROR-severity entries land in a 15 minute window, then closes itself after an hour of quiet. Cloud Run also writes its own ERROR request log for every 5xx, so one failed request is normally two entries; more than 3 therefore means at least two failed requests in 15 minutes, and it also catches faults the app cannot log itself (crash on start, out of memory). With about 400 users opening the app a few times a day, a single isolated blip does not page, and a real outage shows up within minutes of the first couple of users.
+
+Create it once. Every command names the project explicitly.
+
+```bash
+# 1. Notification channel: the project owner's email.
+gcloud beta monitoring channels create \
+  --project paramanu-seniors \
+  --display-name="Owner email" \
+  --type=email \
+  --channel-labels=email_address=42893086+vamsi-alluri@users.noreply.github.com
+# Note the "name" it prints: projects/paramanu-seniors/notificationChannels/NNN
+
+# 2. Log-based metric counting ERROR entries from the service.
+gcloud logging metrics create code_management_server_errors \
+  --project paramanu-seniors \
+  --description="ERROR entries from the codemanagement Cloud Run service (server faults, 5xx)" \
+  --log-filter='resource.type="cloud_run_revision" AND resource.labels.service_name="codemanagement" AND severity>=ERROR'
+
+# 3. Alert policy on that metric. Replace CHANNEL with the name from step 1.
+cat > code-management-alert.json <<'JSON'
+{
+  "displayName": "code_management server errors",
+  "combiner": "OR",
+  "conditions": [{
+    "displayName": "More than 3 server errors in 15 minutes",
+    "conditionThreshold": {
+      "filter": "metric.type=\"logging.googleapis.com/user/code_management_server_errors\" AND resource.type=\"cloud_run_revision\"",
+      "aggregations": [{
+        "alignmentPeriod": "900s",
+        "perSeriesAligner": "ALIGN_SUM",
+        "crossSeriesReducer": "REDUCE_SUM"
+      }],
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 3,
+      "duration": "0s",
+      "trigger": { "count": 1 }
+    }
+  }],
+  "alertStrategy": { "autoClose": "3600s" },
+  "notificationChannels": ["CHANNEL"]
+}
+JSON
+gcloud alpha monitoring policies create \
+  --project paramanu-seniors \
+  --policy-from-file=code-management-alert.json
+```
+
+The filter assumes the Cloud Run service is `codemanagement` (see section 3; still unverified). A log-based metric only counts entries written after it exists, so create it before the verification below.
+
+**Verification not done.** This alert has not been created and has not been seen to fire: nothing is deployed yet. Once the function is live, force one fault against it (for example deploy a revision whose database URL is wrong, or temporarily make `statusFor` throw), call `/status` twice with a valid token, and confirm the email arrives within about 15 minutes. Then restore the revision (section 3). If the metric stays at zero, check that the service name in the filter matches section 3's `gcloud run services describe`.

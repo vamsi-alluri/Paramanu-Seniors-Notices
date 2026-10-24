@@ -1,5 +1,6 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import * as admin from "firebase-admin";
+import { logger } from "firebase-functions";
 import { onRequest } from "firebase-functions/v2/https";
 import { AuthError, verifyBearer } from "./auth";
 import { claim, statusFor } from "./codes";
@@ -26,12 +27,31 @@ async function readJson(req: IncomingMessage): Promise<unknown> {
   return JSON.parse(Buffer.concat(chunks).toString("utf8"));
 }
 
+// One structured entry per route outcome. Severity is the contract the outage alert
+// relies on (see docs/code-management-runbook.md section 7):
+//   INFO     a normal answer (active / revoked / activated)
+//   WARNING  a refusal: 401, 400, 409. Expected traffic, never paged on
+//   ERROR    a server fault only. This is the one severity the alert counts
+// Fields are named one by one. The activation code, the ID token, the request body and
+// the `note` field must never be added here, and neither may an Error's message
+// (database errors can embed the path, which contains the code).
+type Route = "status" | "activate";
+function logOutcome(
+  severity: "info" | "warn" | "error",
+  route: Route,
+  outcome: string,
+  fields: { uid?: string; httpStatus: number; reason?: string; errorName?: string },
+): void {
+  logger[severity](`code_management ${route} ${outcome}`, { route, outcome, ...fields });
+}
+
 // Codes become RTDB path segments, which cannot hold . $ # [ ] / or be empty.
 const CODE_PATTERN = /^[^.$#[\]/\s]{1,128}$/;
 
 // Identity first, and only from the verified token; the body supplies the code.
 // Answers 401/400 itself and returns null when the request cannot proceed.
 async function caller(
+  route: Route,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<{ uid: string; code: string } | null> {
@@ -40,6 +60,7 @@ async function caller(
     uid = await verifyBearer(req.headers.authorization);
   } catch (e) {
     if (e instanceof AuthError) {
+      logOutcome("warn", route, "unauthorized", { httpStatus: e.status, reason: e.message });
       sendJson(res, e.status, { error: e.message });
       return null;
     }
@@ -52,6 +73,7 @@ async function caller(
     code = undefined;
   }
   if (typeof code !== "string" || !CODE_PATTERN.test(code)) {
+    logOutcome("warn", route, "invalid_code", { uid, httpStatus: 400 });
     sendJson(res, 400, { error: "invalid_code" });
     return null;
   }
@@ -59,17 +81,22 @@ async function caller(
 }
 
 async function status(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const who = await caller(req, res);
-  if (who) sendJson(res, 200, await statusFor(who.uid, who.code));
+  const who = await caller("status", req, res);
+  if (!who) return;
+  const body = await statusFor(who.uid, who.code);
+  logOutcome("info", "status", body.status, { uid: who.uid, httpStatus: 200 });
+  sendJson(res, 200, body);
 }
 
 async function activate(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const who = await caller(req, res);
+  const who = await caller("activate", req, res);
   if (!who) return;
   const outcome = await claim(who.uid, who.code);
   if (typeof outcome === "string") {
+    logOutcome("warn", "activate", "refused", { uid: who.uid, httpStatus: 409, reason: outcome });
     sendJson(res, 409, { status: "refused", reason: outcome });
   } else {
+    logOutcome("info", "activate", "activated", { uid: who.uid, httpStatus: 200 });
     sendJson(res, 200, outcome);
   }
 }
@@ -84,7 +111,13 @@ export function handle(req: IncomingMessage, res: ServerResponse): void {
   if (req.method === "POST" && (path === "/status" || path === "/activate")) {
     // A fault is a 500 (the client reads it as inconclusive), never a "revoked" or
     // "refused" body.
-    (path === "/status" ? status : activate)(req, res).catch(() => {
+    const route: Route = path === "/status" ? "status" : "activate";
+    (route === "status" ? status : activate)(req, res).catch((e: unknown) => {
+      // The error's name only: its message may carry the database path, i.e. the code.
+      logOutcome("error", route, "fault", {
+        httpStatus: 500,
+        errorName: e instanceof Error ? e.name : typeof e,
+      });
       if (!res.headersSent) sendJson(res, 500, { error: "internal" });
     });
     return;
