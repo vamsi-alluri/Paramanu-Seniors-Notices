@@ -11,7 +11,6 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.google.firebase.database.FirebaseDatabase
 import org.paramanuseniorshealth.notices.NoticesApplication
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
@@ -75,11 +74,6 @@ class ActivationRefreshWorker(
         } catch (e: Exception) {
             Log.w(TAG, "Refresh failed", e)
             Result.retry()
-        } finally {
-            // The SDK otherwise holds the socket open for about a minute of idleness, occupying a
-            // connection slot long after the answer has arrived.
-            runCatching { FirebaseDatabase.getInstance().goOffline() }
-                .onFailure { Log.w(TAG, "goOffline failed", it) }
         }
     }
 

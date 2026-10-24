@@ -283,11 +283,9 @@ class ActivationRepository(
 
         return withTimeoutOrNull(VERIFY_TIMEOUT_MS.milliseconds) {
             try {
-                // No account at all is a fact about this phone, not an answer from the network.
-                auth.currentUser ?: run {
-                    recordVerification(ActivationState.Revoked)
-                    return@withTimeoutOrNull ActivationState.Revoked
-                }
+                // FirebaseAuth restores the persisted user asynchronously, so a null here early in
+                // the process is a startup race, not a revocation. Not an answer: nothing persisted.
+                if (auth.currentUser == null) return@withTimeoutOrNull ActivationState.Unknown
 
                 // One HTTPS call, no database socket. The endpoint checks the ID token itself, so a
                 // deleted or disabled anonymous user is rejected there and arrives as Inconclusive
