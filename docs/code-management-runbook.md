@@ -1,0 +1,204 @@
+# code_management runbook
+
+The `code_management` Cloud Function (`functions/`) answers over HTTPS whether a patient's activation code is valid. About 400 devices depend on it. It deploys from `.github/workflows/deploy-function.yml` on every push to `main` that touches `functions/**`. There is no staging and no manual gate.
+
+- GCP project: `paramanu-seniors`. Pass `--project paramanu-seniors` on every command; do not rely on a default.
+- Function: `codeManagement` (export name), region `asia-southeast1`. As a 2nd-gen function it is a Cloud Run service named `codemanagement`.
+- Repository: `vamsi-alluri/Paramanu-Seniors-Notices`.
+- Scale: hard ceiling 2,000,000 executions/month; about 400 devices; the foreground status call has a 15-minute floor, so at most about 96 foreground calls per device per day (about 1.15M/month if every device were foregrounded around the clock, which never happens). On top of that: app opens, the daily worker, and an ungated "Check again" button.
+
+## 1. Release ordering (do this in order)
+
+Until the Remote Config key `code_management_base_url` is published, `CodeManagementConfig.isUsable("")` is false. Every status call returns `Inconclusive` without touching the network and `verify()` returns `Unknown`. The phone makes no call at all. Because this branch removed the Realtime Database fallback from both foreground callers, **the dispensary's topic list stops updating by any route**: a topic added or withdrawn in that window reaches nobody. The banner still arrives by control push. `ActivationRefreshWorker` also returns `Result.retry()` on every run throughout.
+
+So the function and the key must exist before any build containing this branch ships:
+
+- [ ] 1. Complete the one-time setup in section 2 (WIF, service account, roles).
+- [ ] 2. Merge to `main`; confirm the workflow run is green and the `deploy` job ran.
+- [ ] 3. Get the URL: `gcloud functions describe codeManagement --gen2 --region asia-southeast1 --project paramanu-seniors --format="value(serviceConfig.uri)"`.
+- [ ] 4. Smoke test it: `curl -i "<url>/status"`. An unauthenticated call should be refused by the function itself with a JSON body. A Cloud Run HTML 403 means the public invoker binding is missing; a 404 means the wrong URL.
+- [ ] 5. Publish Remote Config key `code_management_base_url` = that https URL, no trailing slash. Publish the template.
+- [ ] 6. Only now upload the app build (Play closed testing, then production).
+- [ ] 7. After rollout, watch the GA4 queries in section 5 the next day.
+
+Never unpublish or blank the key while builds containing this branch are in the field: that recreates the frozen-topic-list state above.
+
+## 2. One-time setup: Workload Identity Federation (no keys)
+
+No service-account JSON key is created, stored in the repo, or put in GitHub Secrets. Do not create one to "get unstuck".
+
+```sh
+PROJECT=paramanu-seniors
+PROJECT_NUMBER=188591874425
+REPO=vamsi-alluri/Paramanu-Seniors-Notices
+SA=code-management-deployer
+
+gcloud services enable iamcredentials.googleapis.com sts.googleapis.com \
+  cloudfunctions.googleapis.com run.googleapis.com cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com eventarc.googleapis.com serviceusage.googleapis.com \
+  --project $PROJECT
+
+gcloud iam service-accounts create $SA \
+  --display-name "code_management deployer (GitHub Actions)" --project $PROJECT
+
+gcloud iam workload-identity-pools create github \
+  --location global --display-name "GitHub Actions" --project $PROJECT
+
+# The attribute condition is the security boundary. Without it, ANY GitHub
+# repository could present a token to this provider and impersonate the
+# service account. It pins the provider to this repository and to main.
+gcloud iam workload-identity-pools providers create-oidc github-paramanu-notices \
+  --location global --workload-identity-pool github \
+  --issuer-uri "https://token.actions.githubusercontent.com" \
+  --attribute-mapping "google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.ref=assertion.ref" \
+  --attribute-condition "assertion.repository == '$REPO' && assertion.ref == 'refs/heads/main'" \
+  --project $PROJECT
+
+# Let identities from that repository (and only it) act as the service account.
+gcloud iam service-accounts add-iam-policy-binding \
+  $SA@$PROJECT.iam.gserviceaccount.com \
+  --role roles/iam.workloadIdentityUser \
+  --member "principalSet://iam.googleapis.com/projects/$PROJECT_NUMBER/locations/global/workloadIdentityPools/github/attribute.repository/$REPO" \
+  --project $PROJECT
+```
+
+The workflow's two identifiers (not secrets) are:
+
+- `workload_identity_provider`: `projects/188591874425/locations/global/workloadIdentityPools/github/providers/github-paramanu-notices`
+- `service_account`: `code-management-deployer@paramanu-seniors.iam.gserviceaccount.com`
+
+### Roles for `code-management-deployer`
+
+Exactly these, and no project-wide Editor, Owner or Firebase Admin:
+
+```sh
+SA_EMAIL=$SA@$PROJECT.iam.gserviceaccount.com
+for ROLE in roles/cloudfunctions.developer roles/run.admin \
+            roles/serviceusage.serviceUsageConsumer roles/firebase.viewer; do
+  gcloud projects add-iam-policy-binding $PROJECT \
+    --member "serviceAccount:$SA_EMAIL" --role $ROLE --condition=None
+done
+
+# Act as the function's runtime service account, on that account only, not project-wide.
+# Find it with:
+#   gcloud functions describe codeManagement --gen2 --region asia-southeast1 \
+#     --project $PROJECT --format="value(serviceConfig.serviceAccountEmail)"
+# On a first deploy it is the default compute service account.
+RUNTIME_SA=<that email>
+gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
+  --member "serviceAccount:$SA_EMAIL" --role roles/iam.serviceAccountUser --project $PROJECT
+```
+
+| Role | Why |
+|---|---|
+| `roles/cloudfunctions.developer` | create and update the function |
+| `roles/run.admin` | 2nd-gen functions are Cloud Run services; deploy sets the public invoker binding, which needs `setIamPolicy`. The broadest of the five; `run.developer` lacks that permission |
+| `roles/serviceusage.serviceUsageConsumer` | the Firebase CLI checks which APIs are enabled |
+| `roles/firebase.viewer` | the Firebase CLI reads the project |
+| `roles/iam.serviceAccountUser` (on the runtime SA only) | deploying a function that runs as that account |
+
+These roles were derived from what the Firebase CLI documents. They have not been exercised against the live project. If the first deploy fails with `PERMISSION_DENIED`, add the smallest role that grants the one named permission, record it here, and do not reach for a broad role. The deployer has no database, Remote Config or rules permissions, by design.
+
+## 3. Rollback
+
+A 2nd-gen function is a Cloud Run service; each deploy is a revision. Rolling back means sending 100% of traffic to the previous revision. It is instant and does not rebuild.
+
+```sh
+# 1. List revisions, newest first. Pick the last known-good one.
+gcloud run revisions list --service codemanagement \
+  --region asia-southeast1 --project paramanu-seniors
+
+# 2. Send all traffic to it.
+gcloud run services update-traffic codemanagement \
+  --to-revisions <GOOD_REVISION_NAME>=100 \
+  --region asia-southeast1 --project paramanu-seniors
+
+# 3. Confirm.
+gcloud run services describe codemanagement \
+  --region asia-southeast1 --project paramanu-seniors \
+  --format="value(status.traffic)"
+```
+
+The rollback pins traffic. After the fix merges and deploys, check that traffic follows the new revision; if it is still pinned, run `gcloud run services update-traffic codemanagement --to-latest --region asia-southeast1 --project paramanu-seniors`. Also revert or fix the commit on `main`, or the next unrelated `functions/**` push redeploys the bad code.
+
+**Status: this command sequence has not been exercised.** The service name `codemanagement` and the pinning behaviour after a later deploy are inferred. Exercise it once (section 6) and correct this section if anything differs.
+
+## 4. Do not
+
+- Create a service-account key, or add credentials to GitHub Secrets.
+- Deploy database rules from this workflow. It deploys the function only; `database.rules.json` is separate.
+- Add `continue-on-error` to the workflow.
+
+## 5. Outage or silence? (GA4 in BigQuery)
+
+Every call reports `code_management_call` with `operation` (`status` or `activate`), `outcome` (`active`, `revoked`, `refused`, `inconclusive`), `duration_ms`, and `http_status` (omitted when no response arrived). The export is `analytics_552268879`, a daily batch, so expect about a one-day lag; today's table does not exist yet. Dev and robo traffic mixes in: where it matters, restrict to release builds with `app_info.version`.
+
+Daily outcome mix:
+
+```sql
+SELECT
+  PARSE_DATE('%Y%m%d', event_date) AS day,
+  (SELECT value.string_value FROM UNNEST(event_params) WHERE key='operation') AS operation,
+  (SELECT value.string_value FROM UNNEST(event_params) WHERE key='outcome')   AS outcome,
+  COUNT(*) AS calls
+FROM `paramanu-seniors.analytics_552268879.events_*`
+WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY))
+                        AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
+  AND event_name = 'code_management_call'
+GROUP BY day, operation, outcome
+ORDER BY day DESC, operation, outcome;
+```
+
+Run with: `bq query --project_id paramanu-seniors --use_legacy_sql=false '<query>'`.
+
+**Outage signature** (calls are happening but failing): the `inconclusive` share jumps, with 5xx or absent `http_status`.
+
+```sql
+SELECT
+  PARSE_DATE('%Y%m%d', event_date) AS day,
+  COUNT(*) AS calls,
+  COUNTIF((SELECT value.string_value FROM UNNEST(event_params) WHERE key='outcome') = 'inconclusive') AS inconclusive,
+  COUNTIF((SELECT value.int_value FROM UNNEST(event_params) WHERE key='http_status') >= 500) AS http_5xx,
+  COUNTIF((SELECT value.int_value FROM UNNEST(event_params) WHERE key='http_status') IS NULL) AS no_response,
+  ROUND(SAFE_DIVIDE(
+    COUNTIF((SELECT value.string_value FROM UNNEST(event_params) WHERE key='outcome') = 'inconclusive'),
+    COUNT(*)), 3) AS inconclusive_share
+FROM `paramanu-seniors.analytics_552268879.events_*`
+WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY))
+                        AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
+  AND event_name = 'code_management_call'
+GROUP BY day
+ORDER BY day DESC;
+```
+
+A healthy day is mostly `active` with near-zero `inconclusive`. A high `inconclusive_share` with `http_5xx` > 0 is the function failing: read the Cloud Run logs and consider rollback. High `no_response` with no 5xx points at the phone side (no connectivity, unusable URL, token failure) or the service being unreachable.
+
+**Silence signature** (no events at all): compare call events with other app activity per day.
+
+```sql
+SELECT
+  PARSE_DATE('%Y%m%d', event_date) AS day,
+  COUNTIF(event_name = 'code_management_call') AS cm_calls,
+  COUNTIF(event_name = 'session_start')        AS sessions,
+  COUNT(DISTINCT user_pseudo_id)               AS active_devices
+FROM `paramanu-seniors.analytics_552268879.events_*`
+WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY))
+                        AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
+GROUP BY day
+ORDER BY day DESC;
+```
+
+- `cm_calls = 0` and `sessions = 0`: nobody opened the app. This is silence, not an outage, and is normal on quiet days.
+- `cm_calls = 0` but `sessions > 0`: the app is running and not calling. Suspect the Remote Config key was unpublished or blanked (section 1), or a build is in the field without the call.
+- `cm_calls > 0` with a high `inconclusive_share`: outage (previous query).
+
+`duration_ms` bundles a forced ID-token refresh with the network call, so it is not a clean endpoint latency.
+
+## 6. Pipeline verification still outstanding (repo owner)
+
+The workflow and this runbook were written without pushing to `main` or touching the live project. Before relying on them:
+
+1. Complete section 2.
+2. Push a trivial change under `functions/` to `main`. Confirm the `test` job runs both `npm test` and `npm run test:emulator`, that `deploy` runs only after both pass, and that the function updates.
+3. Exercise the rollback in section 3 once and correct the commands if wrong.
+4. Resolve the assumptions marked unverified above (service name, roles).

@@ -1,0 +1,97 @@
+# Deploys the code_management Cloud Function when functions/ changes on main.
+# There is no staging and no manual gate: the two test steps in the `test` job
+# are the only thing between a merge and ~400 devices. Never let a step
+# fail softly anywhere in this file.
+#
+# The `deploy` job has `needs: test`, so it does not start unless every step of
+# `test` passed. It deploys the function only; database.rules.json is never
+# deployed from here (--only functions:...).
+#
+# Every third-party action is pinned to a commit SHA, not a tag. The version
+# each SHA corresponds to is in the comment beside it. To upgrade, resolve the
+# new tag to its commit SHA yourself and review the diff.
+name: Deploy code_management
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "functions/**"
+      - ".github/workflows/deploy-function.yml"
+
+# Two merges in quick succession must not deploy at the same time. Queue, do
+# not cancel: cancelling a deploy half way is worse than waiting.
+concurrency:
+  group: deploy-code-management
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: functions
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      # The Firebase Realtime Database emulator is a Java program.
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - run: npm ci
+
+      # Unit suite (vitest run).
+      - run: npm test
+
+      # Emulator suite: firebase emulators:exec --only database, which starts the
+      # RTDB emulator and runs vitest against it. firebase-tools is a
+      # devDependency, so npm ci already installed the CLI. This is where the
+      # atomic claim and /status behaviour is actually proven.
+      - run: npm run test:emulator
+
+      # Fail the test job if the TypeScript does not compile, before deploy tries.
+      - run: npm run build
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write # lets the job mint the OIDC token Workload Identity Federation exchanges
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: functions/package-lock.json
+
+      - run: npm ci
+        working-directory: functions
+
+      # Keyless: GitHub's OIDC token is exchanged for short-lived credentials.
+      # No service-account JSON key exists anywhere. The two values are
+      # identifiers, not secrets; they come from docs/code-management-runbook.md.
+      - id: auth
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: projects/188591874425/locations/global/workloadIdentityPools/github/providers/github-paramanu-notices
+          service_account: code-management-deployer@paramanu-seniors.iam.gserviceaccount.com
+
+      # Runs the predeploy build from firebase.json. --only functions:... never
+      # touches database rules.
+      - name: Deploy function
+        run: ./functions/node_modules/.bin/firebase deploy --only functions:default:codeManagement --project paramanu-seniors --non-interactive
