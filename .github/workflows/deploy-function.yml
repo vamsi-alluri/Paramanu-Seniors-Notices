@@ -51,13 +51,19 @@ jobs:
 
       - run: npm ci
 
-      # Unit suite (vitest run).
+      # Unit suite (vitest run). CI is blanked for this step only: with CI set, the
+      # emulator-presence test in functions/test/emulator.test.ts fails by design when
+      # no emulator is running, and this step has none. The emulator tests skip here.
       - run: npm test
+        env:
+          CI: ""
 
       # Emulator suite: firebase emulators:exec --only database, which starts the
       # RTDB emulator and runs vitest against it. firebase-tools is a
       # devDependency, so npm ci already installed the CLI. This is where the
-      # atomic claim and /status behaviour is actually proven.
+      # atomic claim and /status behaviour is actually proven. CI=true here, so if
+      # the emulator is not in the running set the presence test fails the job
+      # instead of every emulator test skipping and the job passing.
       - run: npm run test:emulator
 
       # Fail the test job if the TypeScript does not compile, before deploy tries.

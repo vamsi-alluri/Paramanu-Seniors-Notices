@@ -96,6 +96,9 @@ gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
 | `roles/serviceusage.serviceUsageConsumer` | the Firebase CLI checks which APIs are enabled |
 | `roles/firebase.viewer` | the Firebase CLI reads the project |
 | `roles/iam.serviceAccountUser` (on the runtime SA only) | deploying a function that runs as that account |
+| `roles/artifactregistry.admin` (expected, unverified) | a gen2 deploy has firebase-tools create and set a cleanup policy on the `gcf-artifacts` repository, which needs `artifactregistry.repositories.update`; none of the roles above carries it. Add it with the same loop if the first deploy reports that permission |
+
+The `principalSet` binding above is scoped to the repository only. `refs/heads/main` is enforced in one place, the provider's attribute condition, so loosening that condition silently widens the binding as well.
 
 These roles were derived from what the Firebase CLI documents. They have not been exercised against the live project. If the first deploy fails with `PERMISSION_DENIED`, add the smallest role that grants the one named permission, record it here, and do not reach for a broad role. The deployer has no database, Remote Config or rules permissions, by design.
 
@@ -119,7 +122,14 @@ gcloud run services describe codemanagement \
   --format="value(status.traffic)"
 ```
 
-The rollback pins traffic. After the fix merges and deploys, check that traffic follows the new revision; if it is still pinned, run `gcloud run services update-traffic codemanagement --to-latest --region asia-southeast1 --project paramanu-seniors`. Also revert or fix the commit on `main`, or the next unrelated `functions/**` push redeploys the bad code.
+Rollback is not finished at step 3. `--to-revisions NAME=100` clears the "latest revision" setting, so every later deploy builds a revision that receives no traffic. The pipeline goes green and the fix is not serving. Continue:
+
+4. Revert or fix the commit on `main`, or the next unrelated `functions/**` push redeploys the bad code.
+5. After the fix deploys, hand traffic back to the latest revision:
+   `gcloud run services update-traffic codemanagement --to-latest --region asia-southeast1 --project paramanu-seniors`
+6. Confirm traffic follows the newest revision, not the pinned one:
+   `gcloud run services describe codemanagement --region asia-southeast1 --project paramanu-seniors --format="value(status.traffic)"`
+   A green workflow run does not prove this.
 
 **Status: this command sequence has not been exercised.** The service name `codemanagement` and the pinning behaviour after a later deploy are inferred. Exercise it once (section 6) and correct this section if anything differs.
 
@@ -131,11 +141,12 @@ The rollback pins traffic. After the fix merges and deploys, check that traffic 
 
 ## 5. Outage or silence? (GA4 in BigQuery)
 
-Every call reports `code_management_call` with `operation` (`status` or `activate`), `outcome` (`active`, `revoked`, `refused`, `inconclusive`), `duration_ms`, and `http_status` (omitted when no response arrived). The export is `analytics_552268879`, a daily batch, so expect about a one-day lag; today's table does not exist yet. Dev and robo traffic mixes in: where it matters, restrict to release builds with `app_info.version`.
+Every call reports `code_management_call` with `operation` (`status` or `activate`), `outcome` (`active`, `revoked`, `refused`, `inconclusive`), `duration_ms`, and `http_status` (omitted when no response arrived). The export is `analytics_552268879`, a daily batch, so expect about a one-day lag; today's table does not exist yet. Dev and robo traffic mixes in, so every query below filters on `app_info.version = release_version`. The `DECLARE` default `0.8.1` is the `versionName` in `app/build.gradle` today; set it to the build you are asking about (it is a single exact match, so run once per version).
 
 Daily outcome mix:
 
 ```sql
+DECLARE release_version STRING DEFAULT '0.8.1';
 SELECT
   PARSE_DATE('%Y%m%d', event_date) AS day,
   (SELECT value.string_value FROM UNNEST(event_params) WHERE key='operation') AS operation,
@@ -144,6 +155,7 @@ SELECT
 FROM `paramanu-seniors.analytics_552268879.events_*`
 WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY))
                         AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
+  AND app_info.version = release_version
   AND event_name = 'code_management_call'
 GROUP BY day, operation, outcome
 ORDER BY day DESC, operation, outcome;
@@ -154,6 +166,7 @@ Run with: `bq query --project_id paramanu-seniors --use_legacy_sql=false '<query
 **Outage signature** (calls are happening but failing): the `inconclusive` share jumps, with 5xx or absent `http_status`.
 
 ```sql
+DECLARE release_version STRING DEFAULT '0.8.1';
 SELECT
   PARSE_DATE('%Y%m%d', event_date) AS day,
   COUNT(*) AS calls,
@@ -166,6 +179,7 @@ SELECT
 FROM `paramanu-seniors.analytics_552268879.events_*`
 WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY))
                         AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
+  AND app_info.version = release_version
   AND event_name = 'code_management_call'
 GROUP BY day
 ORDER BY day DESC;
@@ -176,6 +190,7 @@ A healthy day is mostly `active` with near-zero `inconclusive`. A high `inconclu
 **Silence signature** (no events at all): compare call events with other app activity per day.
 
 ```sql
+DECLARE release_version STRING DEFAULT '0.8.1';
 SELECT
   PARSE_DATE('%Y%m%d', event_date) AS day,
   COUNTIF(event_name = 'code_management_call') AS cm_calls,
@@ -184,15 +199,42 @@ SELECT
 FROM `paramanu-seniors.analytics_552268879.events_*`
 WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY))
                         AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
+  AND app_info.version = release_version
 GROUP BY day
 ORDER BY day DESC;
 ```
 
 - `cm_calls = 0` and `sessions = 0`: nobody opened the app. This is silence, not an outage, and is normal on quiet days.
-- `cm_calls = 0` but `sessions > 0`: the app is running and not calling. Suspect the Remote Config key was unpublished or blanked (section 1), or a build is in the field without the call.
-- `cm_calls > 0` with a high `inconclusive_share`: outage (previous query).
+- `cm_calls = 0` but `sessions > 0`: the app is running and not calling at all. That means an old build without this branch, or analytics switched off. It does NOT mean an unpublished key (see below).
+- `cm_calls > 0` with a high `inconclusive_share`: outage, or an unpublished key. Run the next query to tell which.
 
-`duration_ms` bundles a forced ID-token refresh with the network call, so it is not a clean endpoint latency.
+**Unpublished or blank key looks like an outage.** The call path logs on every route, including the guard that refuses an unusable `code_management_base_url`. So with the key unpublished, devices emit a full volume of `code_management_call` events with `outcome = 'inconclusive'` and no `http_status`, exactly like an unreachable function. This is the frozen-topic-list state from section 1, so check it whenever the outage query lights up.
+
+The discriminator is `duration_ms`. The unusable-URL guard returns before any token fetch or socket work, so those calls cluster at about 0-1 ms. A real transport failure, timeout or 5xx has measurable time in it.
+
+```sql
+DECLARE release_version STRING DEFAULT '0.8.1';
+SELECT
+  PARSE_DATE('%Y%m%d', event_date) AS day,
+  COUNTIF(dur <= 5)  AS inconclusive_instant,
+  COUNTIF(dur > 5)   AS inconclusive_with_time
+FROM (
+  SELECT
+    event_date,
+    (SELECT value.int_value FROM UNNEST(event_params) WHERE key='duration_ms') AS dur
+  FROM `paramanu-seniors.analytics_552268879.events_*`
+  WHERE _TABLE_SUFFIX BETWEEN FORMAT_DATE('%Y%m%d', DATE_SUB(CURRENT_DATE(), INTERVAL 14 DAY))
+                          AND FORMAT_DATE('%Y%m%d', CURRENT_DATE())
+    AND app_info.version = release_version
+    AND event_name = 'code_management_call'
+    AND (SELECT value.string_value FROM UNNEST(event_params) WHERE key='outcome') = 'inconclusive'
+    AND (SELECT value.int_value FROM UNNEST(event_params) WHERE key='http_status') IS NULL
+)
+GROUP BY day
+ORDER BY day DESC;
+```
+
+A large `inconclusive_instant` count is a strong signal to go and check that the published Remote Config template actually carries `code_management_base_url`. It is not proof: a failure that returns immediately, such as no connectivity, can also be near zero. A large `inconclusive_with_time` count points at a real network or function problem. `duration_ms` also bundles a forced ID-token refresh with the network call, so it is not a clean endpoint latency.
 
 ## 6. Pipeline verification still outstanding (repo owner)
 
