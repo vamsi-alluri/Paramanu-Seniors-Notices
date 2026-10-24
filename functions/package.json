@@ -1,0 +1,23 @@
+{
+  "name": "code-management",
+  "private": true,
+  "main": "lib/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:emulator": "firebase emulators:exec --only database --project demo-paramanu \"vitest run\""
+  },
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "firebase-functions": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "firebase-tools": "^14.27.0",
+    "typescript": "^5.6.0",
+    "vitest": "^3.0.0"
+  }
+}
