@@ -1,7 +1,7 @@
 package org.paramanuseniorshealth.notices.data
 
 import android.content.Context
-import com.google.firebase.database.DataSnapshot
+import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,12 +17,12 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * Edited in the code console, never in the app. A change reaches the phone two ways: pushed with the
  * html inside the message ([applyPushed]), and read along with the rest of the dispensary
- * ([applySnapshot]) when the app comes to the foreground, for a phone that was switched off when the
+ * ([apply]) when the app comes to the foreground, for a phone that was switched off when the
  * push went out.
  */
-class InfoRepository(context: Context) {
+class InfoRepository internal constructor(private val prefs: SharedPreferences) {
 
-    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    constructor(context: Context) : this(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE))
 
     private val _info = MutableStateFlow(readCached())
 
@@ -36,14 +36,17 @@ class InfoRepository(context: Context) {
      */
     val info: StateFlow<OfficeInfo?> = _info.asStateFlow()
 
-    /** Applies `/dispensaries/{id}/info` as read by [DispensaryRepository]. */
-    fun applySnapshot(snapshot: DataSnapshot) {
-        val heading = snapshot.child("heading").getValue(String::class.java).orEmpty()
-        val body = snapshot.child("lines").getValue(String::class.java).orEmpty()
-        val html = snapshot.child("html").getValue(String::class.java).orEmpty()
+    /**
+     * Applies `/dispensaries/{id}/info` as read by [DispensaryRepository]. A plain map, so the same
+     * parser serves the database read and the HTTP one.
+     */
+    fun apply(info: Map<*, *>?) {
+        val heading = (info?.get("heading") as? String).orEmpty()
+        val body = (info?.get("lines") as? String).orEmpty()
+        val html = (info?.get("html") as? String).orEmpty()
         // The console stamps removal as well as saving, so a removed banner still carries a time and
         // is not mistaken for a dispensary whose banner was never filled in.
-        val htmlAt = snapshot.child("htmlUpdated").getValue(Long::class.java) ?: 0L
+        val htmlAt = (info?.get("htmlUpdated") as? Number)?.toLong() ?: 0L
         if (heading.isBlank() && body.isBlank() && html.isBlank() && htmlAt == 0L) return
 
         val editor = prefs.edit()

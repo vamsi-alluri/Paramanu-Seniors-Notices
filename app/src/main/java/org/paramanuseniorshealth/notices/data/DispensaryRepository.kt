@@ -58,7 +58,7 @@ class DispensaryRepository(context: Context, private val info: InfoRepository) {
             }
             prefs.edit().putString(KEY_CONFIG, DispensaryConfig.encode(parsed)).apply()
             _dispensary.value = parsed
-            info.applySnapshot(snapshot.child("info"))
+            info.apply(snapshot.child("info").value as? Map<*, *>)
             parsed
         } catch (e: Exception) {
             Log.w(TAG, "Could not refresh dispensary $id", e)
