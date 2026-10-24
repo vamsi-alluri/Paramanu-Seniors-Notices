@@ -137,6 +137,21 @@ export function handle(req: IncomingMessage, res: ServerResponse): void {
   sendJson(res, 404, { error: "not_found" });
 }
 
-export const codeManagement = onRequest({ region: REGION }, (req, res) => {
+// A cost and connection ceiling, not a rate limit. The project must not cost anything
+// (free tier 2M invocations/month) and runs unattended after 1.0.0; anonymous auth is
+// self-serve, so a valid token bounds who can call, not how often. Arithmetic:
+//   - Real load: ~400 devices x a few opens a day, one call per 15 minutes at most, about
+//     2,000 calls/day. Worst burst: every device opens within seconds of a notice, ~400
+//     calls. Each call is a few hundred ms, and 256MiB instances take one request at a
+//     time, so 10 instances clear a 400-call burst in well under a minute, and the
+//     clients retry on their own.
+//   - Each live instance holds one RTDB connection: 10 is 10% of Spark's 100-connection
+//     ceiling, the very limit this function exists to get the handsets out from under.
+//   - A runaway is capped at 10 instances' worth of compute, not unbounded autoscaling.
+// Excess requests queue and then 429/503, which the app reads as inconclusive, never
+// as revoked or refused.
+const MAX_INSTANCES = 10;
+
+export const codeManagement = onRequest({ region: REGION, maxInstances: MAX_INSTANCES }, (req, res) => {
   handle(req, res);
 });

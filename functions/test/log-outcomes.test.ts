@@ -63,7 +63,7 @@ function reachableText(value: unknown, seen = new Set<unknown>()): string {
   return [...own, ...nested].join("\n");
 }
 
-const severities =() => entries.map((e) => e.severity);
+const severities = () => entries.map((e) => e.severity);
 
 describe("route outcome logging", () => {
   it("logs a normal answer at info", async () => {
