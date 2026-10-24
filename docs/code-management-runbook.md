@@ -272,9 +272,8 @@ Create it once. Every command names the project explicitly.
 
 ```bash
 # 1. Notification channel: the project owner's email.
-# This is the git global identity. A users.noreply.github.com address CANNOT receive
-# mail, so substitute a real mailbox before running this -- otherwise the channel is
-# created, the policy looks healthy, and no alert ever arrives.
+# The git global identity. This noreply address is configured on GitHub to forward
+# notifications, so it does receive mail -- do not "fix" it to a plain mailbox.
 gcloud beta monitoring channels create \
   --project paramanu-seniors \
   --display-name="Owner email" \
