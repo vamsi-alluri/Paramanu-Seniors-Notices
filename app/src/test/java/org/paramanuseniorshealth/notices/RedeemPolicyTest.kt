@@ -22,11 +22,12 @@ class RedeemPolicyTest {
     private fun claim(api: RecordingCodeManagementApi) = runBlocking { RedeemPolicy.claim(api, good) }
 
     @Test
-    fun `active is claimed and carries the dispensary`() {
+    fun `active is claimed and carries the dispensary and its node`() {
+        val node = mapOf("label" to "Main", "topics" to mapOf("general" to "General"))
         val api = RecordingCodeManagementApi(
-            CodeManagementResult.Active(PublicCode(good, "main", false, 1L), null)
+            CodeManagementResult.Active(PublicCode(good, "main", false, 1L), node)
         )
-        assertEquals(ClaimOutcome.Claimed("main"), claim(api))
+        assertEquals(ClaimOutcome.Claimed("main", node), claim(api))
         assertEquals(listOf(good), api.activateCalls)
     }
 
@@ -35,7 +36,7 @@ class RedeemPolicyTest {
         val api = RecordingCodeManagementApi(
             CodeManagementResult.Active(PublicCode(good, null, false, null), null)
         )
-        assertEquals(ClaimOutcome.Claimed(null), claim(api))
+        assertEquals(ClaimOutcome.Claimed(null, null), claim(api))
     }
 
     @Test
@@ -94,7 +95,7 @@ class RedeemResultMappingTest {
 
     @Test
     fun `every outcome maps to the result the patient sees`() {
-        assertEquals(RedeemResult.Success, RedeemPolicy.resultFor(ClaimOutcome.Claimed("main")))
+        assertEquals(RedeemResult.Success, RedeemPolicy.resultFor(ClaimOutcome.Claimed("main", null)))
         assertEquals(RedeemResult.NotAccepted, RedeemPolicy.resultFor(ClaimOutcome.Rejected))
         assertEquals(RedeemResult.Offline, RedeemPolicy.resultFor(ClaimOutcome.Unreachable))
     }
@@ -103,7 +104,7 @@ class RedeemResultMappingTest {
     fun `only an unreachable outcome has an offline cause`() {
         assertEquals("transport", RedeemPolicy.offlineCauseFor(ClaimOutcome.Unreachable))
         assertNull(RedeemPolicy.offlineCauseFor(ClaimOutcome.Rejected))
-        assertNull(RedeemPolicy.offlineCauseFor(ClaimOutcome.Claimed(null)))
+        assertNull(RedeemPolicy.offlineCauseFor(ClaimOutcome.Claimed(null, null)))
     }
 
     /** The funnel is queried by these exact strings. */

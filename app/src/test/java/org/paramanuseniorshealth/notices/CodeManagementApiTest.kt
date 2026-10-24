@@ -311,6 +311,18 @@ class CodeManagementApiTest {
     }
 
     @Test
+    fun `activate is allowed longer than status but stays inside redeem's 20s`() {
+        val status = HttpCodeManagementApi.budgetFor("status")
+        val activate = HttpCodeManagementApi.budgetFor("activate")
+        assertEquals(6_000L, status.callMs)
+        assertTrue(activate.callMs > status.callMs)
+        assertTrue(activate.callMs <= 15_000L)
+        // The socket timeouts sum to the call budget on both routes.
+        assertEquals(status.callMs, status.connectMs + status.readMs)
+        assertEquals(activate.callMs, activate.connectMs + activate.readMs)
+    }
+
+    @Test
     fun `nothing sensitive is in the reported event`() = runBlocking {
         api { "SECRET-TOKEN" }.status("SECRET-CODE")
         val text = sink.events.single().second.toString()

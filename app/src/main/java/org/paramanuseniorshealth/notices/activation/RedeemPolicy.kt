@@ -2,8 +2,12 @@ package org.paramanuseniorshealth.notices.activation
 
 /** What claiming a code through [CodeManagementApi] came to, before any of it is stored. */
 sealed interface ClaimOutcome {
-    /** The server says the claim is this phone's. [dispensary] is the code's dispensary id, if any. */
-    data class Claimed(val dispensary: String?) : ClaimOutcome
+    /**
+     * The server says the claim is this phone's. [dispensary] is the code's dispensary id, if any;
+     * [node] is the `/dispensaries/{id}` node the same answer carried, so storing it needs no
+     * database read. Null when the answer had none.
+     */
+    data class Claimed(val dispensary: String?, val node: Map<*, *>?) : ClaimOutcome
 
     /** A definitive no. Maps to [RedeemResult.NotAccepted]. */
     data object Rejected : ClaimOutcome
@@ -56,7 +60,7 @@ object RedeemPolicy {
      * A patient whose slip is fine but whose network blipped must not be told the code was rejected.
      */
     suspend fun claim(api: CodeManagementApi, code: String): ClaimOutcome = when (val r = api.activate(code)) {
-        is CodeManagementResult.Active -> ClaimOutcome.Claimed(r.code.dispensary)
+        is CodeManagementResult.Active -> ClaimOutcome.Claimed(r.code.dispensary, r.dispensary)
         is CodeManagementResult.Refused -> ClaimOutcome.Rejected
         // /activate never answers Revoked (a revoked code arrives as Refused("revoked")), so this
         // would be a contract break. Resolved in neither direction, like any unexpected shape.

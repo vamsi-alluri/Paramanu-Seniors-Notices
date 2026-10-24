@@ -247,9 +247,11 @@ class ActivationRepository(
                 // Unknown for the first notice.
                 recordVerification(ActivationState.Active)
 
-                // What the dispensary offers, then subscribe to its defaults. Without the read first,
-                // a new phone would subscribe to nothing until the app was next opened.
-                dispensary?.let { dispensaries.refresh(it) }
+                // What the dispensary offers, then subscribe to its defaults. Without this first,
+                // a new phone would subscribe to nothing until the app was next opened. The node
+                // came back with the claim, so this opens no database connection; a missing or
+                // junk node leaves the cached list and banner as they were (DispensaryRepository.apply).
+                dispensary?.let { dispensaries.apply(it, outcome.node) }
                 syncSubscriptions()
 
                 // Start the daily check now rather than waiting for the next app start: on a phone

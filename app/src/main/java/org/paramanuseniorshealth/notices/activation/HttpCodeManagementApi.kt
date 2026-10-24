@@ -29,7 +29,8 @@ class HttpCodeManagementApi(
     private val analytics: Analytics,
     /** Null means no signed-in user. Injected so the never-throw behaviour is testable on the JVM. */
     private val tokenProvider: suspend () -> String? = ::firebaseToken,
-    private val timeoutMs: Long = CALL_TIMEOUT_MS,
+    /** Overrides every route's call budget when set (tests); null means [budgetFor] each route. */
+    private val timeoutMs: Long? = null,
     /**
      * Test seam for the request itself: (route, code, token) to the parsed reply. Null means the real
      * `HttpURLConnection` call, which stays untested on the JVM. To report a status and then fail,
@@ -60,8 +61,8 @@ class HttpCodeManagementApi(
      * number is what the caller waited: token fetch (a forced refresh) included. A timeout reads
      * as roughly the timeout only when it fired during the token wait. Once the request is inside
      * `post` the coroutine timeout cannot interrupt the blocking socket, so a stalled call runs to
-     * the socket timeouts (3s connect + 3s read; a trickling body is unbounded) and `duration_ms`
-     * may well exceed [timeoutMs]. Related quirk: a response that arrives after the timeout has
+     * the socket timeouts (the route's connect + read, see [Budget]; a trickling body is
+     * unbounded) and `duration_ms` may well exceed the call budget. Related quirk: a response that arrives after the timeout has
      * fired is reported as `inconclusive` with no `http_status`. A caller cancelled mid-call is
      * not reported; it never got an answer to measure.
      */
@@ -80,7 +81,7 @@ class HttpCodeManagementApi(
     }
 
     /**
-     * The whole operation runs under [timeoutMs], matching `DispensaryRepository.refresh`. That
+     * The whole operation runs under the route's call budget ([timeoutMs] when overridden). That
      * bounds the token wait and stops the caller waiting; it cannot interrupt a blocking socket
      * read (`NoticeImageStore` documents the same limit), which the socket timeouts bound instead.
      *
@@ -89,7 +90,8 @@ class HttpCodeManagementApi(
      */
     private suspend fun run(route: String, code: String): Attempt {
         if (!CodeManagementConfig.isUsable(baseUrl)) return Attempt(CodeManagementResult.Inconclusive)
-        return withTimeoutOrNull(timeoutMs) { attempt(route, code) } ?: Attempt(CodeManagementResult.Inconclusive)
+        val callMs = timeoutMs ?: budgetFor(route).callMs
+        return withTimeoutOrNull(callMs) { attempt(route, code) } ?: Attempt(CodeManagementResult.Inconclusive)
     }
 
     private suspend fun attempt(route: String, code: String): Attempt = try {
@@ -118,11 +120,12 @@ class HttpCodeManagementApi(
 
     private fun httpPost(route: String, code: String, token: String): Reply {
         val connection = (URL("${baseUrl.trim().trimEnd('/')}/$route").openConnection() as HttpURLConnection).apply {
-            // HttpURLConnection has no single call timeout. These two sum to the 6 second budget,
-            // so the worst case is connect plus read (6s) -- and a slow trickle that beats each
-            // read() individually is not bounded by either. Not 6s flat.
-            connectTimeout = 3_000
-            readTimeout = 3_000
+            // HttpURLConnection has no single call timeout. These two sum to the route's call
+            // budget, so the worst case is connect plus read -- and a slow trickle that beats
+            // each read() individually is not bounded by either. Not the budget flat.
+            val budget = budgetFor(route)
+            connectTimeout = budget.connectMs.toInt()
+            readTimeout = budget.readMs.toInt()
             instanceFollowRedirects = false
             requestMethod = "POST"
             doOutput = true
@@ -180,7 +183,25 @@ class HttpCodeManagementApi(
     companion object {
         private const val TAG = "CodeManagementApi"
         private const val MAX_BODY_BYTES = 64 * 1024
-        const val CALL_TIMEOUT_MS = 6_000L
+
+
+        /**
+         * How long one route may take. [callMs] is what the caller waits; the two socket timeouts
+         * sum to it.
+         *
+         * status is a background check and a refresh the patient is not waiting on: 6s.
+         * activate is the patient standing at the counter, and the function has no minInstances, so
+         * the first activation after an idle spell pays a cold start plus firebase-admin init plus
+         * an RTDB connect, comfortably past 3s. 15s rides that out and stays inside redeem()'s own
+         * 20s budget (NETWORK_TIMEOUT_MS), which also covers sign-in. Whichever budget runs out,
+         * the answer is Inconclusive: a timeout is never read as revoked or refused.
+         */
+        class Budget(val callMs: Long, val connectMs: Long, val readMs: Long)
+
+        private val STATUS_BUDGET = Budget(callMs = 6_000, connectMs = 3_000, readMs = 3_000)
+        private val ACTIVATE_BUDGET = Budget(callMs = 15_000, connectMs = 5_000, readMs = 10_000)
+
+        fun budgetFor(route: String): Budget = if (route == "activate") ACTIVATE_BUDGET else STATUS_BUDGET
     }
 }
 
