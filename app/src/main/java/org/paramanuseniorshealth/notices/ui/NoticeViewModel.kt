@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.paramanuseniorshealth.notices.NoticesApplication
 import org.paramanuseniorshealth.notices.R
+import org.paramanuseniorshealth.notices.activation.ActivationFreshness
 import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.activation.ActivationState
 import org.paramanuseniorshealth.notices.activation.Dispensary
@@ -144,9 +145,6 @@ class NoticeViewModel(
     /** True while "Check again" is in flight, so the button can say so. */
     private val _checking = MutableStateFlow(false)
     val checking: StateFlow<Boolean> = _checking.asStateFlow()
-
-    /** When the server was last asked, for the resume throttle. Not persisted: per foreground run. */
-    private var lastCheckedAt = 0L
 
     /**
      * Notices whose circular is downloading right now.
@@ -343,7 +341,6 @@ class NoticeViewModel(
 
             ActivationState.Unknown -> Unit
         }
-        lastCheckedAt = System.currentTimeMillis()
         return state
     }
 
@@ -413,8 +410,13 @@ class NoticeViewModel(
         AttachmentWorker.enqueueCatchUp(context)
         AttachmentWorker.enqueueWifiCatchUp(context)
 
-        val stale = System.currentTimeMillis() - lastCheckedAt >= RESUME_RECHECK_MS
-        if (activation.isRevoked || stale) refreshActivation()
+        // The revoked bypass stays: a revoked phone is waiting on an answer and is never held to
+        // the floor. Skipping the call changes nothing else -- the last verified state stands.
+        if (activation.isRevoked ||
+            ActivationFreshness.shouldCall(activation.lastCalledAt, System.currentTimeMillis())
+        ) {
+            refreshActivation()
+        }
     }
 
     /**
@@ -482,7 +484,8 @@ class NoticeViewModel(
                     notices.clearRevokedNotice()
                     // Written before the screen changes so the list is never momentarily empty.
                     notices.saveWelcome(welcomeTitle, welcomeBody)
-                    lastCheckedAt = System.currentTimeMillis()
+                    // The redeem was itself a call, so the first resume need not make another.
+                    activation.noteCall()
 
                     _screen.value = Screen.Notices
                 }
@@ -558,15 +561,6 @@ class NoticeViewModel(
         private const val RESOLVE_ATTEMPTS = 5
         private const val RESOLVE_RETRY_MS = 200L
         private const val HIGHLIGHT_MS = 2_500L
-
-        /**
-         * How stale an answer may be before coming to the foreground re-asks.
-         *
-         * Short, because an app open is a natural moment to check and they are spread out across
-         * users -- unlike a broadcast, which wakes four hundred phones at once and is why the
-         * per-notice check had to move off the message path entirely.
-         */
-        private const val RESUME_RECHECK_MS = 60_000L
 
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {

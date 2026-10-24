@@ -75,6 +75,18 @@ class ActivationRepository(
     val lastVerifiedAt: Long get() = prefs.getLong(KEY_LAST_VERIFIED_AT, 0L)
 
     /**
+     * When a status call was last made, whatever it answered -- unlike [lastVerifiedAt], which moves
+     * only for a definitive answer. It feeds [ActivationFreshness.shouldCall], and an attempt that
+     * came back Unknown has still spent a function execution. Zero if there has never been one.
+     */
+    val lastCalledAt: Long get() = prefs.getLong(KEY_LAST_CALLED_AT, 0L)
+
+    /** Stamps a status call as made now. Called by [verify] and by the view model after a redeem. */
+    fun noteCall() {
+        prefs.edit { putLong(KEY_LAST_CALLED_AT, System.currentTimeMillis()) }
+    }
+
+    /**
      * The delivery gate: may this notice be shown?
      *
      * Answers from the last persisted result, with **no network at all**. This is the whole point
@@ -291,6 +303,9 @@ class ActivationRepository(
                 // deleted or disabled anonymous user is rejected there and arrives as Inconclusive
                 // -> Unknown. It can therefore never read as Revoked here: only the server's own
                 // explicit "revoked" does.
+                // Stamped before the call, not after: a slow or failed call has spent the execution
+                // all the same, and a resume landing while it is in flight must not start another.
+                noteCall()
                 val verdict = VerifyPolicy.check(api, code)
 
                 // Persisted only for a definitive answer, so the gate can answer the next notice
@@ -400,6 +415,7 @@ class ActivationRepository(
         private const val KEY_REVOKED = "revoked"
         private const val KEY_LAST_STATE = "last_state"
         private const val KEY_LAST_VERIFIED_AT = "last_verified_at"
+        private const val KEY_LAST_CALLED_AT = "last_called_at"
         private const val KEY_LAST_CONTROL_AT = "last_control_at"
         private const val KEY_SUBSCRIBED = "subscribed_topics"
         private const val KEY_TESTING = "testing_enabled"
