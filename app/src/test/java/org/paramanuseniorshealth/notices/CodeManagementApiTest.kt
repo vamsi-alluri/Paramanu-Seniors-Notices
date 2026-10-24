@@ -13,6 +13,8 @@ import org.paramanuseniorshealth.notices.activation.CodeManagementConfig
 import org.paramanuseniorshealth.notices.activation.CodeManagementResponse
 import org.paramanuseniorshealth.notices.activation.CodeManagementResult
 import org.paramanuseniorshealth.notices.activation.PublicCode
+import org.paramanuseniorshealth.notices.analytics.Analytics
+import org.paramanuseniorshealth.notices.analytics.AnalyticsSink
 
 class CodeManagementApiTest {
 
@@ -187,11 +189,39 @@ class CodeManagementApiTest {
 
     private val https = "https://example.test/code"
 
+    private class FakeSink : AnalyticsSink {
+        val events = mutableListOf<Pair<String, Map<String, Any>>>()
+        override fun log(name: String, params: Map<String, Any>) { events += name to params }
+        override fun setCollectionEnabled(enabled: Boolean) = Unit
+    }
+
+    private val sink = FakeSink()
+    private val analytics = Analytics(sink).also { it.setEnabled(true) }
+
+    private fun api(
+        url: String = https,
+        timeoutMs: Long = 6_000,
+        tokenProvider: suspend () -> String?,
+    ) = HttpCodeManagementApi(url, analytics, tokenProvider, timeoutMs)
+
+    /** The single event a call must have produced, with the keys it must and must not carry. */
+    private fun assertLogged(operation: String, outcome: String) {
+        assertEquals(1, sink.events.size)
+        val (name, params) = sink.events.single()
+        assertEquals("code_management_call", name)
+        assertEquals(operation, params["operation"])
+        assertEquals(outcome, params["outcome"])
+        assertTrue(params["duration_ms"] is Long)
+        assertTrue((params["duration_ms"] as Long) >= 0L)
+        assertFalse(params.containsKey("http_status"))
+        assertEquals(setOf("operation", "outcome", "duration_ms"), params.keys)
+    }
+
     @Test
     fun `a blank or cleartext base url never asks for a token`() = runBlocking {
         var asked = false
         for (url in listOf("", "   ", "http://example.test")) {
-            val api = HttpCodeManagementApi(url, tokenProvider = { asked = true; "t" })
+            val api = api(url) { asked = true; "t" }
             assertEquals(CodeManagementResult.Inconclusive, api.status("A"))
             assertEquals(CodeManagementResult.Inconclusive, api.activate("A"))
         }
@@ -199,27 +229,52 @@ class CodeManagementApiTest {
     }
 
     @Test
-    fun `no signed-in user is inconclusive`() = runBlocking {
-        val api = HttpCodeManagementApi(https, tokenProvider = { null })
-        assertEquals(CodeManagementResult.Inconclusive, api.status("A"))
+    fun `a blank base url still reports the call`() = runBlocking {
+        api("") { "t" }.status("A")
+        assertLogged("status", "inconclusive")
     }
 
     @Test
-    fun `a token provider that throws is inconclusive and does not throw`() = runBlocking {
-        val api = HttpCodeManagementApi(https, tokenProvider = { throw IllegalStateException("boom") })
+    fun `a cleartext base url still reports the call`() = runBlocking {
+        api("http://example.test") { "t" }.activate("A")
+        assertLogged("activate", "inconclusive")
+    }
+
+    @Test
+    fun `no signed-in user is inconclusive and reported`() = runBlocking {
+        assertEquals(CodeManagementResult.Inconclusive, api { null }.status("A"))
+        assertLogged("status", "inconclusive")
+    }
+
+    @Test
+    fun `a token provider that throws is inconclusive, does not throw, and is reported`() = runBlocking {
+        val api = api { throw IllegalStateException("boom") }
         assertEquals(CodeManagementResult.Inconclusive, api.status("A"))
         assertEquals(CodeManagementResult.Inconclusive, api.activate("A"))
+        assertEquals(2, sink.events.size)
+        assertEquals(listOf("status", "activate"), sink.events.map { it.second["operation"] })
+        assertTrue(sink.events.all { !it.second.containsKey("http_status") })
     }
 
     @Test
-    fun `a token that never arrives is inconclusive after the timeout`() = runBlocking {
-        val api = HttpCodeManagementApi(https, tokenProvider = { awaitCancellation() }, timeoutMs = 50)
+    fun `a token that never arrives is inconclusive after the timeout and reported`() = runBlocking {
+        val api = api(timeoutMs = 50) { awaitCancellation() }
         assertEquals(CodeManagementResult.Inconclusive, api.status("A"))
+        assertLogged("status", "inconclusive")
+        // The duration is what the caller waited, so it reflects the timeout.
+        assertTrue((sink.events.single().second["duration_ms"] as Long) >= 40L)
+    }
+
+    @Test
+    fun `nothing sensitive is in the reported event`() = runBlocking {
+        api { "SECRET-TOKEN" }.status("SECRET-CODE")
+        val text = sink.events.single().second.toString()
+        assertFalse(text.contains("SECRET"))
     }
 
     @Test
     fun `cancellation from the token provider propagates`() {
-        val api = HttpCodeManagementApi(https, tokenProvider = { throw CancellationException("stop") })
+        val api = api { throw CancellationException("stop") }
         try {
             runBlocking { api.status("A") }
             fail("cancellation must propagate")

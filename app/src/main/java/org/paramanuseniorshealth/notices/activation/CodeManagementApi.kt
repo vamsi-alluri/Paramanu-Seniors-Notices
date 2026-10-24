@@ -80,7 +80,7 @@ object CodeManagementResponse {
         // "active" and "revoked" at once is a contradiction the client cannot interpret, so it is
         // resolved in neither direction. The genuine revoke path is status=revoked above.
         if (revoked) return CodeManagementResult.Inconclusive
-        val activatedAt =(raw["activatedAt"] as? Number)?.toLong()
+        val activatedAt = (raw["activatedAt"] as? Number)?.toLong()
         return CodeManagementResult.Active(
             PublicCode(code, raw["dispensary"] as? String, revoked, activatedAt),
             body["dispensary"] as? Map<*, *>,
