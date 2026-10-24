@@ -58,10 +58,9 @@ class ActivationRefreshWorker(
                     } else {
                         activation.recordVerification(ActivationState.Active)
                     }
-                    // What the dispensary offers, over the connection this check has already opened.
-                    // A phone that is never opened would otherwise keep a topic that has been
-                    // withdrawn, or never hear about a new one.
-                    activation.dispensaryId?.let { app.dispensaryRepository.refresh(it) }
+                    // verify() has already applied the dispensary from its answer; bring the
+                    // subscriptions into line with it. A phone that is never opened would otherwise
+                    // keep a topic that has been withdrawn, or never hear about a new one.
                     activation.syncSubscriptions()
                     Result.success()
                 }

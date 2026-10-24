@@ -3,9 +3,6 @@ package org.paramanuseniorshealth.notices.activation
 import android.content.Context
 import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseAuthInvalidUserException
-import com.google.firebase.database.DataSnapshot
-import com.google.firebase.database.FirebaseDatabase
 import com.google.firebase.messaging.FirebaseMessaging
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.awaitResult
@@ -23,8 +20,8 @@ import androidx.core.content.edit
  * topics the phone is subscribed to.
  *
  * Redemption goes through the `code_management` Cloud Function over HTTPS, which claims the code
- * atomically; the phone no longer holds a Realtime Database socket for it. [verify] still reads the
- * database, and the security rules in `database.rules.json` stay deployed, so a handset on an older
+ * atomically, and [verify] asks the same endpoint, so the phone holds no Realtime Database socket for
+ * either. The security rules in `database.rules.json` stay deployed, so a handset on an older
  * build keeps working through its direct write.
  *
  * Deliberately, no contact information is ever written. A claim is an anonymous Firebase UID
@@ -39,7 +36,6 @@ class ActivationRepository(
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val auth: FirebaseAuth get() = FirebaseAuth.getInstance()
-    private val database: FirebaseDatabase get() = FirebaseDatabase.getInstance()
 
     val storedCode: String? get() = prefs.getString(KEY_CODE, null)
     val storedUid: String? get() = prefs.getString(KEY_UID, null)
@@ -283,48 +279,38 @@ class ActivationRepository(
      */
     suspend fun verify(): ActivationState {
         val code = storedCode ?: return ActivationState.NotActivated
-        val uid = storedUid ?: return ActivationState.NotActivated
+        if (storedUid == null) return ActivationState.NotActivated
 
         return withTimeoutOrNull(VERIFY_TIMEOUT_MS.milliseconds) {
             try {
-                // Forces a refresh against the server, which is the only way a deleted or disabled
-                // anonymous user is ever discovered. A cached ID token stays happily valid
-                // otherwise, so `currentUser != null` proves nothing at all.
-                val user = auth.currentUser ?: run {
+                // No account at all is a fact about this phone, not an answer from the network.
+                auth.currentUser ?: run {
                     recordVerification(ActivationState.Revoked)
                     return@withTimeoutOrNull ActivationState.Revoked
                 }
-                user.getIdToken(true).awaitResult()
 
-                val snapshot: DataSnapshot =
-                    database.reference.child(CODES).child(code).get().awaitResult()
+                // One HTTPS call, no database socket. The endpoint checks the ID token itself, so a
+                // deleted or disabled anonymous user is rejected there and arrives as Inconclusive
+                // -> Unknown. It can therefore never read as Revoked here: only the server's own
+                // explicit "revoked" does.
+                val verdict = VerifyPolicy.check(api, code)
 
-                val claimedBy = snapshot.child(FIELD_USED_BY).getValue(String::class.java)
-                val revoked = snapshot.child(FIELD_REVOKED).getValue(Boolean::class.java) == true
-                val issued = snapshot.child(FIELD_ISSUED).exists()
+                // Persisted only for a definitive answer, so the gate can answer the next notice
+                // without a connection. An inconclusive one leaves what is stored untouched.
+                if (verdict.persist) recordVerification(verdict.state)
 
-                snapshot.child(FIELD_DISPENSARY).getValue(String::class.java)?.let { id ->
-                    if (id != dispensaryId) prefs.edit { putString(KEY_DISPENSARY, id) }
+                if (verdict.state == ActivationState.Active) {
+                    verdict.dispensaryId?.let { id ->
+                        if (id != dispensaryId) prefs.edit { putString(KEY_DISPENSARY, id) }
+                    }
+                    // The dispensary arrived with the answer: apply it rather than read it again.
+                    (verdict.dispensaryId ?: dispensaryId)?.let { id ->
+                        dispensaries.apply(id, verdict.dispensaryNode)
+                    }
                 }
-
-                val state = when {
-                    revoked -> ActivationState.Revoked
-                    // Every code the console prints carries `issued`. A node without it was never
-                    // issued by the NGO, so the claim on it is not one we honor -- this catches
-                    // any self-minted code created before the rules refused to create them.
-                    !issued -> ActivationState.Revoked
-                    claimedBy == null -> ActivationState.Revoked   // claim erased by the NGO
-                    claimedBy != uid -> ActivationState.Revoked    // reissued to somebody else
-                    else -> ActivationState.Active
-                }
-                // Persisted here so the gate can answer the next notice without a connection.
-                recordVerification(state)
-                state
-            } catch (e: FirebaseAuthInvalidUserException) {
-                // Definitive: the anonymous account behind this claim no longer exists.
-                Log.i(TAG, "Anonymous user is gone; treating as revoked", e)
-                recordVerification(ActivationState.Revoked)
-                ActivationState.Revoked
+                verdict.state
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Verification inconclusive", e)
                 ActivationState.Unknown
@@ -421,12 +407,6 @@ class ActivationRepository(
         private const val KEY_TESTING = "testing_enabled"
 
         private fun topicKey(topic: String) = "topic_$topic"
-
-        private const val CODES = "codes"
-        private const val FIELD_USED_BY = "usedBy"
-        private const val FIELD_REVOKED = "revoked"
-        private const val FIELD_ISSUED = "issued"
-        private const val FIELD_DISPENSARY = "dispensary"
 
         private const val NETWORK_TIMEOUT_MS = 20_000L
 

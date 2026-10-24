@@ -52,18 +52,27 @@ class DispensaryRepository(context: Context, private val info: InfoRepository) {
                     }
             }
 
-            val parsed = DispensaryConfig.parse(id, snapshot.value) ?: run {
-                Log.w(TAG, "No dispensary at /$NODE/$id; keeping what is cached")
-                return@withTimeoutOrNull null
-            }
-            prefs.edit().putString(KEY_CONFIG, DispensaryConfig.encode(parsed)).apply()
-            _dispensary.value = parsed
-            info.apply(snapshot.child("info").value as? Map<*, *>)
-            parsed
+            apply(id, snapshot.value as? Map<*, *>)
         } catch (e: Exception) {
             Log.w(TAG, "Could not refresh dispensary $id", e)
             null
         }
+    }
+
+    /**
+     * Caches and publishes a dispensary node already in hand, with no network. [node] has the shape
+     * of `/dispensaries/{id}`, banner included under `info`. Returns null, changing nothing, when
+     * the node is absent or unusable.
+     */
+    fun apply(id: String, node: Map<*, *>?): Dispensary? {
+        val parsed = DispensaryConfig.parse(id, node) ?: run {
+            Log.w(TAG, "No usable dispensary node for $id; keeping what is cached")
+            return null
+        }
+        prefs.edit().putString(KEY_CONFIG, DispensaryConfig.encode(parsed)).apply()
+        _dispensary.value = parsed
+        info.apply(DispensaryConfig.infoOf(node))
+        return parsed
     }
 
     private companion object {

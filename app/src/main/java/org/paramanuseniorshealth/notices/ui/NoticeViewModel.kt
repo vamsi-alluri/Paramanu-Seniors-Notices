@@ -348,12 +348,11 @@ class NoticeViewModel(
     }
 
     /**
-     * Reads the dispensary -- its topics and its banner in one go -- and brings the subscriptions
-     * into line with it. Keeps whatever is cached when the read fails.
+     * Brings the subscriptions into line with the dispensary, which [ActivationRepository.verify]
+     * has just applied from the same HTTPS answer -- no second read, no database socket.
      */
     private suspend fun loadDispensary() {
-        val id = activation.dispensaryId ?: return
-        dispensaries.refresh(id)
+        if (activation.dispensaryId == null) return
         activation.syncSubscriptions()
         enforceSoleTopic()
         _topicChoices.value = activation.topicChoices()
