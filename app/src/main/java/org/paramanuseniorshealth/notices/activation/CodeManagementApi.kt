@@ -38,7 +38,13 @@ object CodeManagementConfig {
     /** Empty until the function is deployed; empty means "make no call". */
     const val DEFAULT = ""
 
-    fun isUsable(baseUrl: String): Boolean = baseUrl.isNotBlank()
+    /** Non-blank and https: the request carries a Bearer token, which must never go out in cleartext. */
+    fun isUsable(baseUrl: String): Boolean {
+        val url = baseUrl.trim()
+        return url.length > HTTPS.length && url.startsWith(HTTPS, ignoreCase = true)
+    }
+
+    private const val HTTPS = "https://"
 }
 
 /**
@@ -71,7 +77,10 @@ object CodeManagementResponse {
         val raw = body["code"] as? Map<*, *> ?: return CodeManagementResult.Inconclusive
         val code = raw["code"] as? String ?: return CodeManagementResult.Inconclusive
         val revoked = raw["revoked"] as? Boolean ?: return CodeManagementResult.Inconclusive
-        val activatedAt = (raw["activatedAt"] as? Number)?.toLong()
+        // "active" and "revoked" at once is a contradiction the client cannot interpret, so it is
+        // resolved in neither direction. The genuine revoke path is status=revoked above.
+        if (revoked) return CodeManagementResult.Inconclusive
+        val activatedAt =(raw["activatedAt"] as? Number)?.toLong()
         return CodeManagementResult.Active(
             PublicCode(code, raw["dispensary"] as? String, revoked, activatedAt),
             body["dispensary"] as? Map<*, *>,

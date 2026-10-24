@@ -1,7 +1,13 @@
 package org.paramanuseniorshealth.notices
 
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
+import org.paramanuseniorshealth.notices.activation.HttpCodeManagementApi
+import kotlin.coroutines.cancellation.CancellationException
 import org.junit.Test
 import org.paramanuseniorshealth.notices.activation.CodeManagementConfig
 import org.paramanuseniorshealth.notices.activation.CodeManagementResponse
@@ -115,5 +121,110 @@ class CodeManagementApiTest {
         assertTrue(CodeManagementConfig.isUsable(CodeManagementConfig.DEFAULT).not())
         assertTrue(CodeManagementConfig.isUsable("   ").not())
         assertTrue(CodeManagementConfig.isUsable("https://example.test/code"))
+    }
+
+    @Test
+    fun `a cleartext or schemeless base url is rejected because it would carry a token`() {
+        assertFalse(CodeManagementConfig.isUsable("http://example.test/code"))
+        assertFalse(CodeManagementConfig.isUsable("example.test/code"))
+        assertFalse(CodeManagementConfig.isUsable("https://"))
+    }
+
+    @Test
+    fun `200 active that is also revoked is inconclusive, resolved in neither direction`() {
+        val body = mapOf(
+            "status" to "active",
+            "code" to mapOf("code" to "ABC123", "dispensary" to null, "revoked" to true, "activatedAt" to 1L),
+        )
+        assertEquals(CodeManagementResult.Inconclusive, CodeManagementResponse.parse(200, body))
+    }
+
+    @Test
+    fun `200 revoked with junk fields alongside is still revoked`() {
+        val body = mapOf("status" to "revoked", "code" to listOf(1, 2), "x" to null)
+        assertEquals(CodeManagementResult.Revoked, CodeManagementResponse.parse(200, body))
+    }
+
+    @Test
+    fun `active with a string revoked flag is inconclusive`() {
+        val body = mapOf("status" to "active", "code" to mapOf("code" to "A", "revoked" to "false"))
+        assertEquals(CodeManagementResult.Inconclusive, CodeManagementResponse.parse(200, body))
+    }
+
+    @Test
+    fun `active with a list for code is inconclusive`() {
+        val body = mapOf("status" to "active", "code" to listOf("A"))
+        assertEquals(CodeManagementResult.Inconclusive, CodeManagementResponse.parse(200, body))
+    }
+
+    @Test
+    fun `409 with a blank or non-string reason is inconclusive`() {
+        for (reason in listOf<Any?>("", "  ", 7, null, listOf("x"))) {
+            assertEquals(
+                CodeManagementResult.Inconclusive,
+                CodeManagementResponse.parse(409, mapOf("status" to "refused", "reason" to reason)),
+            )
+        }
+    }
+
+    @Test
+    fun `409 whose status is not refused is inconclusive`() {
+        assertEquals(
+            CodeManagementResult.Inconclusive,
+            CodeManagementResponse.parse(409, mapOf("status" to "revoked", "reason" to "revoked")),
+        )
+    }
+
+    @Test
+    fun `403 carrying refused is inconclusive`() {
+        assertEquals(
+            CodeManagementResult.Inconclusive,
+            CodeManagementResponse.parse(403, mapOf("status" to "refused", "reason" to "revoked")),
+        )
+    }
+
+    // ---- HttpCodeManagementApi: only the paths that never reach the socket.
+
+    private val https = "https://example.test/code"
+
+    @Test
+    fun `a blank or cleartext base url never asks for a token`() = runBlocking {
+        var asked = false
+        for (url in listOf("", "   ", "http://example.test")) {
+            val api = HttpCodeManagementApi(url, tokenProvider = { asked = true; "t" })
+            assertEquals(CodeManagementResult.Inconclusive, api.status("A"))
+            assertEquals(CodeManagementResult.Inconclusive, api.activate("A"))
+        }
+        assertFalse(asked)
+    }
+
+    @Test
+    fun `no signed-in user is inconclusive`() = runBlocking {
+        val api = HttpCodeManagementApi(https, tokenProvider = { null })
+        assertEquals(CodeManagementResult.Inconclusive, api.status("A"))
+    }
+
+    @Test
+    fun `a token provider that throws is inconclusive and does not throw`() = runBlocking {
+        val api = HttpCodeManagementApi(https, tokenProvider = { throw IllegalStateException("boom") })
+        assertEquals(CodeManagementResult.Inconclusive, api.status("A"))
+        assertEquals(CodeManagementResult.Inconclusive, api.activate("A"))
+    }
+
+    @Test
+    fun `a token that never arrives is inconclusive after the timeout`() = runBlocking {
+        val api = HttpCodeManagementApi(https, tokenProvider = { awaitCancellation() }, timeoutMs = 50)
+        assertEquals(CodeManagementResult.Inconclusive, api.status("A"))
+    }
+
+    @Test
+    fun `cancellation from the token provider propagates`() {
+        val api = HttpCodeManagementApi(https, tokenProvider = { throw CancellationException("stop") })
+        try {
+            runBlocking { api.status("A") }
+            fail("cancellation must propagate")
+        } catch (e: CancellationException) {
+            // expected
+        }
     }
 }
