@@ -18,6 +18,26 @@ sealed interface ClaimOutcome {
  */
 object RedeemPolicy {
 
+    // The values of ActivationRepository.lastOfflineCause: an analytics contract, queried by these
+    // exact strings, so a test pins them.
+    const val CAUSE_NO_UID = "no_uid"
+    const val CAUSE_TRANSPORT = "transport"
+    const val CAUSE_TIMEOUT = "timeout"
+
+    /**
+     * What the patient is told. Only [ClaimOutcome.Rejected] can send them back to the counter;
+     * an uncertain answer is [RedeemResult.Offline], "try again".
+     */
+    fun resultFor(outcome: ClaimOutcome): RedeemResult = when (outcome) {
+        is ClaimOutcome.Claimed -> RedeemResult.Success
+        ClaimOutcome.Rejected -> RedeemResult.NotAccepted
+        ClaimOutcome.Unreachable -> RedeemResult.Offline
+    }
+
+    /** Why the result is Offline, or null when it is not. */
+    fun offlineCauseFor(outcome: ClaimOutcome): String? =
+        if (outcome == ClaimOutcome.Unreachable) CAUSE_TRANSPORT else null
+
     /**
      * The answers that need no server. Null means the code is worth sending.
      *
@@ -38,8 +58,9 @@ object RedeemPolicy {
     suspend fun claim(api: CodeManagementApi, code: String): ClaimOutcome = when (val r = api.activate(code)) {
         is CodeManagementResult.Active -> ClaimOutcome.Claimed(r.code.dispensary)
         is CodeManagementResult.Refused -> ClaimOutcome.Rejected
-        // A code the NGO has revoked cannot be activated; that is a definitive answer, not a blip.
-        CodeManagementResult.Revoked -> ClaimOutcome.Rejected
+        // /activate never answers Revoked (a revoked code arrives as Refused("revoked")), so this
+        // would be a contract break. Resolved in neither direction, like any unexpected shape.
+        CodeManagementResult.Revoked -> ClaimOutcome.Unreachable
         CodeManagementResult.Inconclusive -> ClaimOutcome.Unreachable
     }
 }

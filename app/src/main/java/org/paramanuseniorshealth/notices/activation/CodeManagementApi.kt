@@ -1,5 +1,9 @@
 package org.paramanuseniorshealth.notices.activation
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
+
 /** What the `code_management` function says about a code. No `note` field, by design. */
 data class PublicCode(
     val code: String,
@@ -64,9 +68,20 @@ class ResolvingCodeManagementApi(
 
     override suspend fun activate(code: String): CodeManagementResult = api().activate(code)
 
-    // A failure to read the value is the same answer as an unpublished one: make no call.
-    private fun api(): CodeManagementApi =
-        build(runCatching { source.baseUrl() }.getOrDefault(CodeManagementConfig.DEFAULT))
+    // Off the main thread: Remote Config's first getter in a process is a blocking disk read, and
+    // the caller (redeem) runs on Main. A failure to read is the same answer as an unpublished
+    // URL: make no call. Cancellation must still pass through.
+    private suspend fun api(): CodeManagementApi = build(
+        withContext(Dispatchers.IO) {
+            try {
+                source.baseUrl()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                CodeManagementConfig.DEFAULT
+            }
+        }
+    )
 }
 
 /** The server-controlled base URL, read through Remote Config. */

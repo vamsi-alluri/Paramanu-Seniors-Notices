@@ -212,18 +212,15 @@ class ActivationRepository(
                 // The claim is made by the code_management function, which authenticates with this
                 // account's token (hence the sign-in above) and answers with the code's dispensary.
                 // A retry of a claim this uid already won is answered as still theirs by the server.
-                val dispensary = when (val outcome = RedeemPolicy.claim(api, code)) {
-                    is ClaimOutcome.Claimed -> outcome.dispensary
-                    ClaimOutcome.Rejected -> {
-                        Log.w(TAG, "Redeem refused for $code")
-                        return@withTimeoutOrNull RedeemResult.NotAccepted
-                    }
-                    // Not a refusal: no definitive answer, so the patient is told to try again.
-                    ClaimOutcome.Unreachable -> {
-                        lastOfflineCause = OFFLINE_TRANSPORT
-                        return@withTimeoutOrNull RedeemResult.Offline
-                    }
+                val outcome = RedeemPolicy.claim(api, code)
+                if (outcome !is ClaimOutcome.Claimed) {
+                    // The result and the cause both come from RedeemPolicy, where they are tested:
+                    // an uncertain answer must reach the patient as Offline, never NotAccepted.
+                    lastOfflineCause = RedeemPolicy.offlineCauseFor(outcome)
+                    Log.w(TAG, "Redeem not completed: ${outcome::class.simpleName}")
+                    return@withTimeoutOrNull RedeemPolicy.resultFor(outcome)
                 }
+                val dispensary = outcome.dispensary
 
                 // KEY_REVOKED is cleared here on purpose. A revoked device keeps its old code and
                 // UID so a console Enable can bring it back, but the user may instead be handed a
@@ -435,9 +432,10 @@ class ActivationRepository(
 
         // The values of lastOfflineCause. They are an analytics contract: the funnel is queried by
         // these exact strings, so they are not to be renamed or added to casually.
-        private const val OFFLINE_NO_UID = "no_uid"
-        private const val OFFLINE_TRANSPORT = "transport"
-        private const val OFFLINE_TIMEOUT = "timeout"
+        // Defined in RedeemPolicy, where a test pins the exact strings.
+        private const val OFFLINE_NO_UID = RedeemPolicy.CAUSE_NO_UID
+        private const val OFFLINE_TRANSPORT = RedeemPolicy.CAUSE_TRANSPORT
+        private const val OFFLINE_TIMEOUT = RedeemPolicy.CAUSE_TIMEOUT
 
         /**
          * Kept short: an inconclusive check costs nothing, because Unknown is permitted, and a person

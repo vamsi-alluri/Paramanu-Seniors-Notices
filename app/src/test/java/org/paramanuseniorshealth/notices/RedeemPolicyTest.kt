@@ -12,6 +12,7 @@ import org.paramanuseniorshealth.notices.activation.HttpCodeManagementApi
 import org.paramanuseniorshealth.notices.activation.PublicCode
 import org.paramanuseniorshealth.notices.activation.RedeemPolicy
 import org.paramanuseniorshealth.notices.activation.RedeemResult
+import org.paramanuseniorshealth.notices.activation.ResolvingCodeManagementApi
 import org.paramanuseniorshealth.notices.analytics.Analytics
 
 class RedeemPolicyTest {
@@ -44,8 +45,8 @@ class RedeemPolicyTest {
     }
 
     @Test
-    fun `revoked is rejected`() {
-        assertEquals(ClaimOutcome.Rejected, claim(RecordingCodeManagementApi(CodeManagementResult.Revoked)))
+    fun `revoked from activate is a contract break and resolves as unreachable`() {
+        assertEquals(ClaimOutcome.Unreachable, claim(RecordingCodeManagementApi(CodeManagementResult.Revoked)))
     }
 
     /** The safety-critical one: a network blip must never tell a patient their slip was refused. */
@@ -86,5 +87,75 @@ class RedeemPolicyTest {
     fun `a new valid code has no local answer`() {
         assertNull(RedeemPolicy.localAnswer(good, null))
         assertNull(RedeemPolicy.localAnswer(good, "SOMETHING"))
+    }
+}
+
+class RedeemResultMappingTest {
+
+    @Test
+    fun `every outcome maps to the result the patient sees`() {
+        assertEquals(RedeemResult.Success, RedeemPolicy.resultFor(ClaimOutcome.Claimed("main")))
+        assertEquals(RedeemResult.NotAccepted, RedeemPolicy.resultFor(ClaimOutcome.Rejected))
+        assertEquals(RedeemResult.Offline, RedeemPolicy.resultFor(ClaimOutcome.Unreachable))
+    }
+
+    @Test
+    fun `only an unreachable outcome has an offline cause`() {
+        assertEquals("transport", RedeemPolicy.offlineCauseFor(ClaimOutcome.Unreachable))
+        assertNull(RedeemPolicy.offlineCauseFor(ClaimOutcome.Rejected))
+        assertNull(RedeemPolicy.offlineCauseFor(ClaimOutcome.Claimed(null)))
+    }
+
+    /** The funnel is queried by these exact strings. */
+    @Test
+    fun `the offline cause strings are pinned`() {
+        assertEquals("no_uid", RedeemPolicy.CAUSE_NO_UID)
+        assertEquals("transport", RedeemPolicy.CAUSE_TRANSPORT)
+        assertEquals("timeout", RedeemPolicy.CAUSE_TIMEOUT)
+    }
+
+    /** Each server answer, end to end through claim and resultFor. */
+    @Test
+    fun `server answers reach the patient correctly`() {
+        fun seen(r: CodeManagementResult) = runBlocking {
+            RedeemPolicy.resultFor(RedeemPolicy.claim(RecordingCodeManagementApi(r), "ABCD1230"))
+        }
+        assertEquals(RedeemResult.Success, seen(CodeManagementResult.Active(PublicCode("X", "main", false, 1L), null)))
+        assertEquals(RedeemResult.NotAccepted, seen(CodeManagementResult.Refused("revoked")))
+        assertEquals(RedeemResult.Offline, seen(CodeManagementResult.Inconclusive))
+        assertEquals(RedeemResult.Offline, seen(CodeManagementResult.Revoked))
+    }
+}
+
+class ResolvingCodeManagementApiTest {
+
+    @Test
+    fun `the url is re-read on every call`() {
+        var url = ""
+        val built = mutableListOf<String>()
+        val api = ResolvingCodeManagementApi({ url }) { u -> built += u; RecordingCodeManagementApi() }
+        runBlocking {
+            api.activate("A")
+            url = "https://example.test"
+            api.status("A")
+        }
+        assertEquals(listOf("", "https://example.test"), built)
+    }
+
+    @Test
+    fun `a throwing source falls back to the default`() {
+        val built = mutableListOf<String>()
+        val api = ResolvingCodeManagementApi({ error("boom") }) { u -> built += u; RecordingCodeManagementApi() }
+        runBlocking { api.activate("A") }
+        assertEquals(listOf(CodeManagementConfig.DEFAULT), built)
+    }
+
+    @Test
+    fun `calls are delegated to the built client`() {
+        val inner = RecordingCodeManagementApi()
+        val api = ResolvingCodeManagementApi({ "u" }) { inner }
+        runBlocking { api.activate("A"); api.status("B") }
+        assertEquals(listOf("A"), inner.activateCalls)
+        assertEquals(listOf("B"), inner.statusCalls)
     }
 }
