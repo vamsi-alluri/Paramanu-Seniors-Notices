@@ -59,6 +59,31 @@ describe.skipIf(!emulatorAvailable())("statusFor against the RTDB emulator", () 
     expect(body).not.toContain("SECRET");
   });
 
+  it("returns active with no dispensary, and no other dispensaries' data, for an empty dispensary id", async () => {
+    await admin.database().ref("codes/good/dispensary").set("");
+    const res = await statusFor(UID, "good");
+    expect(res.status).toBe("active");
+    expect(res).not.toHaveProperty("dispensary");
+    expect(JSON.stringify(res)).not.toContain(DISPENSARY.label);
+  });
+
+  it.each(["a/b", "a.b", "a$b", "a#b", "a[b", "a]b"])(
+    "returns active with no dispensary for the invalid dispensary id %s",
+    async (id) => {
+      await admin.database().ref("codes/good/dispensary").set(id);
+      const res = await statusFor(UID, "good");
+      expect(res.status).toBe("active");
+      expect(res).not.toHaveProperty("dispensary");
+    },
+  );
+
+  it("returns active with no dispensary when the id is valid but the record is missing", async () => {
+    await admin.database().ref("codes/good/dispensary").set("ghost");
+    const res = await statusFor(UID, "good");
+    expect(res.status).toBe("active");
+    expect(res).not.toHaveProperty("dispensary");
+  });
+
   it("does not treat revoked:false or a non-true revoked as revoked", async () => {
     await admin.database().ref("codes/good/revoked").set(false);
     expect((await statusFor(UID, "good")).status).toBe("active");

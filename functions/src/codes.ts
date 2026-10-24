@@ -25,6 +25,11 @@ export interface StatusResponse {
   dispensary?: unknown;
 }
 
+// A dispensary id is hand-edited data used as a path segment. Blank would resolve
+// to the whole collection; forbidden characters would make ref() throw. Either way
+// the claim is still good, so such an id means "no dispensary", not an error.
+const DISPENSARY_ID = /^[^.$#[\]/\s]+$/;
+
 const asString = (v: unknown): string | null => (typeof v === "string" ? v : null);
 const asNumber = (v: unknown): number | null => (typeof v === "number" ? v : null);
 
@@ -65,7 +70,7 @@ export async function statusFor(uid: string, code: string): Promise<StatusRespon
     return { status: "revoked" };
   }
   const response: StatusResponse = { status: "active", code: toPublic(record) };
-  if (record.dispensary !== null) {
+  if (record.dispensary !== null && DISPENSARY_ID.test(record.dispensary)) {
     const node = await admin.database().ref(`dispensaries/${record.dispensary}`).get();
     if (node.exists()) response.dispensary = node.val();
   }
