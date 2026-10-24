@@ -70,6 +70,80 @@ class InfoRepositoryParseTest {
         assertEquals("<p>newer</p>", repo.info.value!!.html)
     }
 
+    /** A repository already holding a banner at html_at 3000, plus its prefs for inspection. */
+    private fun seeded(): Pair<InfoRepository, MemoryPrefs> {
+        val prefs = MemoryPrefs()
+        val repo = InfoRepository(prefs)
+        repo.apply(
+            mapOf(
+                "heading" to "Cached heading",
+                "lines" to "Cached line",
+                "html" to "<p>cached</p>",
+                "htmlUpdated" to 3_000L,
+            )
+        )
+        return repo to prefs
+    }
+
+    private fun assertCacheIntact(repo: InfoRepository, prefs: MemoryPrefs) {
+        assertEquals("Cached heading", prefs.getString("heading", null))
+        assertEquals("Cached line", prefs.getString("lines", null))
+        assertEquals("<p>cached</p>", prefs.getString("html", null))
+        assertEquals(3_000L, prefs.getLong("html_at", -1L))
+        val info = repo.info.value!!
+        assertEquals("Cached heading", info.heading)
+        assertEquals(listOf("Cached line"), info.lines)
+        assertEquals("<p>cached</p>", info.html)
+    }
+
+    @Test
+    fun `a non-String html leaves the cache untouched`() {
+        val (repo, prefs) = seeded()
+        repo.apply(mapOf("html" to 123, "htmlUpdated" to 9_000L))
+        assertCacheIntact(repo, prefs)
+        repo.apply(mapOf("html" to emptyMap<String, Any>(), "htmlUpdated" to 9_000L))
+        assertCacheIntact(repo, prefs)
+    }
+
+    @Test
+    fun `a non-String heading leaves the cache untouched`() {
+        val (repo, prefs) = seeded()
+        repo.apply(mapOf("heading" to 5L, "html" to "<p>new</p>", "htmlUpdated" to 9_000L))
+        assertCacheIntact(repo, prefs)
+    }
+
+    @Test
+    fun `a String htmlUpdated leaves the cache untouched`() {
+        val (repo, prefs) = seeded()
+        repo.apply(mapOf("heading" to "New", "html" to "<p>new</p>", "htmlUpdated" to "9000"))
+        assertCacheIntact(repo, prefs)
+    }
+
+    @Test
+    fun `a fractional htmlUpdated leaves the cache untouched`() {
+        val (repo, prefs) = seeded()
+        repo.apply(mapOf("heading" to "New", "html" to "<p>new</p>", "htmlUpdated" to 9_000.5))
+        assertCacheIntact(repo, prefs)
+    }
+
+    @Test
+    fun `whole-valued Int and Double htmlUpdated still apply`() {
+        val (repo, prefs) = seeded()
+        repo.apply(mapOf("html" to "<p>int</p>", "htmlUpdated" to 4_000))
+        assertEquals(4_000L, prefs.getLong("html_at", -1L))
+        assertEquals("<p>int</p>", repo.info.value!!.html)
+        repo.apply(mapOf("html" to "<p>double</p>", "htmlUpdated" to 5_000.0))
+        assertEquals(5_000L, prefs.getLong("html_at", -1L))
+        assertEquals("<p>double</p>", repo.info.value!!.html)
+    }
+
+    @Test
+    fun `a map stamped exactly at the stored time is applied`() {
+        val (repo, _) = seeded()
+        repo.apply(mapOf("html" to "<p>tie</p>", "htmlUpdated" to 3_000L))
+        assertEquals("<p>tie</p>", repo.info.value!!.html)
+    }
+
     @Test
     fun `a dispensary map with no topics yields an empty topic list, not null`() {
         // Regression pin for DispensaryConfig.parse, which already behaves this way.
@@ -79,7 +153,7 @@ class InfoRepositoryParseTest {
 }
 
 /** An in-memory [SharedPreferences], so the repository can run without an Android runtime. */
-private class MemoryPrefs : SharedPreferences {
+internal class MemoryPrefs : SharedPreferences {
     private val values = HashMap<String, Any?>()
 
     override fun getAll(): MutableMap<String, *> = HashMap(values)

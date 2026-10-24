@@ -41,12 +41,14 @@ class InfoRepository internal constructor(private val prefs: SharedPreferences) 
      * parser serves the database read and the HTTP one.
      */
     fun apply(info: Map<*, *>?) {
-        val heading = (info?.get("heading") as? String).orEmpty()
-        val body = (info?.get("lines") as? String).orEmpty()
-        val html = (info?.get("html") as? String).orEmpty()
+        // A field that is present but the wrong type means the payload is malformed: leave the cache
+        // exactly as it was. (The database SDK threw here, which refresh() caught before any write.)
+        val heading = textField(info, "heading") ?: return
+        val body = textField(info, "lines") ?: return
+        val html = textField(info, "html") ?: return
         // The console stamps removal as well as saving, so a removed banner still carries a time and
         // is not mistaken for a dispensary whose banner was never filled in.
-        val htmlAt = (info?.get("htmlUpdated") as? Number)?.toLong() ?: 0L
+        val htmlAt = timeField(info, "htmlUpdated") ?: return
         if (heading.isBlank() && body.isBlank() && html.isBlank() && htmlAt == 0L) return
 
         val editor = prefs.edit()
@@ -83,6 +85,29 @@ class InfoRepository internal constructor(private val prefs: SharedPreferences) 
             .apply()
         _info.value = readCached()
     }
+
+    /** Absent reads as empty; null means present but not a String. */
+    private fun textField(info: Map<*, *>?, key: String): String? =
+        when (val v = info?.get(key)) {
+            null -> ""
+            is String -> v
+            else -> null
+        }
+
+    /**
+     * Absent reads as 0; null means present but not a whole number. Any [Number] type is accepted
+     * because JSON over HTTP yields Int or Double, never Long.
+     */
+    private fun timeField(info: Map<*, *>?, key: String): Long? =
+        when (val v = info?.get(key)) {
+            null -> 0L
+            is Long, is Int, is Short, is Byte -> (v as Number).toLong()
+            is Double, is Float -> {
+                val d = (v as Number).toDouble()
+                if (d.isFinite() && d == Math.floor(d)) d.toLong() else null
+            }
+            else -> null
+        }
 
     private fun readCached(): OfficeInfo? {
         val html = prefs.getString(KEY_HTML, null)?.takeIf { it.isNotBlank() }
