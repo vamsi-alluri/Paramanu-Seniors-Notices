@@ -39,7 +39,37 @@ interface CodeManagementApi {
     suspend fun activate(code: String): CodeManagementResult
 }
 
-/** The server-controlled base URL, resolved through Remote Config by a later task. */
+/**
+ * Where the base URL comes from. The Remote Config SDK sits behind this, in the one file that is
+ * allowed to import it, so nothing here needs Android.
+ */
+fun interface CodeManagementBaseUrl {
+    /** The value in force, read locally with no network. [CodeManagementConfig.DEFAULT] until published. */
+    fun baseUrl(): String
+}
+
+/**
+ * A [CodeManagementApi] that looks the base URL up on every call and builds the real client for it.
+ *
+ * The URL is not known at construction: Remote Config fetches after the process starts, and a
+ * client built once would keep the empty default for the life of the process even after the key
+ * arrived. Building [HttpCodeManagementApi] per call is cheap (it holds no connection).
+ */
+class ResolvingCodeManagementApi(
+    private val source: CodeManagementBaseUrl,
+    private val build: (String) -> CodeManagementApi,
+) : CodeManagementApi {
+
+    override suspend fun status(code: String): CodeManagementResult = api().status(code)
+
+    override suspend fun activate(code: String): CodeManagementResult = api().activate(code)
+
+    // A failure to read the value is the same answer as an unpublished one: make no call.
+    private fun api(): CodeManagementApi =
+        build(runCatching { source.baseUrl() }.getOrDefault(CodeManagementConfig.DEFAULT))
+}
+
+/** The server-controlled base URL, read through Remote Config. */
 object CodeManagementConfig {
     const val KEY = "code_management_base_url"
 

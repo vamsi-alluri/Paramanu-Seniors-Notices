@@ -6,7 +6,6 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseAuthInvalidUserException
 import com.google.firebase.database.DataSnapshot
 import com.google.firebase.database.FirebaseDatabase
-import com.google.firebase.database.ServerValue
 import com.google.firebase.messaging.FirebaseMessaging
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.awaitResult
@@ -15,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
 import androidx.core.content.edit
 
@@ -22,11 +22,10 @@ import androidx.core.content.edit
  * Owns the one-time activation handshake, the entitlement check that gates every notice, and which
  * topics the phone is subscribed to.
  *
- * There is no server of ours anywhere in this flow. Redemption is a single write to Realtime
- * Database that the security rules either accept or refuse -- the rules are the validator. That is
- * what keeps the project on the no-cost plan and keeps a service-account credential out of the
- * picture entirely. The rules that make this safe live in `database.rules.json`; the client code
- * below is meaningless without them deployed.
+ * Redemption goes through the `code_management` Cloud Function over HTTPS, which claims the code
+ * atomically; the phone no longer holds a Realtime Database socket for it. [verify] still reads the
+ * database, and the security rules in `database.rules.json` stay deployed, so a handset on an older
+ * build keeps working through its direct write.
  *
  * Deliberately, no contact information is ever written. A claim is an anonymous Firebase UID
  * against a code, and nothing else.
@@ -34,6 +33,8 @@ import androidx.core.content.edit
 class ActivationRepository(
     private val context: Context,
     private val dispensaries: DispensaryRepository,
+    /** Makes the claim. Injected, as [AnalyticsConfig] takes its switch. */
+    private val api: CodeManagementApi,
 ) {
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -193,13 +194,9 @@ class ActivationRepository(
      */
     suspend fun redeem(rawCode: String): RedeemResult {
         lastOfflineCause = null
-        if (!ActivationCode.isValid(rawCode)) return RedeemResult.Mistyped
+        // Mistyped and SameCode are answered here, before any call: see RedeemPolicy.localAnswer.
+        RedeemPolicy.localAnswer(rawCode, storedCode)?.let { return it }
         val code = ActivationCode.normalise(rawCode)
-
-        // Retyping the code this phone already holds. Answered here rather than by the server: the
-        // rules would refuse it, but only as a generic permission denial, and the user would be
-        // told their code "may already have been used" while holding the slip it is printed on.
-        if (code == storedCode) return RedeemResult.SameCode
 
         return withTimeoutOrNull(NETWORK_TIMEOUT_MS.milliseconds) {
             try {
@@ -212,22 +209,21 @@ class ActivationRepository(
                         return@withTimeoutOrNull RedeemResult.Offline
                     }
 
-                // updateChildren rather than setValue, so the `issued` metadata the NGO wrote when
-                // it printed the slip survives the claim.
-                database.reference.child(CODES).child(code).updateChildren(
-                    mapOf(
-                        FIELD_USED_BY to uid,
-                        FIELD_ACTIVATED_AT to ServerValue.TIMESTAMP,
-                    )
-                ).awaitResult()
-
-                // Which dispensary the code belongs to decides what the phone is offered. Read after
-                // the claim, and allowed to fail: a claim that has succeeded must not be undone by a
-                // slow read, and the next verification fills this in any way.
-                val dispensary = runCatching {
-                    database.reference.child(CODES).child(code).child(FIELD_DISPENSARY).get()
-                        .awaitResult().getValue(String::class.java)
-                }.onFailure { Log.w(TAG, "Could not read the dispensary for $code", it) }.getOrNull()
+                // The claim is made by the code_management function, which authenticates with this
+                // account's token (hence the sign-in above) and answers with the code's dispensary.
+                // A retry of a claim this uid already won is answered as still theirs by the server.
+                val dispensary = when (val outcome = RedeemPolicy.claim(api, code)) {
+                    is ClaimOutcome.Claimed -> outcome.dispensary
+                    ClaimOutcome.Rejected -> {
+                        Log.w(TAG, "Redeem refused for $code")
+                        return@withTimeoutOrNull RedeemResult.NotAccepted
+                    }
+                    // Not a refusal: no definitive answer, so the patient is told to try again.
+                    ClaimOutcome.Unreachable -> {
+                        lastOfflineCause = OFFLINE_TRANSPORT
+                        return@withTimeoutOrNull RedeemResult.Offline
+                    }
+                }
 
                 // KEY_REVOKED is cleared here on purpose. A revoked device keeps its old code and
                 // UID so a console Enable can bring it back, but the user may instead be handed a
@@ -256,18 +252,14 @@ class ActivationRepository(
                 // notice a revocation whose broadcast was missed.
                 ActivationRefreshWorker.ensurePeriodic(context)
                 RedeemResult.Success
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                // The rules reject an unknown or already-claimed code as a permission denial, which
-                // is indistinguishable at this layer from any other refusal -- and to the user the
-                // distinction does not matter. A transport failure is a separate message because
-                // "try again" is useful advice and "ask for a new code" is not.
-                Log.w(TAG, "Redeem refused for $code", e)
-                if (isTransportFailure(e)) {
-                    lastOfflineCause = OFFLINE_TRANSPORT
-                    RedeemResult.Offline
-                } else {
-                    RedeemResult.NotAccepted
-                }
+                // Whatever got here (sign-in, local storage) is not the server refusing the code, so
+                // it is never NotAccepted: "try again" is useful advice, "ask for a new code" is not.
+                Log.w(TAG, "Redeem failed before an answer", e)
+                lastOfflineCause = OFFLINE_TRANSPORT
+                RedeemResult.Offline
             }
         } ?: run {
             lastOfflineCause = OFFLINE_TIMEOUT
@@ -397,15 +389,6 @@ class ActivationRepository(
             .onFailure { Log.w(TAG, "Unsubscribe from '$topic' failed", it) }
             .isSuccess
 
-    /**
-     * A refusal by the security rules is a real answer and must not be retried as if it were a
-     * network blip; anything else is treated as transport trouble.
-     */
-    private fun isTransportFailure(e: Exception): Boolean {
-        val message = (e.message ?: "").lowercase()
-        return "permission" !in message && "denied" !in message
-    }
-
     companion object {
         /**
          * Revoke, resume and banner changes. Held for as long as the phone holds a claim, revoked or
@@ -444,7 +427,6 @@ class ActivationRepository(
 
         private const val CODES = "codes"
         private const val FIELD_USED_BY = "usedBy"
-        private const val FIELD_ACTIVATED_AT = "activatedAt"
         private const val FIELD_REVOKED = "revoked"
         private const val FIELD_ISSUED = "issued"
         private const val FIELD_DISPENSARY = "dispensary"
