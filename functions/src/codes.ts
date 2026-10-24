@@ -92,11 +92,15 @@ export type RefusalReason = "unknown_code" | "not_issued" | "already_claimed" | 
 // refusal is decided from the value the transaction itself read, never a prior get().
 // Only usedBy and activatedAt are ever written; the rest of the node is carried over.
 // A database fault rejects (never a refusal), so the caller can answer 5xx.
-export async function claim(uid: string, code: string): Promise<StatusResponse | RefusalReason> {
+// `db` exists so a test can give each caller its own connection; production passes none.
+export async function claim(
+  uid: string,
+  code: string,
+  db: admin.database.Database = admin.database(),
+): Promise<StatusResponse | RefusalReason> {
   let refusal: RefusalReason | null = null;
   let alreadyMine = false;
-  const result = await admin
-    .database()
+  const result = await db
     .ref(`codes/${code}`)
     .transaction((current: Record<string, unknown> | null) => {
       refusal = null;

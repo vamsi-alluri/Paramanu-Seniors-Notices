@@ -93,16 +93,26 @@ describe.skipIf(!emulatorAvailable())("claim against the RTDB emulator", () => {
   });
 
   it("lets exactly one of two concurrent claims with different uids win", async () => {
+    // Each caller gets its own app, hence its own connection and local cache, as two
+    // function instances would. Within one app the SDK serialises transactions per path
+    // and the loser would abort locally, never reaching the server's compare-and-set.
     // Many rounds, each on its own fresh code, both claims in flight at once.
+    const second = admin.initializeApp(admin.app().options, "second");
+    const dbA = admin.database();
+    const dbB = admin.database(second);
     const rounds = Array.from({ length: 20 }, (_, i) => `race${i}`);
-    await Promise.all(rounds.map((c) => admin.database().ref(`codes/${c}`).set({ ...ISSUED })));
-    for (const code of rounds) {
-      const [a, b] = await Promise.all([claim("uid-a", code), claim("uid-b", code)]);
-      const results = [a, b];
-      expect(results.filter((r) => typeof r === "object")).toHaveLength(1);
-      expect(results.filter((r) => r === "already_claimed")).toHaveLength(1);
-      const winner = typeof a === "object" ? "uid-a" : "uid-b";
-      expect((await raw(code)).usedBy).toBe(winner);
+    await Promise.all(rounds.map((c) => dbA.ref(`codes/${c}`).set({ ...ISSUED })));
+    try {
+      for (const code of rounds) {
+        const [a, b] = await Promise.all([claim("uid-a", code, dbA), claim("uid-b", code, dbB)]);
+        const results = [a, b];
+        expect(results.filter((r) => typeof r === "object")).toHaveLength(1);
+        expect(results.filter((r) => r === "already_claimed")).toHaveLength(1);
+        const winner = typeof a === "object" ? "uid-a" : "uid-b";
+        expect((await raw(code)).usedBy).toBe(winner);
+      }
+    } finally {
+      await second.delete();
     }
   });
 });
