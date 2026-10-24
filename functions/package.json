@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
-    "test:emulator": "firebase emulators:exec --only database --project demo-paramanu \"vitest run\""
+    "test:emulator": "firebase emulators:exec --only database --project demo-paramanu \"vitest run --no-file-parallelism\""
   },
   "dependencies": {
     "firebase-admin": "^13.0.0",
