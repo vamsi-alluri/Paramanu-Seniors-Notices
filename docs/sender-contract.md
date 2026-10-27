@@ -136,7 +136,7 @@ the app rather than informing its user. Neither topic appears in Settings.
 |---|---|---|
 | `device-v1-<uid>` | `revoke`, `resume` | the install whose anonymous UID holds the claim, revoked included |
 | `banner-v1-<dispensaryId>` | `banner` | phones whose code names that dispensary, while not revoked |
-| `control-v2` | `configStale` | every install from 0.8.4, claimed or not, and kept while the app gate is closed |
+| `control-v2` | `configStale` | every install from 0.8.5, claimed or not, and kept while the app gate is closed |
 
 ```json
 { "message": { "topic": "device-v1-AbCdEf0123456789xyzUVW012345", "android": { "priority": "high" },
