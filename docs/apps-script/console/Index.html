@@ -153,21 +153,13 @@
                   letter-spacing: .1em; margin: 6mm 0; }
 
     /*
-      QR to the Play listing, embedded rather than fetched.
-      https://play.google.com/store/apps/details?id=org.paramanuseniorshealth.notices
-
-      A data URI on purpose: a slip printed from a chart API would come out with an empty box on
-      the day that service is slow or gone, and nobody would notice until the sheets were cut up.
-      The URL never changes, so the image is a constant and belongs in the file.
-
-      15mm across 41 modules is 0.37mm per module -- just above the ~0.33mm floor for reliable
-      scanning, and the smallest that survived decoding with blur and noise added. `pixelated`
-      keeps the module edges square when the printer rescales it; smoothing them costs contrast
-      at exactly the size where contrast is all there is.
+      The slip's activation link as a QR, drawn by qrSvg below. 15mm across 33 modules is 0.45mm
+      per module, comfortably above the ~0.33mm floor for reliable scanning. The SVG carries no
+      quiet zone of its own: the slip's white space is it, and the 2mm under it keeps the hint
+      clear of the four modules (1.8mm) the standard asks for. crispEdges keeps neighbouring
+      modules from leaving hairline gaps when the printer rescales them.
     */
-    .slip .qr { width: 15mm; height: 15mm; margin: 4mm auto 1mm; image-rendering: pixelated;
-                background-size: 100% 100%; background-repeat: no-repeat;
-                background-image: url("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAewAAAHsAQAAAAA4UaPNAAAChElEQVR42u2dUWoDMQxETS+w97+lbuCSZCPN2IV+BEpl3lJKmvX7MbPakSy7Y35yxQAHBwcH///4yOt6fhOPj3rr/vKajx8b/DU+usDB/x5/Cvu6n4D68JT0/fu6nw778zUYzYO31XzqOSO8vgteOtcxt/jRPPgRms/vLbbHD4PRPPgJmr/K5KyPwJzEefDz/HxKulxN3DE/01j8PHh7zUsp5vcf6jbg/TWvl8X5WRWbfAt4esvMg3f283foLj9TNl7fAjkSzYM3j/Mj16GyShPvMTHEw49aC0Pz4H3jvGav4U9EjAzvJfvAz4O3z2HLur9FXvF/WhorrwNmHryntwmz63tgN7c/hrwRmHnwrt5G47m6d0ts/S5+Hrx3DhvD1qT8lvXbjPI/aB68sZ/3pViV+hr2NfKjefDWmvfU1YJ/Dl46itE8eOe6zRrVlwchV6l0uQrNg7fNYa2R8ppLL1n5eclz8TbgreO8rq5mzN86yta7aB68d90mrCyz9A9ruUaMEDMP3ljzQ/Z67zu+a+1VN56jefDW3ka2hKilqWR22EkIeBvwxnE+w/uU9gO3PdpXKd2VzDx44zi/uh2v2OyeB82Dt9a8yVvbKTWl3U/CQfPgTTW/LMJGmfl9z6CbfGYevKvmTfCXVeyHdxdXCkCcBz8izq+WRlpubGMsfh68dd1mO/eg6pZRB7dqUzFxHrx9DpsGPnw/lHdaLmfdoHnwxt5maZ7f6jbackCcBz8hh/Worq8AbU4oP0+cBz9L8/tOwCrjXLpzlpkHP0HzejSxntRaOW+k+Wfmwdv7+eV0SivvxHZeN5oH71+38SObbGVqKeOjefC+muffz4GDg4Ofi38DeSsbjh7jBEAAAAAASUVORK5CYII="); }
+    .slip .qr { display: block; width: 15mm; height: 15mm; margin: 4mm auto 2mm; }
     .slip .qrhint { font-size: 8pt; color: #333; }
   }
 </style>
@@ -682,11 +674,12 @@
     document.getElementById('includePrinted').disabled = !PRINTING_ENABLED;
     document.getElementById('printOff').hidden = PRINTING_ENABLED;
     document.getElementById('slips').innerHTML = PRINTABLE.map(function (r) {
-      // The QR is secondary and sits below: the code is what the person needs, and someone who
-      // already has the app should never have to work out that the square is not for them.
+      // The QR is secondary and sits below: the code is what the person needs. It carries this
+      // slip's own activation link, so a scan opens the app with the code filled in, and on a phone
+      // without the app it opens the website's page showing the code and where to install from.
       return '<div class="slip"><div>Paramanu Seniors Notices</div><div class="code">' + r.formatted +
-             '</div><div>Open the app and type this code.<br>It works once.</div>' +
-             '<div class="qr"></div><div class="qrhint">No app yet? Scan to install it.</div></div>';
+             '</div><div>Open the app and type this code.<br>It works once.</div>' + slipQr(r.code) +
+             '<div class="qrhint">Or scan to fill the code in.<br>No app yet? The scan shows where to get it.</div></div>';
     }).join('');
   }
 
@@ -755,6 +748,10 @@
         if (r.revoked) actions.push(actionButton('Enable', 'enable', r.code));
         else if (r.claimed) actions.push(actionButton('Disable', 'disable', r.code));
         if (r.claimed || r.revoked) actions.push(actionButton('Unlink phone', 'unlink', r.code));
+        // Unused only. A Printed code already has a slip out there, so sending a link as well would
+        // hand one code to two people. The reserved review code is left out for the reason printing
+        // leaves it out.
+        if (status === 'unused' && !r.reserved) actions.push(actionButton('Copy link', 'copyLink', r.code));
         actions.push(actionButton('Edit note', 'editNote', r.code));
         if (h) {
           actions.push(actionButton('Edit holder', 'editHolder', r.code));
@@ -897,6 +894,242 @@
            label + '</button>';
   }
 
+  // No trailing slash. The site serves the page at /activation/, but app builds up to 0.8.2 only
+  // open the bare path and send the slashed one to the browser.
+  var ACTIVATION_LINK = 'https://paramanuseniorshealth.org/activation?code=';
+
+  /*
+    QR codes for the slips, drawn here rather than fetched: a slip printed from a chart API would
+    come out with an empty box on the day that service is slow or gone, and nobody would notice
+    until the sheets were cut up.
+
+    Byte mode at error correction M, versions 1 to 6 only. The activation link is 58 bytes, which
+    is version 4 (33 modules); version 6 holds 106, and past that the symbol needs version-info
+    blocks this does not draw. Every block at M in those versions is the same size, which keeps the
+    interleaving to two loops.
+  */
+  // Per version: total codewords, error-correction codewords per block, blocks, alignment centre.
+  var QR_VERSIONS = [null, [26, 10, 1, 0], [44, 16, 1, 18], [70, 26, 1, 22],
+                     [100, 18, 2, 26], [134, 24, 2, 30], [172, 16, 4, 34]];
+  var QR_MASKS = [
+    function (x, y) { return (x + y) % 2 === 0; },
+    function (x, y) { return y % 2 === 0; },
+    function (x, y) { return x % 3 === 0; },
+    function (x, y) { return (x + y) % 3 === 0; },
+    function (x, y) { return (Math.floor(x / 3) + Math.floor(y / 2)) % 2 === 0; },
+    function (x, y) { return x * y % 2 + x * y % 3 === 0; },
+    function (x, y) { return (x * y % 2 + x * y % 3) % 2 === 0; },
+    function (x, y) { return ((x + y) % 2 + x * y % 3) % 2 === 0; }
+  ];
+
+  // GF(256) over x^8 + x^4 + x^3 + x^2 + 1, for the Reed-Solomon codewords.
+  var GF_EXP = [], GF_LOG = [];
+  (function () {
+    for (var i = 0, x = 1; i < 255; i++) {
+      GF_EXP[i] = x;
+      GF_LOG[x] = i;
+      x <<= 1;
+      if (x & 256) x ^= 0x11d;
+    }
+  })();
+  function gfMul(a, b) { return a && b ? GF_EXP[(GF_LOG[a] + GF_LOG[b]) % 255] : 0; }
+
+  /** The error-correction codewords for one block: the remainder of dividing by the generator. */
+  function rsRemainder(data, degree) {
+    var gen = [], root = 1, i, j;
+    for (i = 0; i < degree; i++) gen.push(i === degree - 1 ? 1 : 0);
+    for (i = 0; i < degree; i++) {
+      for (j = 0; j < degree; j++) gen[j] = gfMul(gen[j], root) ^ (j + 1 < degree ? gen[j + 1] : 0);
+      root = gfMul(root, 2);
+    }
+    var rem = gen.map(function () { return 0; });
+    data.forEach(function (b) {
+      var factor = b ^ rem.shift();
+      rem.push(0);
+      for (var k = 0; k < degree; k++) rem[k] ^= gfMul(gen[k], factor);
+    });
+    return rem;
+  }
+
+  /**
+   * The QR symbol for an ASCII string, as rows of booleans (true is dark), without the quiet zone.
+   * The mask is the one the standard's penalty rules pick, unless one is forced.
+   */
+  function qrMatrix(text, forceMask) {
+    var version = 1;
+    while (version < QR_VERSIONS.length && text.length > (QR_VERSIONS[version][0] -
+           QR_VERSIONS[version][1] * QR_VERSIONS[version][2]) - 2) version++;
+    if (version === QR_VERSIONS.length) throw new Error('Too long for a slip QR: ' + text);
+    var spec = QR_VERSIONS[version], total = spec[0], ecLen = spec[1], blocks = spec[2];
+    var dataLen = total - ecLen * blocks;
+
+    // Mode 0100 (byte), an 8-bit count, the bytes, then the terminator and padding.
+    var bits = [];
+    var put = function (value, n) { for (var i = n - 1; i >= 0; i--) bits.push((value >>> i) & 1); };
+    put(4, 4);
+    put(text.length, 8);
+    for (var i = 0; i < text.length; i++) {
+      if (text.charCodeAt(i) > 127) throw new Error('Not ASCII: ' + text);
+      put(text.charCodeAt(i), 8);
+    }
+    put(0, Math.min(4, dataLen * 8 - bits.length));
+    while (bits.length % 8) bits.push(0);
+    var data = [];
+    for (i = 0; i < bits.length; i += 8) data.push(parseInt(bits.slice(i, i + 8).join(''), 2));
+    for (var pad = 0xec; data.length < dataLen; pad ^= 0xec ^ 0x11) data.push(pad);
+
+    // Split into blocks, add each block's error correction, and interleave column by column.
+    var perBlock = dataLen / blocks, dataBlocks = [], ecBlocks = [], b;
+    for (b = 0; b < blocks; b++) {
+      dataBlocks.push(data.slice(b * perBlock, (b + 1) * perBlock));
+      ecBlocks.push(rsRemainder(dataBlocks[b], ecLen));
+    }
+    var codewords = [];
+    for (i = 0; i < perBlock; i++) for (b = 0; b < blocks; b++) codewords.push(dataBlocks[b][i]);
+    for (i = 0; i < ecLen; i++) for (b = 0; b < blocks; b++) codewords.push(ecBlocks[b][i]);
+
+    // Function patterns first, recording which modules they own so the data flows around them.
+    var size = 17 + version * 4, dark = [], fixed = [], x, y, dx, dy;
+    for (y = 0; y < size; y++) { dark.push([]); fixed.push([]); }
+    var set = function (x, y, on) { if (x >= 0 && y >= 0 && x < size && y < size) { dark[y][x] = on; fixed[y][x] = true; } };
+    for (i = 0; i < size; i++) { set(6, i, i % 2 === 0); set(i, 6, i % 2 === 0); }
+    [[3, 3], [size - 4, 3], [3, size - 4]].forEach(function (c) {
+      for (dy = -4; dy <= 4; dy++) for (dx = -4; dx <= 4; dx++) {
+        var d = Math.max(Math.abs(dx), Math.abs(dy));
+        set(c[0] + dx, c[1] + dy, d !== 2 && d !== 4);
+      }
+    });
+    if (spec[3]) {
+      for (dy = -2; dy <= 2; dy++) for (dx = -2; dx <= 2; dx++) {
+        set(spec[3] + dx, spec[3] + dy, Math.max(Math.abs(dx), Math.abs(dy)) !== 1);
+      }
+    }
+    // The format bits name the mask, so they are drawn into each masked candidate in turn.
+    var drawFormat = function (grid, mask) {
+      var rem = mask;  // M is 00 in the two level bits, so the mask is all of the five data bits
+      for (var i = 0; i < 10; i++) rem = (rem << 1) ^ ((rem >>> 9) * 0x537);
+      var f = ((mask << 10) | rem) ^ 0x5412;
+      var put = function (x, y, i) { grid[y][x] = i < 0 || ((f >>> i) & 1) === 1; fixed[y][x] = true; };
+      for (i = 0; i <= 5; i++) put(8, i, i);
+      put(8, 7, 6); put(8, 8, 7); put(7, 8, 8);
+      for (i = 9; i < 15; i++) put(14 - i, 8, i);
+      for (i = 0; i < 8; i++) put(size - 1 - i, 8, i);
+      for (i = 8; i < 15; i++) put(8, size - 15 + i, i);
+      put(8, size - 8, -1);  // the dark module, always dark
+    };
+    drawFormat(dark, 0);  // reserves the format areas before the data goes in
+
+    // Data in two-column strips from the bottom right, snaking up and down, skipping the timing column.
+    var n = 0;
+    for (var right = size - 1; right >= 1; right -= 2) {
+      if (right === 6) right = 5;
+      for (var v = 0; v < size; v++) for (var j = 0; j < 2; j++) {
+        x = right - j;
+        y = ((right + 1) & 2) === 0 ? size - 1 - v : v;
+        if (fixed[y][x]) continue;
+        dark[y][x] = n < codewords.length * 8 && ((codewords[n >>> 3] >>> (7 - (n & 7))) & 1) === 1;
+        n++;
+      }
+    }
+
+    var masked = function (m) {
+      var out = dark.map(function (row, y) {
+        return row.map(function (on, x) { return fixed[y][x] ? on : on !== QR_MASKS[m](x, y); });
+      });
+      drawFormat(out, m);
+      return out;
+    };
+    if (forceMask !== undefined) return masked(forceMask);
+    var best = null, bestScore = Infinity;
+    for (var m = 0; m < 8; m++) {
+      var candidate = masked(m), score = qrPenalty(candidate);
+      if (score < bestScore) { best = candidate; bestScore = score; }
+    }
+    return best;
+  }
+
+  /** The standard's four penalty rules: long runs, 2x2 blocks, finder look-alikes, dark/light balance. */
+  function qrPenalty(m) {
+    var size = m.length, score = 0, darkCount = 0, x, y, i;
+    var lines = [];
+    for (i = 0; i < size; i++) {
+      lines.push(m[i]);
+      lines.push(m.map(function (row) { return row[i]; }));
+    }
+    lines.forEach(function (line) {
+      for (var start = 0; start < size;) {
+        var end = start;
+        while (end < size && line[end] === line[start]) end++;
+        if (end - start >= 5) score += 3 + (end - start - 5);
+        start = end;
+      }
+      var s = line.map(function (on) { return on ? '1' : '0'; }).join('');
+      for (var k = 0; k + 11 <= size; k++) {
+        var w = s.substr(k, 11);
+        if (w === '10111010000' || w === '00001011101') score += 40;
+      }
+    });
+    for (y = 0; y < size; y++) for (x = 0; x < size; x++) {
+      if (m[y][x]) darkCount++;
+      if (x + 1 < size && y + 1 < size && m[y][x] === m[y][x + 1] &&
+          m[y][x] === m[y + 1][x] && m[y][x] === m[y + 1][x + 1]) score += 3;
+    }
+    return score + Math.floor(Math.abs(darkCount * 100 / (size * size) - 50) / 5) * 10;
+  }
+
+  /** A slip's QR as inline SVG. Each run of dark modules in a row is one rectangle, to keep it small. */
+  function qrSvg(text) {
+    var m = qrMatrix(text), d = '';
+    m.forEach(function (row, y) {
+      for (var x = 0; x < row.length; x++) {
+        if (!row[x]) continue;
+        var run = 1;
+        while (row[x + run]) run++;
+        d += 'M' + x + ' ' + y + 'h' + run + 'v1h-' + run + 'z';
+        x += run - 1;
+      }
+    });
+    return '<svg class="qr" viewBox="0 0 ' + m.length + ' ' + m.length +
+           '" shape-rendering="crispEdges"><path d="' + d + '"/></svg>';
+  }
+
+  // Kept per code: the slips are redrawn on every refresh, and with "include already printed"
+  // ticked that is hundreds of symbols at a few milliseconds each.
+  var SLIP_QR = {};
+  function slipQr(code) {
+    return SLIP_QR[code] || (SLIP_QR[code] = qrSvg(ACTIVATION_LINK + code));
+  }
+
+  /**
+   * Puts a code's activation link on the clipboard, for sending on WhatsApp in place of a slip. On
+   * a phone with the app the link opens it with the code already in the field.
+   *
+   * execCommand first, while the click still counts as a user gesture: this page runs in Apps
+   * Script's sandboxed iframe, where the Clipboard API can be refused by permissions policy, and by
+   * the time its promise rejects the gesture is gone and execCommand would be refused as well.
+   */
+  function copyLink(code) {
+    var link = ACTIVATION_LINK + code;
+    var copied = function () { show('Link for ' + formatCode(code) + ' copied.', false); };
+
+    var box = document.createElement('textarea');
+    box.value = link;
+    box.setAttribute('readonly', '');
+    box.style.position = 'fixed';
+    box.style.opacity = '0';
+    document.body.appendChild(box);
+    box.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { /* refused; try the API below */ }
+    document.body.removeChild(box);
+    if (ok) return copied();
+
+    // Both refused: the link is shown, so it can still be copied by hand.
+    var refused = function () { show('Could not copy. The link is ' + link, true); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(link).then(copied, refused);
+    else refused();
+  }
+
   /** A server call that redraws on success, with a success message if one is given. */
   function run(message) {
     return google.script.run
@@ -912,9 +1145,11 @@
   function unlink(code) {
     if (!confirm(
       'Unlink the phone from ' + formatCode(code) + '?\n\n' +
-      'Do this only when that phone is gone: lost, replaced, the app reinstalled or its data cleared. ' +
-      'The code can then be typed on a new phone. The note and the holder stay.\n\n' +
-      'If a working phone still holds this code, unlinking cuts that phone off at its next check.'
+      'This returns the code to the pool: any phone with this slip can claim it, the old phone included. ' +
+      'Use it when the holder has moved to a new phone, or reinstalled the app or cleared its data. ' +
+      'The note and the holder stay.\n\n' +
+      'For a lost or stolen phone, Disable instead and give the holder a new slip.\n\n' +
+      'If a working phone still holds this code, unlinking cuts that phone off.'
     )) return;
     run(formatCode(code) + ' unlinked. It can be typed on a new phone.').unlinkPhone(code);
   }

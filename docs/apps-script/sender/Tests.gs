@@ -16,8 +16,7 @@
  *    drop the PIN from every send, and nothing would look wrong.
  *  - Sends go to TEST_TOPIC, the test dispensary's attachment topic (see TestSends.gs), so a phone
  *    holding a test-disp code shows the [selftest] notices and nobody else hears them. The
- *    credentials, the payload and the FCM response are all real. The control tests' revoke names
- *    the made-up code ZZZZZZZZ, which no phone holds, so it is ignored wherever it lands.
+ *    credentials, the payload and the FCM response are all real.
  *
  * To send to the real audience instead, set SEND_FOR_REAL to true. That reaches every activated
  * phone and cannot be undone, so it is off by default and should be turned back off afterwards.
@@ -314,119 +313,6 @@ function t_adminUrl_() {
   }
 }
 
-// ---------------------------------------------------------------- control messages
-
-function t_utf8Length_() {
-  t_eq_('utf8Length_ ascii', utf8Length_('Closed Friday'), 13);
-  t_eq_('utf8Length_ empty', utf8Length_(''), 0);
-  t_eq_('utf8Length_ null is zero', utf8Length_(null), 0);
-  // The case this exists for: a character count passes a Marathi banner that FCM then refuses.
-  t_eq_('utf8Length_ devanagari is three bytes a character', utf8Length_('बंद'), 9);
-  t_eq_('utf8Length_ emoji is four bytes', utf8Length_('🙏'), 4);
-}
-
-function t_controlRequest_() {
-  var request = controlRequest_('control-v1', { type: 'banner', html: '', at: 123 });
-  t_eq_('control request goes to the topic', request.message.topic, 'control-v1');
-  t_eq_('control request is high priority', request.message.android.priority, 'high');
-  t_ok_('control request has no notification block', !request.message.notification);
-  t_ok_('control values are strings', typeof request.message.data.at === 'string');
-  // Empty is how a removed banner is said, so it must survive the envelope.
-  t_eq_('an empty html is kept', request.message.data.html, '');
-  t_ok_('a null value is omitted',
-    !('code' in controlRequest_('x', { type: 'revoke', code: null }).message.data));
-}
-
-/** The decision the drain makes for each entry. Pure: no database, no FCM. */
-function t_controlDecide_() {
-  var held = { issued: 1, usedBy: 'uid' };
-  var revoked = { issued: 1, usedBy: 'uid', revoked: true };
-  var revoke = { type: 'revoke', code: 'A1B2C3D4', at: 50, by: 'a@x.org' };
-  var resume = { type: 'resume', code: 'A1B2C3D4', at: 60, by: 'a@x.org' };
-
-  t_eq_('a revoke for a revoked code is sent', controlDecide_('code_A1B2C3D4', revoke, revoked, null).send.type, 'revoke');
-  t_eq_('the revoke carries its stamp', controlDecide_('code_A1B2C3D4', revoke, revoked, null).send.at, 50);
-  t_ok_('a revoke for a restored code is dropped', !!controlDecide_('code_A1B2C3D4', revoke, held, null).drop);
-  t_ok_('a revoke for a deleted code is dropped', !!controlDecide_('code_A1B2C3D4', revoke, null, null).drop);
-
-  t_eq_('a resume for a held, live code is sent', controlDecide_('code_A1B2C3D4', resume, held, null).send.type, 'resume');
-  t_ok_('a resume for a code revoked again is dropped', !!controlDecide_('code_A1B2C3D4', resume, revoked, null).drop);
-  t_ok_('a resume for a code nobody holds is dropped', !!controlDecide_('code_A1B2C3D4', resume, { issued: 1 }, null).drop);
-
-  t_ok_('a malformed key is dropped', !!controlDecide_('code_a1b2', revoke, revoked, null).drop);
-  t_ok_('an unknown type is dropped', !!controlDecide_('code_A1B2C3D4', { type: 'ping', at: 1 }, revoked, null).drop);
-  t_ok_('an unstamped entry is dropped', !!controlDecide_('code_A1B2C3D4', { type: 'revoke' }, revoked, null).drop);
-
-  var banner = controlDecide_('banner_barc-vashi', { at: 70 }, null, { html: '<b>Closed</b>', htmlUpdated: 80 });
-  t_eq_('a banner sends what the dispensary holds now', banner.send.html, '<b>Closed</b>');
-  t_eq_('a banner says whose it is', banner.send.dispensary, 'barc-vashi');
-  t_eq_('a banner is stamped with the save', banner.send.at, 80);
-  t_eq_('a removed banner is sent as empty html',
-    controlDecide_('banner_barc-vashi', { at: 90 }, null, { htmlUpdated: 90 }).send.html, '');
-  t_ok_('an oversized banner is dropped rather than retried forever',
-    !!controlDecide_('banner_barc-vashi', { at: 1 }, null, { html: new Array(BANNER_MAX_BYTES + 2).join('x'), htmlUpdated: 1 }).drop);
-  t_ok_('a banner key that names no dispensary is dropped',
-    !!controlDecide_('banner', { at: 1 }, null, { htmlUpdated: 1 }).drop);
-}
-
-function t_pushControl_() {
-  // TOPIC_OVERRIDE is TEST_TOPIC for the whole suite, so this reaches only test phones -- and names
-  // a code none of them holds.
-  var name = pushControl_({ type: 'revoke', code: 'ZZZZZZZZ', at: Date.now() });
-  t_ok_('pushControl_ returns an FCM name', String(name).indexOf('projects/') === 0, String(name));
-}
-
-/**
- * Drains a seeded queue against TEST_TOPIC.
- *
- * Uses codes under /codes that this test creates and removes, because the drain re-reads each code
- * before broadcasting -- that re-read is the guard that stops a stale revoke cutting off whoever
- * claims a released code next, so a test that bypassed it would be testing nothing.
- *
- * Like the drain itself, this broadcasts anything genuinely queued at the moment it runs -- to
- * TEST_TOPIC, where only test phones hear it -- and clears it. Run it when nobody is using the console.
- */
-function t_controlDrain_() {
-  var live = 'ZZZZZZZZ';       // disabled: should be broadcast and cleared
-  var stale = 'YYYYYYYY';      // enabled since: should be dropped without sending
-  var junk = 'code_not-a-code';
-  var now = Date.now();
-
-  try {
-    firebase_('put', '/codes/' + live + '.json', { issued: now, usedBy: 'uid-selftest', revoked: true });
-    firebase_('put', '/codes/' + stale + '.json', { issued: now, usedBy: 'uid-selftest' });
-    firebase_('put', '/controlQueue/code_' + live + '.json', { type: 'revoke', code: live, at: now, by: 'test@example.org' });
-    firebase_('put', '/controlQueue/code_' + stale + '.json', { type: 'revoke', code: stale, at: now, by: 'test@example.org' });
-    firebase_('put', '/controlQueue/' + junk + '.json', { type: 'revoke', at: now, by: 'test@example.org' });
-
-    var result = controlDrain_();
-
-    t_eq_('drain broadcasts the disabled one', result.pushed, 1);
-    t_eq_('drain skips the enabled and the malformed', result.skipped, 2);
-    t_eq_('drain reports no failures', result.failed, 0);
-
-    t_ok_('a broadcast entry is cleared', firebase_('get', '/controlQueue/code_' + live + '.json') === null);
-    t_ok_('an enabled code is dropped without sending', firebase_('get', '/controlQueue/code_' + stale + '.json') === null);
-    t_ok_('a malformed key is discarded', firebase_('get', '/controlQueue/' + junk + '.json') === null);
-
-    // The guard that keeps a restore queued while its revoke was being sent: an entry replaced
-    // since it was read must be left for the next run.
-    firebase_('put', '/controlQueue/code_' + live + '.json', { type: 'resume', code: live, at: now + 5, by: 'test@example.org' });
-    controlClear_({ key: 'code_' + live, path: '/controlQueue/code_' + live, entry: { at: now } });
-    t_ok_('an entry replaced mid-send is not cleared', firebase_('get', '/controlQueue/code_' + live + '.json') !== null);
-    firebase_('delete', '/controlQueue/code_' + live + '.json');
-
-    // An empty queue must cost nothing and report nothing.
-    t_eq_('an empty queue pushes nothing', controlDrain_().pushed, 0);
-  } finally {
-    [live, stale].forEach(function (code) {
-      firebase_('delete', '/codes/' + code + '.json');
-      firebase_('delete', '/controlQueue/code_' + code + '.json');
-    });
-    firebase_('delete', '/controlQueue/' + junk + '.json');
-  }
-}
-
 function t_testConnection_() {
   var threw = false;
   try { testConnection(); } catch (e) { threw = true; }
@@ -457,11 +343,6 @@ function runAllTests() {
     t_checkPin_();
     t_pinSwitch_();
     t_sendNotice_(created);
-    t_utf8Length_();
-    t_controlRequest_();
-    t_controlDecide_();
-    t_pushControl_();
-    t_controlDrain_();
     t_labelOrder_();
     t_messageLinks_();
     t_attachmentKind_();

@@ -334,12 +334,32 @@ private fun NoticesApp(
     // An activation link on a phone that already holds a working code says so and goes no further.
     // Revoked is deliberately excluded: that phone still holds a code but is not activated, and it
     // is exactly the phone a replacement link is meant for, so its link must reach the field.
+    //
+    // Judged once, when the link arrives, so keyed on the link alone. Keyed on alreadyActivated as
+    // well, redeeming the very code the link prefilled flipped it to true with the link still held,
+    // and the user who had just activated was told the phone was already activated.
+    //
+    // On a revoked phone the link goes to the code screen itself. Holding it was not enough: the
+    // phone sits on the notice list under the banner, and the field it filled was only reachable
+    // through Settings, so a replacement slip scanned there looked like a scan that did nothing.
+    // The phone's own stopped code too -- the old slip scanned again: if the code was unlinked
+    // rather than disabled, it is free and this phone may take it back, and only the server knows
+    // which (RedeemPolicy.localAnswer).
     val alreadyActivated = viewModel.activationCode != null && !revoked
-    LaunchedEffect(deepLinkCode, alreadyActivated) {
-        if (deepLinkCode != null && alreadyActivated) {
+    LaunchedEffect(deepLinkCode) {
+        if (deepLinkCode == null) return@LaunchedEffect
+        if (alreadyActivated) {
             viewModel.noteAlreadyActivated()
             onDeepLinkConsumed()
+        } else if (revoked) {
+            viewModel.enterNewCode()
         }
+    }
+
+    // A link whose code has been redeemed is spent. Dropped silently, so "Enter a new code" from
+    // Settings later opens an empty field rather than one holding the code this phone already used.
+    LaunchedEffect(alreadyActivated) {
+        if (alreadyActivated) onDeepLinkConsumed()
     }
 
     // A toast rather than a snackbar: the screen is about to be replaced by the code gate, and a
@@ -422,6 +442,9 @@ private fun NoticesApp(
                 onErrorDismissed = viewModel::dismissRedeemError,
                 prefill = deepLinkCode.orEmpty(),
                 hasCode = alreadyActivated,
+                // Only while revoked: a code kept after the server said there is no claim is not
+                // one the user can be told was stopped.
+                stoppedCode = if (revoked) viewModel.activationCode else null,
             )
         }
 

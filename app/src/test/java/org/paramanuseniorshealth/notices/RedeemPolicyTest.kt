@@ -85,6 +85,12 @@ class RedeemPolicyTest {
     }
 
     @Test
+    fun `a revoked phone's own code goes to the server`() {
+        assertNull(RedeemPolicy.localAnswer(good, good, revoked = true))
+        assertEquals(RedeemResult.Mistyped, RedeemPolicy.localAnswer("not a code", good, revoked = true))
+    }
+
+    @Test
     fun `a new valid code has no local answer`() {
         assertNull(RedeemPolicy.localAnswer(good, null))
         assertNull(RedeemPolicy.localAnswer(good, "SOMETHING"))
@@ -98,6 +104,14 @@ class RedeemResultMappingTest {
         assertEquals(RedeemResult.Success, RedeemPolicy.resultFor(ClaimOutcome.Claimed("main", null)))
         assertEquals(RedeemResult.NotAccepted, RedeemPolicy.resultFor(ClaimOutcome.Rejected))
         assertEquals(RedeemResult.Offline, RedeemPolicy.resultFor(ClaimOutcome.Unreachable))
+    }
+
+    @Test
+    fun `a refusal of a revoked phone's own code says it is the stopped code`() {
+        assertEquals(RedeemResult.SameCode, RedeemPolicy.resultFor(ClaimOutcome.Rejected, ownCode = true))
+        // Only a refusal: taking the code back, or a network failure, reads as for any code.
+        assertEquals(RedeemResult.Success, RedeemPolicy.resultFor(ClaimOutcome.Claimed(null, null), ownCode = true))
+        assertEquals(RedeemResult.Offline, RedeemPolicy.resultFor(ClaimOutcome.Unreachable, ownCode = true))
     }
 
     @Test

@@ -146,14 +146,15 @@ class NoticeMessagingService : FirebaseMessagingService() {
     /**
      * Acts on a revoke, a resume or a banner change.
      *
-     * Revoke and resume are topic broadcasts, so every phone on the control topic receives every one
-     * and only the holder of that code acts on it. Each is stamped with when staff acted, and a stamp
-     * no newer than the last one applied is ignored: FCM does not promise order, and a Disable
-     * delivered after the Enable that followed it would otherwise leave the phone off.
+     * Revoke and resume arrive on this install's own device topic ([ControlTopics.device]). The code
+     * is still checked, because the topic follows the UID and not the code: a revoke for a code this
+     * phone has since replaced must not stop the new one. Each is stamped with when the database
+     * changed, and a stamp no newer than the last one applied is ignored: FCM does not promise order,
+     * and a Disable delivered after the Enable that followed it would otherwise leave the phone off.
      *
-     * A resume needs no server check. The drain in the sender re-reads the code before sending one
-     * and drops it unless the code stands, and the daily verification still corrects a phone that
-     * somehow got it wrong.
+     * A resume needs no server check. The function re-reads the code before sending one and drops it
+     * unless the claim stands, and the periodic verification still corrects a phone that somehow got
+     * it wrong.
      */
     private suspend fun applyControl(app: NoticesApplication, control: ControlMessage) {
         val activation = app.activationRepository
@@ -161,6 +162,10 @@ class NoticeMessagingService : FirebaseMessagingService() {
             is ControlMessage.Revoke -> {
                 if (activation.storedCode != control.code) return
                 if (!activation.acceptControl(control.at)) return
+                // Unlinking a code that was already disabled sends a second revoke, for the phone
+                // that missed the first. One that did not miss it is told nothing again: the banner
+                // is already up, and a second "removed" notification would read as a new event.
+                if (activation.isRevoked) return
                 Log.i(TAG, "Revoke received for this device")
                 activation.suspendClaim()
                 app.announceRevocation()
@@ -175,9 +180,10 @@ class NoticeMessagingService : FirebaseMessagingService() {
                 app.repository.clearRevokedNotice()
             }
 
-            // Every dispensary's banner goes out on the one control topic, so a phone keeps only its
-            // own. A revoked phone receives nothing, the banner included; it catches up when it
-            // resumes and next comes to the foreground.
+            // Each dispensary's banner has its own topic, so this check only guards against a
+            // subscription not yet moved after the code's dispensary changed. A revoked phone is
+            // off the banner topic and applies nothing; it catches up when it resumes and next
+            // comes to the foreground.
             is ControlMessage.Banner -> {
                 if (control.dispensary != activation.dispensaryId) return
                 if (!activation.isActivated || activation.isRevoked) return

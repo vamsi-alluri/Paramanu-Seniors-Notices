@@ -66,7 +66,7 @@ from `docs/privacy-policy.md`. Keep the two pages distinct.
     │                                             │                     │
     │  RTDB   /codes  /dispensaries  /sent        │                     │
     │  Auth   anonymous only                      │                     │
-    │  FCM    notices-v1, control-v1              │                     │
+    │  FCM    notices-v1, device-v1-*, banner-v1-*│                     │
     └───────────────────┬─────────────────────────┘                     │
                         │  data-only, priority high                     │
                         ▼                                               ▼
@@ -146,10 +146,12 @@ and by whom, and the date they stay restorable until, with Restore. Adding a hol
 from the code's row. It replaced the separate Removed holders table, which made staff know in advance
 which table a name was in.
 
-Disable, Enable, removing or restoring a holder, and banner changes write `/controlQueue`; the
-sender's trigger broadcasts them on `control-v1` (§2.3). Unlink phone, Delete code and the purge
-clear anything pending, so nothing fires at the next phone to type the code. If that trigger is not installed, all three still work — they are recorded in the
-database, and phones catch up at their next daily check or app open. Only the speed depends on it.
+Disable, Enable, Unlink phone, Delete code, removing or restoring a holder, the purge, and banner
+changes are pushed by database triggers in `functions/src/control.ts`, which watch `/codes` and
+each dispensary's `info` and send to the holding install's `device-v1-<uid>` or the dispensary's
+`banner-v1-<id>`. The console writes nothing extra for them. If the triggers are not deployed, all of
+these still work — they are recorded in the database, and phones catch up at their next check or
+app open. Only the speed depends on them.
 
 The codes table has a search box (a code with or without its dash, a name, CHSS number, telephone
 digits, or note text — and a removed holder's details, for an On hold code) and a Status filter
@@ -164,8 +166,7 @@ After a save the box shows what the server stored, not what was typed.
 
 ### 2.3 Sender (Apps Script) — `docs/apps-script/sender/`
 
-`Code.gs`, `Index.html` (compose), `Poller.gs` (RSS trigger),
-`Control.gs` (control queue trigger), `Tests.gs`. Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `PROJECT_ID`, `STAFF_PIN`,
+`Code.gs`, `Index.html` (compose), `Poller.gs` (RSS trigger), `TestSends.gs`, `Tests.gs`. Script Properties: `SERVICE_ACCOUNT_JSON`, `DATABASE_URL`, `PROJECT_ID`, `STAFF_PIN`,
 `ALLOWED_EDITORS`, `DISPENSARY_ID`, optionally `REQUIRE_STAFF_PIN`, `ALERTS_FEED_URL` and
 `ADMIN_URL` (the console's `/exec` URL, linked at the far end of the top bar). Notices,
 from the compose page and the poller alike, go to the dispensary's first topic by `order` — read from
@@ -177,12 +178,9 @@ address outside `ALLOWED_EDITORS`, and returns the caller's email so every send 
 
 **There is no `doPost`.** The sender exposes no POST surface at all; `/exec` answers `doGet` only.
 
-`Control.gs` broadcasts for the console on a **one-minute trigger**: it reads `/controlQueue`,
-re-reads the code or the dispensary's banner to confirm the request still applies, calls `pushControl_`, and clears
-the entry only after FCM accepts it — and only if the
-console has not replaced it in the meantime. Install with `controlInstallTrigger()`, which also
-removes the old `revokerRun` trigger; inspect with `controlDryRun()`, which sends nothing. It replaced
-`Revoker.gs`, which must be deleted from the project.
+The sender sends notices only. Revoke, resume and banner pushes come from database triggers in
+`functions/src/control.ts` (runbook section 8); the one-minute `Control.gs` drain and the console's
+`/controlQueue` that fed it were removed on 2026-10-28.
 
 An earlier design had the console POST here with the staff member's OAuth token. It returns HTTP 401
 on every request — `ScriptApp.getOAuthToken()` cannot authorize a call into another project's web
@@ -244,8 +242,6 @@ to.
 /holders/{id}       code, name, chss, phone, createdAt, createdBy,
                     removedAt, removedBy, wasDisabled   (console only; erased by the purge)
 /holders/{id}/history/{id}  at, by, event, changes {field: {from, to}}
-/controlQueue/code_{CODE}  type, code, at, by          (console writes, sender's trigger drains)
-/controlQueue/banner       at, by
 /templates/{id}     label, title, body, updated       (console-managed, app cannot read)
 /sent/{logId}       title, body, topic, dispensary, sentAt, sentBy, fcmName, error
 /dispensaries/{id}  name, topics/{key}: topic, label, explainer, defaultOn, importance, order
@@ -276,7 +272,7 @@ the history remains for anyone who looks the code up directly.
 
 Rules (`database.rules.json`): deny by default. `/codes/$code` is readable and claim-writable by an
 authenticated user; `/codes` itself is **not** readable, so codes cannot be enumerated. `/dispensaries/{id}` is
-readable. `/templates`, `/sent`, `/audit`, `/controlQueue` and `/holders` are invisible to phones —
+readable. `/templates`, `/sent`, `/audit` and `/holders` are invisible to phones —
 which is why holder details live in `/holders` and never on `/codes/{CODE}`, which any signed-in
 phone holding the code can read.
 
@@ -336,7 +332,8 @@ recovery procedure, including recovering a device's UID with
 ### 5.7 Losing local storage orphans a claim
 The phone stores the code and anonymous UID locally and they are its only proof of ownership.
 Uninstall, data clear or a new phone strands the code as "in use" with nobody able to claim it —
-hence **Unlink phone** in the console. Unlinking a code a working phone still holds cuts that phone off.
+hence **Unlink phone** in the console, which returns the code to the pool for any phone to claim, the
+one it was unlinked from included. Unlinking a code a working phone still holds cuts that phone off.
 
 ### 5.8 `currentUser != null` proves nothing
 A cached ID token stays valid after the anonymous user is deleted. Only
@@ -395,13 +392,13 @@ problem that is already fixed.
 - **`Unknown` entitlement permits delivery.** Only a definitive `Revoked` suppresses a notice.
   Failing closed would mean someone in their eighties misses a closure notice because of a weak
   signal — worse than a revoked device seeing one more public announcement.
-- **Revocation and restore are both pushed, and cooperative.** The console queues a data-only
-  `{"type":"revoke"|"resume","code":…,"at":…}` for `control-v1`; the holding device applies it on
-  receipt, within about a minute. A revoked phone leaves every notice topic but keeps `control-v1`,
-  which is what lets a resume reach it. `at` orders them: FCM does not promise order, and a phone
-  ignores a stamp no newer than the last one it applied. It remains cooperative — the payload reaches
-  every device and only the holder acts — and it is still **not access control**. Every notice is
-  public anyway. A daily verification catches any phone that was switched off when it went out.
+- **Revocation and restore are both pushed, and cooperative.** A database trigger sends a data-only
+  `{"type":"revoke"|"resume","code":…,"at":…}` to the holding install's `device-v1-<uid>`, within
+  seconds of the change; the phone applies it on receipt. A revoked phone leaves every notice topic
+  but keeps its device topic, which is what lets a resume reach it. `at` orders them: FCM does not
+  promise order, and a phone ignores a stamp no newer than the last one it applied. It is still
+  **not access control** — the phone applies it itself, and every notice is public anyway. The
+  periodic verification catches any phone that was switched off when it went out.
 - **The banner is pushed with its html inside the message**, not as a prompt to fetch it: four
   hundred phones fetching at once is §5.14 again. That caps a banner at 3500 UTF-8 bytes, enforced in
   the console. The push names its dispensary and a phone applies only its own. A phone also rereads
@@ -422,8 +419,9 @@ problem that is already fixed.
 - **The PIN is a second factor, not the only one.** Every entry point calls `requireEditor_()`
   first, and the web apps are deployed "Anyone with a Google account" against an `ALLOWED_EDITORS`
   allowlist. `REQUIRE_STAFF_PIN=false` drops the PIN and relies on the allowlist alone.
-- **The console has no FCM credentials and is not given any.** It writes `/controlQueue` and the
-  sender's trigger broadcasts. Issuing codes and reaching 400 phones stay separate jobs (§2.3).
+- **The console has no FCM credentials and is not given any.** It writes the database; database
+  triggers in `functions/` push the change. Issuing codes and reaching 400 phones stay separate jobs
+  (§2.3).
 - **The PIN is never stored in the browser.** Typed per send, on purpose.
 - **Dynamic colour is off.** It derives the palette from the wallpaper; contrast is not negotiable
   for this audience.
@@ -558,8 +556,7 @@ the code screen.
   their own table, On hold, the monthly purge, search and a status filter, saved messages, sortable
   paged table, per-code audit history, a banner editor that is its own preview.
 - Sender: compose with live notification preview, saved-message chips, PIN, `sentBy` attribution,
-  sends to the dispensary's topic, and the control queue drain the console relies on. Same layout
-  as the console.
+  sends to the dispensary's topic. Same layout as the console.
 - Pushed revocation applied on receipt; entitlement verification moved off the message path into
   WorkManager; a revoked device keeps its notices behind a banner and recovers on Restore.
 - Android JVM unit tests: 193 across 23 suites as of 2026-10-16 (count it afresh with
@@ -582,14 +579,11 @@ the code screen.
    covered by unit tests, but none of it has run against Google's infrastructure or on a phone:
    - Paste `console/Tests.gs`, run `runConsoleTests` — expect `All 44 passed.` (34 when it was
      first run; the code-generation and printed-state rules added ten more since.)
-   - Paste `sender/Control.gs` and delete `Revoker.gs` from the project; run `controlDryRun()`
-     (sends nothing), then `controlInstallTrigger()`. No new Script Properties, and no redeploy for
-     the trigger — it is not served by `/exec` — but save `Code.gs` too, since the trigger calls it.
-   - Sender: run `runAllTests`. Redeploy only if `Code.gs` changed; `doPost` has been removed, so
-     the web app now answers `doGet` alone.
-   - Revoke a test code and watch `/controlQueue`: the entry should appear and be gone within a
-     minute. Then revoke another and Restore it immediately — one resume should go out, no revoke.
-     Save the banner with the app open on a phone and watch the header change within a minute.
+   - Sender: delete `Control.gs` and any `controlRun` trigger, then run `runAllTests`. Redeploy only
+     if `Code.gs` changed; the web app answers `doGet` alone.
+   - Revoke a test code a phone holds and look for `control revoke sent` in the `codecontrol` logs
+     (runbook section 8). Then Restore it — a resume should go out. Save the banner with the app
+     open on a phone and watch the header change within seconds.
    - Issue two codes, then revoke / restore / release / re-note them and check the history renders
      in order with the right email on each.
    - On a phone: activate, Disable from the console, confirm the tray notification arrives within
@@ -661,12 +655,15 @@ out; saying yes marks them `printed`, so the next run does not repeat them. Sayi
 unprinted and they come out again — the right way round, since an unmarked printed slip only wastes
 paper whereas a marked unprinted one goes quietly missing from every future run.
 
-Each slip carries the code at 30pt monospace, two lines of instruction, and a **15mm QR to the Play
-listing** with "No app yet? Scan to install it." The QR is a base64 PNG embedded in `Index.html`,
-not fetched from a chart service: the URL never changes, and a slip printed against a service that
-happened to be slow would come out with an empty box that nobody notices until the sheets are cut
-up. At 41 modules, 15mm gives 0.37mm per module — just above the ~0.33mm floor for reliable
-scanning, and the smallest size that still decoded with blur and noise added.
+Each slip carries the code at 30pt monospace, two lines of instruction, and a **15mm QR of that
+slip's own activation link** (`https://paramanuseniorshealth.org/activation?code=<CODE>`). Scanned
+on a phone with the app, it opens the app with the code filled in; without the app, it opens the
+website's activation page, which shows the code and links to the Play listing. The QR is drawn in
+`Index.html` by a small encoder (`qrMatrix`, byte mode at level M, versions 1–6), not fetched from
+a chart service: a slip printed against a service that happened to be slow would come out with an
+empty box that nobody notices until the sheets are cut up. The link is 58 bytes, version 4: 33
+modules at 15mm is 0.45mm per module, well above the ~0.33mm floor for reliable scanning. Slips
+printed before this change carry a QR to the Play listing instead, and still work.
 
 **Printed** is a fourth state alongside Unused, In use and Revoked, and it is derived from the audit
 rather than stored on `/codes` — a new sibling field there would break the app's claim write (§6a).
@@ -728,11 +725,16 @@ notices behind a banner telling the user to call the helpdesk with their code, a
 The code stays claimed by that device and cannot be handed to anyone else.
 
 **Let somebody back in** — console → Enable, on the *same* code. The phone resumes on its own
-within about a minute, pushed over `control-v1`; a phone that was switched off catches up when the
+within seconds, pushed to its device topic; a phone that was switched off catches up when the
 app is opened, or within a day. Do not issue a fresh slip for this; a revoked
-code is not consumed, and the user keeps their history. For a phone that is genuinely gone —
-uninstalled, replaced, data cleared — use Unlink phone instead, and the same code can be typed on
-the new phone.
+code is not consumed, and the user keeps their history. For a holder who has moved on — a new
+phone, the app uninstalled, data cleared — use Unlink phone instead, and the same code can be typed
+on the new phone.
+
+**Disable pauses a code; Unlink recycles it.** After Unlink the code is free, exactly like an
+unclaimed slip: whichever phone types it first claims it, the phone it was unlinked from included.
+So **a lost or stolen phone is Disabled, not unlinked**, and its holder gets a new slip — Disable is
+the only thing the server refuses for every phone.
 
 **Read a code's history** — console → the Last change column, then `history` on the row. Every
 issue, disable, enable, unlink, note and holder change, with who did it and when.
@@ -751,8 +753,7 @@ root, so quirk 5.6 never comes into it:
    for launch day, delete the `/holders` records by hand instead and Unlink the phone.
 2. **`/sent`** — deleted by hand in the data viewer. The phones' own notice history is local and
    unaffected.
-3. **`/controlQueue`** — deleted by hand. Anything missed is harmless anyway: the drain re-reads
-   `/codes` and drops an entry that no longer applies rather than broadcasting it.
+3. **`/controlQueue`** — no longer used by anything; delete it by hand if it still exists.
 4. **`/audit` stays.** It is the record of what was done and to which code, and it survives the
    codes themselves — `deleteCode` deliberately keeps it. Orphaned entries do not show in the table,
    which joins on `/codes`.
