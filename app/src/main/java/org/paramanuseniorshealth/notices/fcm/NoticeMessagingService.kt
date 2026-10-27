@@ -10,6 +10,8 @@ import org.paramanuseniorshealth.notices.activation.ActivationRepository
 import org.paramanuseniorshealth.notices.activation.ActivationState
 import org.paramanuseniorshealth.notices.activation.Importance
 import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
+import org.paramanuseniorshealth.notices.update.AppGate
+import org.paramanuseniorshealth.notices.update.ConfigRefreshWorker
 
 class NoticeMessagingService : FirebaseMessagingService() {
 
@@ -58,6 +60,12 @@ class NoticeMessagingService : FirebaseMessagingService() {
         // duration of this call, so blocking here guarantees the work lands before teardown.
         runBlocking {
             val app = applicationContext as NoticesApplication
+
+            // A closed app has left every notice topic, but unsubscribing is not instant.
+            if (app.evaluateGate() != AppGate.Open) {
+                Log.i(TAG, "Dropped a notice: the app is switched off or below the version floor")
+                return@runBlocking
+            }
 
             if (!isEntitled(app)) return@runBlocking
 
@@ -155,8 +163,18 @@ class NoticeMessagingService : FirebaseMessagingService() {
      * A resume needs no server check. The function re-reads the code before sending one and drops it
      * unless the claim stands, and the periodic verification still corrects a phone that somehow got
      * it wrong.
+     *
+     * A closed app gate acts on `configStale` alone, since that is how the gate is lifted. Anything
+     * else is a straggler from before it closed; the daily check catches up once it opens.
      */
     private suspend fun applyControl(app: NoticesApplication, control: ControlMessage) {
+        if (control is ControlMessage.ConfigStale) {
+            app.markRemoteConfigStale()
+            ConfigRefreshWorker.enqueue(app)
+            return
+        }
+        if (app.evaluateGate() != AppGate.Open) return
+
         val activation = app.activationRepository
         when (control) {
             is ControlMessage.Revoke -> {
@@ -189,6 +207,8 @@ class NoticeMessagingService : FirebaseMessagingService() {
                 if (!activation.isActivated || activation.isRevoked) return
                 app.infoRepository.applyPushed(control.html, control.at)
             }
+
+            is ControlMessage.ConfigStale -> Unit
         }
     }
 

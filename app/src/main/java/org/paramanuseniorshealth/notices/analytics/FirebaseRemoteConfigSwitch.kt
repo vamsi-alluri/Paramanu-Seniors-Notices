@@ -1,5 +1,6 @@
 package org.paramanuseniorshealth.notices.analytics
 
+import android.content.Context
 import android.util.Log
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig
 import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings
@@ -7,6 +8,8 @@ import org.paramanuseniorshealth.notices.BuildConfig
 import org.paramanuseniorshealth.notices.activation.CodeManagementBaseUrl
 import org.paramanuseniorshealth.notices.activation.CodeManagementConfig
 import org.paramanuseniorshealth.notices.data.awaitResult
+import org.paramanuseniorshealth.notices.update.AppGate
+import org.paramanuseniorshealth.notices.update.AppGateSource
 import kotlin.coroutines.cancellation.CancellationException
 
 /**
@@ -18,11 +21,39 @@ import kotlin.coroutines.cancellation.CancellationException
  * changes a few times a year. Remote Config fetches over HTTPS with no connection ceiling, and
  * answers [enabled] from local storage with no network at all.
  */
-class FirebaseRemoteConfigSwitch : AnalyticsSwitch, CodeManagementBaseUrl {
+class FirebaseRemoteConfigSwitch(context: Context) : AnalyticsSwitch, CodeManagementBaseUrl, AppGateSource {
 
     // Resolved on first use rather than at construction, so a failure to obtain the instance is
     // caught by the same guard as every other call instead of escaping the constructor.
     private val remoteConfig by lazy { FirebaseRemoteConfig.getInstance() }
+
+    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    /**
+     * The version floor, from local storage. Zero on any failure to read, so a broken read never
+     * locks anyone out.
+     */
+    override fun minVersionSupported(): Long = try {
+        remoteConfig.getLong(AppGate.KEY_MIN_VERSION)
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not read the version floor: ${e.message}")
+        AppGate.DEFAULT_MIN_VERSION
+    }
+
+    /** The whole-app kill, from local storage. False on any failure to read. */
+    override fun killed(): Boolean = try {
+        remoteConfig.getBoolean(AppGate.KEY_KILLED)
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not read the kill switch: ${e.message}")
+        AppGate.DEFAULT_KILLED
+    }
+
+    override fun markStale() {
+        prefs.edit().putBoolean(KEY_STALE, true).apply()
+    }
+
+    /** Whether a fetch is still owed after a stale mark: the config refresh worker retries on it. */
+    val isStale: Boolean get() = prefs.getBoolean(KEY_STALE, false)
 
     /**
      * The activated value, held by Remote Config in local storage. Unparseable or absent reads as
@@ -60,11 +91,20 @@ class FirebaseRemoteConfigSwitch : AnalyticsSwitch, CodeManagementBaseUrl {
      * local writes, and applying them here is what guarantees the fetch interval is in force before
      * the first fetch of the process -- on a debug build that interval is zero, and a fetch that
      * raced ahead of it would be throttled for hours instead.
+     *
+     * After [markStale] the fetch ignores the interval, once: the stale mark is cleared only when
+     * that fetch succeeds, so a failed one is owed again on the next call.
      */
     override suspend fun refresh(): Boolean = try {
         remoteConfig.setConfigSettingsAsync(SETTINGS).awaitResult()
         remoteConfig.setDefaultsAsync(DEFAULTS).awaitResult()
-        remoteConfig.fetchAndActivate().awaitResult()
+        if (isStale) {
+            remoteConfig.fetch(0).awaitResult()
+            remoteConfig.activate().awaitResult()
+            prefs.edit().putBoolean(KEY_STALE, false).apply()
+        } else {
+            remoteConfig.fetchAndActivate().awaitResult()
+        }
         enabled()
     } catch (e: CancellationException) {
         throw e
@@ -75,11 +115,15 @@ class FirebaseRemoteConfigSwitch : AnalyticsSwitch, CodeManagementBaseUrl {
 
     private companion object {
         const val TAG = "RemoteConfigSwitch"
+        const val PREFS = "remote_config"
+        const val KEY_STALE = "stale"
 
         /** Every key this file reads, so a device that has never fetched gets a value, not a missing key. */
         val DEFAULTS: Map<String, Any> = mapOf(
             AnalyticsConfig.KEY to AnalyticsConfig.DEFAULT,
             CodeManagementConfig.KEY to CodeManagementConfig.DEFAULT,
+            AppGate.KEY_MIN_VERSION to AppGate.DEFAULT_MIN_VERSION,
+            AppGate.KEY_KILLED to AppGate.DEFAULT_KILLED,
         )
 
         /**

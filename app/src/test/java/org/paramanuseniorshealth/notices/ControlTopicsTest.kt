@@ -19,6 +19,12 @@ class ControlTopicsTest {
     }
 
     @Test
+    fun `the config topic is control-v2`() {
+        // functions/src/config.ts sends configStale here.
+        assertEquals("control-v2", ControlTopics.CONFIG)
+    }
+
+    @Test
     fun `a name FCM would refuse is not subscribed at all`() {
         assertNull(ControlTopics.device(""))
         assertNull(ControlTopics.device("a/b"))

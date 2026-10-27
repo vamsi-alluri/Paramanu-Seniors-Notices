@@ -46,6 +46,9 @@ import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
 import org.paramanuseniorshealth.notices.ui.ActivationScreen
 import org.paramanuseniorshealth.notices.ui.AttachmentActions
+import org.paramanuseniorshealth.notices.ui.GateScreen
+import org.paramanuseniorshealth.notices.update.AppGate
+import org.paramanuseniorshealth.notices.update.PlayUpdatePrompt
 import org.paramanuseniorshealth.notices.ui.NoticeListScreen
 import org.paramanuseniorshealth.notices.ui.RevokedBanner
 import org.paramanuseniorshealth.notices.ui.NoticeViewModel
@@ -79,6 +82,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        // Observes this activity's lifecycle from here on; nothing else holds it.
+        PlayUpdatePrompt(this)
 
         persistFromNotificationIntent(intent)
         readActivationLink(intent)
@@ -92,11 +97,21 @@ class MainActivity : ComponentActivity() {
                 // common case: the user taps a notice while the app sits in the background.
                 val tapped by tappedLogId.collectAsStateWithLifecycle()
                 val linkCode by deepLinkCode.collectAsStateWithLifecycle()
-                NoticesApp(
-                    tappedLogId = tapped,
-                    deepLinkCode = linkCode,
-                    onDeepLinkConsumed = { deepLinkCode.value = null },
-                )
+                val gate by (application as NoticesApplication).appGate.collectAsStateWithLifecycle()
+                if (gate == AppGate.Open) {
+                    NoticesApp(
+                        tappedLogId = tapped,
+                        deepLinkCode = linkCode,
+                        onDeepLinkConsumed = { deepLinkCode.value = null },
+                    )
+                } else {
+                    // NoticesApp's resume hook is not composed here, so the gate re-reads its own:
+                    // a closed gate forces a fetch, and that fetch is what lifts it.
+                    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+                        (application as NoticesApplication).refreshRemoteConfig()
+                    }
+                    GateScreen(gate)
+                }
             }
         }
     }
@@ -374,12 +389,12 @@ private fun NoticesApp(
     // init, which survives a trip through recents -- so a user whose code had been restored had to
     // know to swipe the app away and reopen it, which nobody knows.
     //
-    // The analytics kill switch is re-read on the same event, so turning it off reaches a phone whose
-    // process has been alive for days and not only the next cold start. Not throttled here, because
-    // Remote Config already is: inside its fetch window this costs no network at all.
+    // The analytics switch and the app gate are re-read on the same event, so turning either reaches
+    // a phone whose process has been alive for days and not only the next cold start. Not throttled
+    // here, because Remote Config already is: inside its fetch window this costs no network at all.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.onResumed(context.applicationContext)
-        (context.applicationContext as NoticesApplication).refreshAnalyticsSwitch()
+        (context.applicationContext as NoticesApplication).refreshRemoteConfig()
     }
 
     // The permission prompt is deliberately not raised on the code screen: asking before the user

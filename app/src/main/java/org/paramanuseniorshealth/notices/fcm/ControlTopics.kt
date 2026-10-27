@@ -13,6 +13,14 @@ package org.paramanuseniorshealth.notices.fcm
  */
 object ControlTopics {
 
+    /**
+     * `configStale`, sent by functions/src/config.ts on every Remote Config publish, so a kill or a
+     * version floor reaches phones in minutes instead of at their next six-hourly fetch. Held by
+     * every install, claimed or not, and kept while the app gate is closed: it is how the gate is
+     * lifted too.
+     */
+    const val CONFIG = "control-v2"
+
     private const val DEVICE_PREFIX = "device-v1-"
     private const val BANNER_PREFIX = "banner-v1-"
 
