@@ -102,6 +102,11 @@ jobs:
       # Every function is named, never the whole codebase: a bare functions:default
       # would ask to delete anything deployed that is not in the source, which
       # --non-interactive turns into a failure. codeControl and bannerControl are the
-      # database triggers in functions/src/control.ts (runbook section 8).
+      # database triggers in functions/src/control.ts, configStale the Remote Config
+      # trigger in functions/src/config.ts (runbook section 8).
+      # --force because those three set retry: true, and the CLI asks before deploying
+      # a function with a failure policy; --non-interactive turns the question into a
+      # failure. It approves nothing else here: every function is named above, so there
+      # is no deletion for it to wave through.
       - name: Deploy functions
-        run: ./functions/node_modules/.bin/firebase deploy --only functions:default:codeManagement,functions:default:codeControl,functions:default:bannerControl,functions:default:configStale --project paramanu-seniors --non-interactive
+        run: ./functions/node_modules/.bin/firebase deploy --only functions:default:codeManagement,functions:default:codeControl,functions:default:bannerControl,functions:default:configStale --project paramanu-seniors --non-interactive --force
