@@ -136,6 +136,7 @@ the app rather than informing its user. Neither topic appears in Settings.
 |---|---|---|
 | `device-v1-<uid>` | `revoke`, `resume` | the install whose anonymous UID holds the claim, revoked included |
 | `banner-v1-<dispensaryId>` | `banner` | phones whose code names that dispensary, while not revoked |
+| `control-v2` | `configStale` | every install from 0.8.4, claimed or not, and kept while the app gate is closed |
 
 ```json
 { "message": { "topic": "device-v1-AbCdEf0123456789xyzUVW012345", "android": { "priority": "high" },
@@ -147,6 +148,10 @@ the app rather than informing its user. Neither topic appears in Settings.
 | `revoke` | `code`, `at`        | holding `code`, not already revoked: leaves the notice and banner topics, keeps its device topic, shows the banner |
 | `resume` | `code`, `at`        | holding `code` and revoked: rejoins the notice topics, clears the banner |
 | `banner` | `dispensary`, `html`, `at` | of that dispensary, not revoked: replaces the cached banner; `html: ""` means removed |
+| `configStale` | `at` | any: fetches Remote Config within 15 minutes, past its six-hour interval. Sent by `functions/src/config.ts` on every Remote Config publish; `at` is not used for ordering |
+
+While the app gate is closed (`app_killed`, or below `min_version_supported`) the phone holds only
+`control-v2`, acts only on `configStale`, and drops every notice that still reaches it.
 
 `control-v1`, which carried all three to every phone, is retired, and builds that know the topics
 above leave it at their next subscription sync. **Until the database rules close**, the triggers
