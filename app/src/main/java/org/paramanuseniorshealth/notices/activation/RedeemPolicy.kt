@@ -31,10 +31,14 @@ object RedeemPolicy {
     /**
      * What the patient is told. Only [ClaimOutcome.Rejected] can send them back to the counter;
      * an uncertain answer is [RedeemResult.Offline], "try again".
+     *
+     * [ownCode] is a revoked phone retyping the code it already held (see [localAnswer]). Refused,
+     * that is [RedeemResult.SameCode], which says why: still stopped, or taken by another phone since
+     * it was unlinked. "It may already have been used" would read as the slip being someone else's.
      */
-    fun resultFor(outcome: ClaimOutcome): RedeemResult = when (outcome) {
+    fun resultFor(outcome: ClaimOutcome, ownCode: Boolean = false): RedeemResult = when (outcome) {
         is ClaimOutcome.Claimed -> RedeemResult.Success
-        ClaimOutcome.Rejected -> RedeemResult.NotAccepted
+        ClaimOutcome.Rejected -> if (ownCode) RedeemResult.SameCode else RedeemResult.NotAccepted
         ClaimOutcome.Unreachable -> RedeemResult.Offline
     }
 
@@ -45,12 +49,16 @@ object RedeemPolicy {
     /**
      * The answers that need no server. Null means the code is worth sending.
      *
-     * Retyping the code this phone already holds is answered here rather than by the server, which
-     * would call it already used -- to somebody holding the very slip it is printed on.
+     * Retyping the code a working phone already holds is answered here: there is nothing to claim.
+     *
+     * A [revoked] phone's own code goes to the server instead, because only the server knows why it
+     * stopped. Unlinked, the code is free again and this phone may take it back -- the server claims
+     * it as for anyone. Still disabled, the server refuses, and [resultFor] turns that into SameCode.
+     * Answering it here meant an unlinked phone could never come back on its own slip.
      */
-    fun localAnswer(rawCode: String, storedCode: String?): RedeemResult? {
+    fun localAnswer(rawCode: String, storedCode: String?, revoked: Boolean = false): RedeemResult? {
         if (!ActivationCode.isValid(rawCode)) return RedeemResult.Mistyped
-        if (ActivationCode.normalise(rawCode) == storedCode) return RedeemResult.SameCode
+        if (ActivationCode.normalise(rawCode) == storedCode && !revoked) return RedeemResult.SameCode
         return null
     }
 

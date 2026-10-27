@@ -5,9 +5,10 @@ import org.paramanuseniorshealth.notices.activation.ActivationCode
 /**
  * Messages that manage the app rather than inform its user: data-only, no title, never drawn.
  *
- * They arrive on the control topic, which a phone holds for as long as it holds a claim -- revoked
- * included. That is what lets a restore reach a revoked phone at once instead of waiting for its
- * daily check. See docs/sender-contract.md.
+ * Revoke and resume arrive on the install's device topic, which a phone holds for as long as it
+ * holds a claim -- revoked included. That is what lets a restore reach a revoked phone at once
+ * instead of waiting for its next check. Banners arrive on the dispensary's banner topic. Both are
+ * sent by database triggers in functions/src/control.ts; see [ControlTopics].
  *
  * Kept as a pure function of the data map so it can be tested without FCM. The messaging service
  * checks this *before* it looks for a title, since a payload with no title is otherwise dropped as
@@ -15,7 +16,7 @@ import org.paramanuseniorshealth.notices.activation.ActivationCode
  */
 sealed interface ControlMessage {
 
-    /** When staff acted, in epoch millis. Orders messages that FCM may deliver out of order. */
+    /** When the database changed, in epoch millis. Orders messages that FCM may deliver out of order. */
     val at: Long
 
     /** Stop delivery to the phone holding [code]. */
@@ -25,9 +26,8 @@ sealed interface ControlMessage {
     data class Resume(val code: String, override val at: Long) : ControlMessage
 
     /**
-     * [dispensary]'s banner changed. An empty [html] means it was removed.
-     *
-     * Every dispensary's banner goes out on the one control topic, so the phone applies only its own.
+     * [dispensary]'s banner changed. An empty [html] means it was removed. Its [at] is the banner's
+     * htmlUpdated, the same stamp a read of the dispensary carries.
      */
     data class Banner(val dispensary: String, val html: String, override val at: Long) : ControlMessage
 

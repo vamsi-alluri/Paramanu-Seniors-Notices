@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.paramanuseniorshealth.notices.NoticesApplication
@@ -59,6 +60,7 @@ fun ActivationScreen(
     modifier: Modifier = Modifier,
     prefill: String = "",
     hasCode: Boolean = false,
+    stoppedCode: String? = null,
 ) {
     // Held unpunctuated. The dash is painted by CodeDashTransformation, so it cannot be deleted,
     // retyped, or land in the middle of a paste.
@@ -202,5 +204,31 @@ fun ActivationScreen(
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 24.dp),
         )
+
+        // The phone's own code when it has been stopped, however this screen was reached: from a
+        // replacement link or by hand from Settings. It says why the user is here, and sat beside
+        // the field it shows which code not to type. Below the button rather than above the field,
+        // so the one code on screen that does not work is never the first one read. Struck through
+        // as in Settings, so the meaning does not rest on seeing red.
+        if (stoppedCode != null) {
+            Text(
+                text = stringResource(R.string.activation_stopped_code_label),
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.padding(top = 24.dp),
+            )
+            Text(
+                text = ActivationCode.format(stoppedCode),
+                style = MaterialTheme.typography.titleLarge,
+                color = MaterialTheme.colorScheme.error,
+                textDecoration = TextDecoration.LineThrough,
+            )
+            Text(
+                text = stringResource(R.string.settings_code_revoked),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center,
+            )
+        }
     }
 }

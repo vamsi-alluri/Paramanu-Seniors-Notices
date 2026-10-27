@@ -57,6 +57,9 @@
                 <data android:scheme="https" />
                 <data android:host="paramanuseniorshealth.org" />
                 <data android:pathPattern="/activation" />
+                <!-- The site serves the page at /activation/ and redirects the bare path there, so a
+                     link copied out of a browser carries the slash. Without this it opens Firefox. -->
+                <data android:pathPattern="/activation/" />
             </intent-filter>
         </activity>
 

@@ -7,6 +7,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.awaitResult
 import org.paramanuseniorshealth.notices.fcm.ControlMessage
+import org.paramanuseniorshealth.notices.fcm.ControlTopics
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -167,19 +168,22 @@ class ActivationRepository(
      * Brings FCM into line with the claim, the dispensary and the stored choices. Safe to call on
      * every launch.
      *
-     * The control topic follows the claim alone, revoked or not: it is how a revoke, a resume and a
-     * banner change reach the phone, and a revoked phone is precisely the one waiting for a resume.
-     * The notice topics additionally wait for the claim to stand.
+     * The device topic follows the claim alone, revoked or not: it is how a revoke and a resume reach
+     * this phone, and a revoked phone is precisely the one waiting for a resume. The banner topic and
+     * the notice topics additionally wait for the claim to stand, since a revoked phone applies no
+     * banner either. See [ControlTopics].
      *
      * What was subscribed last time is remembered, so a topic the dispensary stops offering is
      * unsubscribed rather than left behind. A failed unsubscribe stays in that record and is tried
-     * again next time.
+     * again next time. That record is also how the retired `control-v1` is left: every build that
+     * subscribed to it recorded it, and nothing wants it now.
      */
     suspend fun syncSubscriptions() {
         val desired = buildSet {
             if (isActivated) {
-                add(CONTROL_TOPIC)
+                storedUid?.let(ControlTopics::device)?.let { add(it) }
                 if (!isRevoked) {
+                    dispensaryId?.let(ControlTopics::banner)?.let { add(it) }
                     dispensaries.current?.topics.orEmpty().filter { isTopicOn(it) }.forEach { add(it.topic) }
                     if (testingOn) addAll(TESTING_TOPICS)
                 }
@@ -203,8 +207,9 @@ class ActivationRepository(
     suspend fun redeem(rawCode: String): RedeemResult {
         lastOfflineCause = null
         // Mistyped and SameCode are answered here, before any call: see RedeemPolicy.localAnswer.
-        RedeemPolicy.localAnswer(rawCode, storedCode)?.let { return it }
+        RedeemPolicy.localAnswer(rawCode, storedCode, isRevoked)?.let { return it }
         val code = ActivationCode.normalise(rawCode)
+        val ownCode = code == storedCode
 
         return withTimeoutOrNull(NETWORK_TIMEOUT_MS.milliseconds) {
             try {
@@ -226,7 +231,7 @@ class ActivationRepository(
                     // an uncertain answer must reach the patient as Offline, never NotAccepted.
                     lastOfflineCause = RedeemPolicy.offlineCauseFor(outcome)
                     Log.w(TAG, "Redeem not completed: ${outcome::class.simpleName}")
-                    return@withTimeoutOrNull RedeemPolicy.resultFor(outcome)
+                    return@withTimeoutOrNull RedeemPolicy.resultFor(outcome, ownCode)
                 }
                 val dispensary = outcome.dispensary
 
@@ -342,7 +347,7 @@ class ActivationRepository(
      * could never come back, by any route, and the console's Enable button had nothing left to
      * restore. Keeping them means an Enable is noticed and the phone simply resumes.
      *
-     * The control topic is deliberately kept, so a resume can still reach this phone.
+     * The device topic is deliberately kept, so a resume can still reach this phone.
      *
      * Safe to call repeatedly: a second revoke broadcast for the same code changes nothing.
      */
@@ -388,13 +393,6 @@ class ActivationRepository(
             .isSuccess
 
     companion object {
-        /**
-         * Revoke, resume and banner changes. Held for as long as the phone holds a claim, revoked or
-         * not, and never shown in Settings: it is how the app is managed, not something a user
-         * chooses. Must match CONTROL_TOPIC in the sender's Code.gs.
-         */
-        const val CONTROL_TOPIC = "control-v1"
-
         /**
          * Delivery checks against real devices. Not dispensary topics, and hidden behind seven taps
          * on the version number in Settings.
