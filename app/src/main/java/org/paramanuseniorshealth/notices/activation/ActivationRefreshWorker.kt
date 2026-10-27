@@ -11,7 +11,6 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.google.firebase.database.FirebaseDatabase
 import org.paramanuseniorshealth.notices.NoticesApplication
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
@@ -58,10 +57,9 @@ class ActivationRefreshWorker(
                     } else {
                         activation.recordVerification(ActivationState.Active)
                     }
-                    // What the dispensary offers, over the connection this check has already opened.
-                    // A phone that is never opened would otherwise keep a topic that has been
-                    // withdrawn, or never hear about a new one.
-                    activation.dispensaryId?.let { app.dispensaryRepository.refresh(it) }
+                    // verify() has already applied the dispensary from its answer; bring the
+                    // subscriptions into line with it. A phone that is never opened would otherwise
+                    // keep a topic that has been withdrawn, or never hear about a new one.
                     activation.syncSubscriptions()
                     Result.success()
                 }
@@ -76,11 +74,6 @@ class ActivationRefreshWorker(
         } catch (e: Exception) {
             Log.w(TAG, "Refresh failed", e)
             Result.retry()
-        } finally {
-            // The SDK otherwise holds the socket open for about a minute of idleness, occupying a
-            // connection slot long after the answer has arrived.
-            runCatching { FirebaseDatabase.getInstance().goOffline() }
-                .onFailure { Log.w(TAG, "goOffline failed", it) }
         }
     }
 

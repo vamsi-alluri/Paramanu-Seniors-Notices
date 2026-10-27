@@ -1,0 +1,142 @@
+package org.paramanuseniorshealth.notices.activation
+
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
+
+/** What the `code_management` function says about a code. No `note` field, by design. */
+data class PublicCode(
+    val code: String,
+    val dispensary: String?,
+    val revoked: Boolean,
+    val activatedAt: Long?,
+)
+
+sealed interface CodeManagementResult {
+    /** The claim stands. [dispensary] is the server's dispensary node, absent when there is none. */
+    data class Active(val code: PublicCode, val dispensary: Map<*, *>?) : CodeManagementResult
+
+    /** The server said, unambiguously, that the code is revoked. */
+    data object Revoked : CodeManagementResult
+
+    /** The server refused an activation, with its reason. */
+    data class Refused(val reason: String) : CodeManagementResult
+
+    /**
+     * Anything not confidently understood: a 401, a 500, a timeout, a bad body, no user, no base
+     * URL. This is the default, and it must never be read as [Revoked] -- a token bug must not lock
+     * a patient out of clinic notices.
+     */
+    data object Inconclusive : CodeManagementResult
+}
+
+/** The strings the endpoint's health is queried by; an exhaustive `when`, so a new variant must be named here. */
+fun CodeManagementResult.analyticsName(): String = when (this) {
+    is CodeManagementResult.Active -> "active"
+    CodeManagementResult.Revoked -> "revoked"
+    is CodeManagementResult.Refused -> "refused"
+    CodeManagementResult.Inconclusive -> "inconclusive"
+}
+
+interface CodeManagementApi {
+    suspend fun status(code: String): CodeManagementResult
+    suspend fun activate(code: String): CodeManagementResult
+}
+
+/**
+ * Where the base URL comes from. The Remote Config SDK sits behind this, in the one file that is
+ * allowed to import it, so nothing here needs Android.
+ */
+fun interface CodeManagementBaseUrl {
+    /** The value in force, read locally with no network. [CodeManagementConfig.DEFAULT] until published. */
+    fun baseUrl(): String
+}
+
+/**
+ * A [CodeManagementApi] that looks the base URL up on every call and builds the real client for it.
+ *
+ * The URL is not known at construction: Remote Config fetches after the process starts, and a
+ * client built once would keep the empty default for the life of the process even after the key
+ * arrived. Building [HttpCodeManagementApi] per call is cheap (it holds no connection).
+ */
+class ResolvingCodeManagementApi(
+    private val source: CodeManagementBaseUrl,
+    private val build: (String) -> CodeManagementApi,
+) : CodeManagementApi {
+
+    override suspend fun status(code: String): CodeManagementResult = api().status(code)
+
+    override suspend fun activate(code: String): CodeManagementResult = api().activate(code)
+
+    // Off the main thread: Remote Config's first getter in a process is a blocking disk read, and
+    // the caller (redeem) runs on Main. A failure to read is the same answer as an unpublished
+    // URL: make no call. Cancellation must still pass through.
+    private suspend fun api(): CodeManagementApi = build(
+        withContext(Dispatchers.IO) {
+            try {
+                source.baseUrl()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                CodeManagementConfig.DEFAULT
+            }
+        }
+    )
+}
+
+/** The server-controlled base URL, read through Remote Config. */
+object CodeManagementConfig {
+    const val KEY = "code_management_base_url"
+
+    /** Empty until the function is deployed; empty means "make no call". */
+    const val DEFAULT = ""
+
+    /** Non-blank and https: the request carries a Bearer token, which must never go out in cleartext. */
+    fun isUsable(baseUrl: String): Boolean {
+        val url = baseUrl.trim()
+        return url.length > HTTPS.length && url.startsWith(HTTPS, ignoreCase = true)
+    }
+
+    private const val HTTPS = "https://"
+}
+
+/**
+ * The whole mapping policy, pure so a JVM test reaches every branch. Only an explicit, well-formed
+ * answer maps to anything but [CodeManagementResult.Inconclusive].
+ */
+object CodeManagementResponse {
+
+    fun parse(httpStatus: Int, body: Map<String, Any?>?): CodeManagementResult {
+        if (body == null) return CodeManagementResult.Inconclusive
+        return when (httpStatus) {
+            200 -> when (body["status"]) {
+                "active" -> active(body)
+                "revoked" -> CodeManagementResult.Revoked
+                else -> CodeManagementResult.Inconclusive
+            }
+            409 -> {
+                val reason = body["reason"]
+                if (body["status"] == "refused" && reason is String && reason.isNotBlank()) {
+                    CodeManagementResult.Refused(reason)
+                } else {
+                    CodeManagementResult.Inconclusive
+                }
+            }
+            else -> CodeManagementResult.Inconclusive
+        }
+    }
+
+    private fun active(body: Map<String, Any?>): CodeManagementResult {
+        val raw = body["code"] as? Map<*, *> ?: return CodeManagementResult.Inconclusive
+        val code = raw["code"] as? String ?: return CodeManagementResult.Inconclusive
+        val revoked = raw["revoked"] as? Boolean ?: return CodeManagementResult.Inconclusive
+        // "active" and "revoked" at once is a contradiction the client cannot interpret, so it is
+        // resolved in neither direction. The genuine revoke path is status=revoked above.
+        if (revoked) return CodeManagementResult.Inconclusive
+        val activatedAt = (raw["activatedAt"] as? Number)?.toLong()
+        return CodeManagementResult.Active(
+            PublicCode(code, raw["dispensary"] as? String, revoked, activatedAt),
+            body["dispensary"] as? Map<*, *>,
+        )
+    }
+}

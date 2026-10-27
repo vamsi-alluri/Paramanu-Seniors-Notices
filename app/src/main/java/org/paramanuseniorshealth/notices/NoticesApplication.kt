@@ -10,6 +10,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import org.paramanuseniorshealth.notices.activation.ActivationRefreshWorker
 import org.paramanuseniorshealth.notices.activation.ActivationRepository
+import org.paramanuseniorshealth.notices.activation.CodeManagementApi
+import org.paramanuseniorshealth.notices.activation.HttpCodeManagementApi
+import org.paramanuseniorshealth.notices.activation.ResolvingCodeManagementApi
 import org.paramanuseniorshealth.notices.analytics.Analytics
 import org.paramanuseniorshealth.notices.analytics.AnalyticsConfig
 import org.paramanuseniorshealth.notices.analytics.FirebaseAnalyticsSink
@@ -36,7 +39,21 @@ class NoticesApplication : Application() {
 
     val dispensaryRepository: DispensaryRepository by lazy { DispensaryRepository(this, infoRepository) }
 
-    val activationRepository: ActivationRepository by lazy { ActivationRepository(this, dispensaryRepository) }
+    /** The one Remote Config reader: it answers both the analytics switch and the function's base URL. */
+    private val remoteConfigSwitch by lazy { FirebaseRemoteConfigSwitch() }
+
+    /**
+     * Resolves the base URL on every call, because Remote Config fetches after the process starts.
+     * Until the key is published the URL is blank and every call is inconclusive without touching
+     * the network.
+     */
+    private val codeManagementApi: CodeManagementApi by lazy {
+        ResolvingCodeManagementApi(remoteConfigSwitch) { baseUrl -> HttpCodeManagementApi(baseUrl, analytics) }
+    }
+
+    val activationRepository: ActivationRepository by lazy {
+        ActivationRepository(this, dispensaryRepository, codeManagementApi)
+    }
 
     /**
      * When this process started.
@@ -59,7 +76,7 @@ class NoticesApplication : Application() {
      */
     fun markOpened(): Boolean = !openedInThisProcess.getAndSet(true)
 
-    val analyticsConfig by lazy { AnalyticsConfig(FirebaseRemoteConfigSwitch()) }
+    val analyticsConfig by lazy { AnalyticsConfig(remoteConfigSwitch) }
 
     val analytics by lazy { Analytics(FirebaseAnalyticsSink(this)) }
 

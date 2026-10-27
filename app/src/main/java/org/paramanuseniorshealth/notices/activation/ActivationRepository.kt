@@ -3,10 +3,6 @@ package org.paramanuseniorshealth.notices.activation
 import android.content.Context
 import android.util.Log
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.auth.FirebaseAuthInvalidUserException
-import com.google.firebase.database.DataSnapshot
-import com.google.firebase.database.FirebaseDatabase
-import com.google.firebase.database.ServerValue
 import com.google.firebase.messaging.FirebaseMessaging
 import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.awaitResult
@@ -15,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.time.Duration.Companion.milliseconds
 import androidx.core.content.edit
 
@@ -22,11 +19,10 @@ import androidx.core.content.edit
  * Owns the one-time activation handshake, the entitlement check that gates every notice, and which
  * topics the phone is subscribed to.
  *
- * There is no server of ours anywhere in this flow. Redemption is a single write to Realtime
- * Database that the security rules either accept or refuse -- the rules are the validator. That is
- * what keeps the project on the no-cost plan and keeps a service-account credential out of the
- * picture entirely. The rules that make this safe live in `database.rules.json`; the client code
- * below is meaningless without them deployed.
+ * Redemption goes through the `code_management` Cloud Function over HTTPS, which claims the code
+ * atomically, and [verify] asks the same endpoint, so the phone holds no Realtime Database socket for
+ * either. The security rules in `database.rules.json` stay deployed, so a handset on an older
+ * build keeps working through its direct write.
  *
  * Deliberately, no contact information is ever written. A claim is an anonymous Firebase UID
  * against a code, and nothing else.
@@ -34,11 +30,12 @@ import androidx.core.content.edit
 class ActivationRepository(
     private val context: Context,
     private val dispensaries: DispensaryRepository,
+    /** Makes the claim. Injected, as [AnalyticsConfig] takes its switch. */
+    private val api: CodeManagementApi,
 ) {
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private val auth: FirebaseAuth get() = FirebaseAuth.getInstance()
-    private val database: FirebaseDatabase get() = FirebaseDatabase.getInstance()
 
     val storedCode: String? get() = prefs.getString(KEY_CODE, null)
     val storedUid: String? get() = prefs.getString(KEY_UID, null)
@@ -76,6 +73,18 @@ class ActivationRepository(
 
     /** When the last definitive answer was obtained. Zero if there has never been one. */
     val lastVerifiedAt: Long get() = prefs.getLong(KEY_LAST_VERIFIED_AT, 0L)
+
+    /**
+     * When a status call was last made, whatever it answered -- unlike [lastVerifiedAt], which moves
+     * only for a definitive answer. It feeds [ActivationFreshness.shouldCall], and an attempt that
+     * came back Unknown has still spent a function execution. Zero if there has never been one.
+     */
+    val lastCalledAt: Long get() = prefs.getLong(KEY_LAST_CALLED_AT, 0L)
+
+    /** Stamps a status call as made now. Called by [verify] and by the view model after a redeem. */
+    fun noteCall() {
+        prefs.edit { putLong(KEY_LAST_CALLED_AT, System.currentTimeMillis()) }
+    }
 
     /**
      * The delivery gate: may this notice be shown?
@@ -193,13 +202,9 @@ class ActivationRepository(
      */
     suspend fun redeem(rawCode: String): RedeemResult {
         lastOfflineCause = null
-        if (!ActivationCode.isValid(rawCode)) return RedeemResult.Mistyped
+        // Mistyped and SameCode are answered here, before any call: see RedeemPolicy.localAnswer.
+        RedeemPolicy.localAnswer(rawCode, storedCode)?.let { return it }
         val code = ActivationCode.normalise(rawCode)
-
-        // Retyping the code this phone already holds. Answered here rather than by the server: the
-        // rules would refuse it, but only as a generic permission denial, and the user would be
-        // told their code "may already have been used" while holding the slip it is printed on.
-        if (code == storedCode) return RedeemResult.SameCode
 
         return withTimeoutOrNull(NETWORK_TIMEOUT_MS.milliseconds) {
             try {
@@ -212,22 +217,18 @@ class ActivationRepository(
                         return@withTimeoutOrNull RedeemResult.Offline
                     }
 
-                // updateChildren rather than setValue, so the `issued` metadata the NGO wrote when
-                // it printed the slip survives the claim.
-                database.reference.child(CODES).child(code).updateChildren(
-                    mapOf(
-                        FIELD_USED_BY to uid,
-                        FIELD_ACTIVATED_AT to ServerValue.TIMESTAMP,
-                    )
-                ).awaitResult()
-
-                // Which dispensary the code belongs to decides what the phone is offered. Read after
-                // the claim, and allowed to fail: a claim that has succeeded must not be undone by a
-                // slow read, and the next verification fills this in any way.
-                val dispensary = runCatching {
-                    database.reference.child(CODES).child(code).child(FIELD_DISPENSARY).get()
-                        .awaitResult().getValue(String::class.java)
-                }.onFailure { Log.w(TAG, "Could not read the dispensary for $code", it) }.getOrNull()
+                // The claim is made by the code_management function, which authenticates with this
+                // account's token (hence the sign-in above) and answers with the code's dispensary.
+                // A retry of a claim this uid already won is answered as still theirs by the server.
+                val outcome = RedeemPolicy.claim(api, code)
+                if (outcome !is ClaimOutcome.Claimed) {
+                    // The result and the cause both come from RedeemPolicy, where they are tested:
+                    // an uncertain answer must reach the patient as Offline, never NotAccepted.
+                    lastOfflineCause = RedeemPolicy.offlineCauseFor(outcome)
+                    Log.w(TAG, "Redeem not completed: ${outcome::class.simpleName}")
+                    return@withTimeoutOrNull RedeemPolicy.resultFor(outcome)
+                }
+                val dispensary = outcome.dispensary
 
                 // KEY_REVOKED is cleared here on purpose. A revoked device keeps its old code and
                 // UID so a console Enable can bring it back, but the user may instead be handed a
@@ -246,9 +247,11 @@ class ActivationRepository(
                 // Unknown for the first notice.
                 recordVerification(ActivationState.Active)
 
-                // What the dispensary offers, then subscribe to its defaults. Without the read first,
-                // a new phone would subscribe to nothing until the app was next opened.
-                dispensary?.let { dispensaries.refresh(it) }
+                // What the dispensary offers, then subscribe to its defaults. Without this first,
+                // a new phone would subscribe to nothing until the app was next opened. The node
+                // came back with the claim, so this opens no database connection; a missing or
+                // junk node leaves the cached list and banner as they were (DispensaryRepository.apply).
+                dispensary?.let { dispensaries.apply(it, outcome.node) }
                 syncSubscriptions()
 
                 // Start the daily check now rather than waiting for the next app start: on a phone
@@ -256,18 +259,14 @@ class ActivationRepository(
                 // notice a revocation whose broadcast was missed.
                 ActivationRefreshWorker.ensurePeriodic(context)
                 RedeemResult.Success
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                // The rules reject an unknown or already-claimed code as a permission denial, which
-                // is indistinguishable at this layer from any other refusal -- and to the user the
-                // distinction does not matter. A transport failure is a separate message because
-                // "try again" is useful advice and "ask for a new code" is not.
-                Log.w(TAG, "Redeem refused for $code", e)
-                if (isTransportFailure(e)) {
-                    lastOfflineCause = OFFLINE_TRANSPORT
-                    RedeemResult.Offline
-                } else {
-                    RedeemResult.NotAccepted
-                }
+                // Whatever got here (sign-in, local storage) is not the server refusing the code, so
+                // it is never NotAccepted: "try again" is useful advice, "ask for a new code" is not.
+                Log.w(TAG, "Redeem failed before an answer", e)
+                lastOfflineCause = OFFLINE_TRANSPORT
+                RedeemResult.Offline
             }
         } ?: run {
             lastOfflineCause = OFFLINE_TIMEOUT
@@ -294,48 +293,39 @@ class ActivationRepository(
      */
     suspend fun verify(): ActivationState {
         val code = storedCode ?: return ActivationState.NotActivated
-        val uid = storedUid ?: return ActivationState.NotActivated
+        if (storedUid == null) return ActivationState.NotActivated
 
         return withTimeoutOrNull(VERIFY_TIMEOUT_MS.milliseconds) {
             try {
-                // Forces a refresh against the server, which is the only way a deleted or disabled
-                // anonymous user is ever discovered. A cached ID token stays happily valid
-                // otherwise, so `currentUser != null` proves nothing at all.
-                val user = auth.currentUser ?: run {
-                    recordVerification(ActivationState.Revoked)
-                    return@withTimeoutOrNull ActivationState.Revoked
+                // FirebaseAuth restores the persisted user asynchronously, so a null here early in
+                // the process is a startup race, not a revocation. Not an answer: nothing persisted.
+                if (auth.currentUser == null) return@withTimeoutOrNull ActivationState.Unknown
+
+                // One HTTPS call, no database socket. The endpoint checks the ID token itself, so a
+                // deleted or disabled anonymous user is rejected there and arrives as Inconclusive
+                // -> Unknown. It can therefore never read as Revoked here: only the server's own
+                // explicit "revoked" does.
+                // Stamped before the call, not after: a slow or failed call has spent the execution
+                // all the same, and a resume landing while it is in flight must not start another.
+                noteCall()
+                val verdict = VerifyPolicy.check(api, code)
+
+                // Persisted only for a definitive answer, so the gate can answer the next notice
+                // without a connection. An inconclusive one leaves what is stored untouched.
+                if (verdict.persist) recordVerification(verdict.state)
+
+                if (verdict.state == ActivationState.Active) {
+                    verdict.dispensaryId?.let { id ->
+                        if (id != dispensaryId) prefs.edit { putString(KEY_DISPENSARY, id) }
+                    }
+                    // The dispensary arrived with the answer: apply it rather than read it again.
+                    (verdict.dispensaryId ?: dispensaryId)?.let { id ->
+                        dispensaries.apply(id, verdict.dispensaryNode)
+                    }
                 }
-                user.getIdToken(true).awaitResult()
-
-                val snapshot: DataSnapshot =
-                    database.reference.child(CODES).child(code).get().awaitResult()
-
-                val claimedBy = snapshot.child(FIELD_USED_BY).getValue(String::class.java)
-                val revoked = snapshot.child(FIELD_REVOKED).getValue(Boolean::class.java) == true
-                val issued = snapshot.child(FIELD_ISSUED).exists()
-
-                snapshot.child(FIELD_DISPENSARY).getValue(String::class.java)?.let { id ->
-                    if (id != dispensaryId) prefs.edit { putString(KEY_DISPENSARY, id) }
-                }
-
-                val state = when {
-                    revoked -> ActivationState.Revoked
-                    // Every code the console prints carries `issued`. A node without it was never
-                    // issued by the NGO, so the claim on it is not one we honor -- this catches
-                    // any self-minted code created before the rules refused to create them.
-                    !issued -> ActivationState.Revoked
-                    claimedBy == null -> ActivationState.Revoked   // claim erased by the NGO
-                    claimedBy != uid -> ActivationState.Revoked    // reissued to somebody else
-                    else -> ActivationState.Active
-                }
-                // Persisted here so the gate can answer the next notice without a connection.
-                recordVerification(state)
-                state
-            } catch (e: FirebaseAuthInvalidUserException) {
-                // Definitive: the anonymous account behind this claim no longer exists.
-                Log.i(TAG, "Anonymous user is gone; treating as revoked", e)
-                recordVerification(ActivationState.Revoked)
-                ActivationState.Revoked
+                verdict.state
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Verification inconclusive", e)
                 ActivationState.Unknown
@@ -397,15 +387,6 @@ class ActivationRepository(
             .onFailure { Log.w(TAG, "Unsubscribe from '$topic' failed", it) }
             .isSuccess
 
-    /**
-     * A refusal by the security rules is a real answer and must not be retried as if it were a
-     * network blip; anything else is treated as transport trouble.
-     */
-    private fun isTransportFailure(e: Exception): Boolean {
-        val message = (e.message ?: "").lowercase()
-        return "permission" !in message && "denied" !in message
-    }
-
     companion object {
         /**
          * Revoke, resume and banner changes. Held for as long as the phone holds a claim, revoked or
@@ -436,26 +417,21 @@ class ActivationRepository(
         private const val KEY_REVOKED = "revoked"
         private const val KEY_LAST_STATE = "last_state"
         private const val KEY_LAST_VERIFIED_AT = "last_verified_at"
+        private const val KEY_LAST_CALLED_AT = "last_called_at"
         private const val KEY_LAST_CONTROL_AT = "last_control_at"
         private const val KEY_SUBSCRIBED = "subscribed_topics"
         private const val KEY_TESTING = "testing_enabled"
 
         private fun topicKey(topic: String) = "topic_$topic"
 
-        private const val CODES = "codes"
-        private const val FIELD_USED_BY = "usedBy"
-        private const val FIELD_ACTIVATED_AT = "activatedAt"
-        private const val FIELD_REVOKED = "revoked"
-        private const val FIELD_ISSUED = "issued"
-        private const val FIELD_DISPENSARY = "dispensary"
-
         private const val NETWORK_TIMEOUT_MS = 20_000L
 
         // The values of lastOfflineCause. They are an analytics contract: the funnel is queried by
         // these exact strings, so they are not to be renamed or added to casually.
-        private const val OFFLINE_NO_UID = "no_uid"
-        private const val OFFLINE_TRANSPORT = "transport"
-        private const val OFFLINE_TIMEOUT = "timeout"
+        // Defined in RedeemPolicy, where a test pins the exact strings.
+        private const val OFFLINE_NO_UID = RedeemPolicy.CAUSE_NO_UID
+        private const val OFFLINE_TRANSPORT = RedeemPolicy.CAUSE_TRANSPORT
+        private const val OFFLINE_TIMEOUT = RedeemPolicy.CAUSE_TIMEOUT
 
         /**
          * Kept short: an inconclusive check costs nothing, because Unknown is permitted, and a person

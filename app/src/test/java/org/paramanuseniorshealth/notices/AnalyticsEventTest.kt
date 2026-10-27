@@ -4,6 +4,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.paramanuseniorshealth.notices.activation.CodeManagementResult
+import org.paramanuseniorshealth.notices.activation.PublicCode
+import org.paramanuseniorshealth.notices.activation.analyticsName
 import org.paramanuseniorshealth.notices.analytics.AnalyticsEvent
 
 class AnalyticsEventTest {
@@ -27,12 +30,39 @@ class AnalyticsEventTest {
         AnalyticsEvent.ActivationShown(hasCode = false),
         AnalyticsEvent.ActivationSubmitted,
         AnalyticsEvent.ActivationResult(result = "offline", offlineCause = "timeout"),
+        AnalyticsEvent.CodeManagementCall(operation = "status", outcome = "active", durationMs = 120L, httpStatus = 200),
     )
 
     @Test
-    fun `the variant list covers all thirteen events`() {
-        assertEquals(13, allEvents.size)
-        assertEquals(13, allEvents.map { it.name }.toSet().size)
+    fun `the variant list covers all fourteen events`() {
+        assertEquals(14, allEvents.size)
+        assertEquals(14, allEvents.map { it.name }.toSet().size)
+    }
+
+    @Test
+    fun `a code management call reports operation outcome duration and status`() {
+        val event = AnalyticsEvent.CodeManagementCall("activate", "refused", 340L, 409)
+        assertEquals("code_management_call", event.name)
+        assertEquals("activate", event.params["operation"])
+        assertEquals("refused", event.params["outcome"])
+        assertEquals(340L, event.params["duration_ms"])
+        assertEquals(409L, event.params["http_status"])
+        assertEquals(setOf("operation", "outcome", "duration_ms", "http_status"), event.params.keys)
+    }
+
+    @Test
+    fun `a code management call with no response omits http_status`() {
+        val event = AnalyticsEvent.CodeManagementCall("status", "inconclusive", 6_000L, null)
+        assertFalse(event.params.containsKey("http_status"))
+        assertEquals(setOf("operation", "outcome", "duration_ms"), event.params.keys)
+    }
+
+    @Test
+    fun `each code management result reports its published name`() {
+        assertEquals("active", CodeManagementResult.Active(PublicCode("A", null, false, null), null).analyticsName())
+        assertEquals("revoked", CodeManagementResult.Revoked.analyticsName())
+        assertEquals("refused", CodeManagementResult.Refused("x").analyticsName())
+        assertEquals("inconclusive", CodeManagementResult.Inconclusive.analyticsName())
     }
 
     @Test
@@ -106,7 +136,10 @@ class AnalyticsEventTest {
             // ACTION_VIEW -> link, else launcher.
             "source" to setOf("notification", "link", "launcher"),
             // AttachmentFetchEnd, at the end of the attachment worker's fetch.
-            "outcome" to setOf("fetched", "failed"),
+            // CodeManagementCall, from CodeManagementResult.analyticsName().
+            "outcome" to setOf("fetched", "failed", "active", "revoked", "refused", "inconclusive"),
+            // CodeManagementCall: the two routes HttpCodeManagementApi posts to.
+            "operation" to setOf("status", "activate"),
             // ActivationResult: the strings RedeemResult.analyticsName() reports. This pins the
             // strings; the exhaustive `when` in analyticsName() pins the coverage, failing to
             // compile when a variant is added. A new variant therefore needs an arm there first,
@@ -171,6 +204,7 @@ class AnalyticsEventTest {
             AnalyticsEvent.NoticeCardVisible(logId = null, visibleMs = 900L, hasImage = false, hasPdf = false, position = 1) to listOf("log_id", "notice_id"),
             AnalyticsEvent.ImageViewerClosed(logId = null, durationMs = 400L, maxScale = 1f) to listOf("log_id", "notice_id"),
             AnalyticsEvent.ActivationResult(result = "offline", offlineCause = null) to listOf("offline_cause"),
+            AnalyticsEvent.CodeManagementCall("status", "inconclusive", 10L, null) to listOf("http_status"),
         )
         for ((event, keys) in cases) {
             for (key in keys) {

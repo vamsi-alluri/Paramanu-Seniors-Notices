@@ -4,6 +4,8 @@ import android.util.Log
 import com.google.firebase.remoteconfig.FirebaseRemoteConfig
 import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings
 import org.paramanuseniorshealth.notices.BuildConfig
+import org.paramanuseniorshealth.notices.activation.CodeManagementBaseUrl
+import org.paramanuseniorshealth.notices.activation.CodeManagementConfig
 import org.paramanuseniorshealth.notices.data.awaitResult
 import kotlin.coroutines.cancellation.CancellationException
 
@@ -16,7 +18,7 @@ import kotlin.coroutines.cancellation.CancellationException
  * changes a few times a year. Remote Config fetches over HTTPS with no connection ceiling, and
  * answers [enabled] from local storage with no network at all.
  */
-class FirebaseRemoteConfigSwitch : AnalyticsSwitch {
+class FirebaseRemoteConfigSwitch : AnalyticsSwitch, CodeManagementBaseUrl {
 
     // Resolved on first use rather than at construction, so a failure to obtain the instance is
     // caught by the same guard as every other call instead of escaping the constructor.
@@ -34,6 +36,19 @@ class FirebaseRemoteConfigSwitch : AnalyticsSwitch {
     }
 
     /**
+     * The `code_management` base URL, from the same local storage and the same fetch as the switch.
+     * Kept in this file because it is the only one allowed to import Remote Config; the key rides
+     * the fetch [refresh] already makes, so it costs no extra request. Blank until published, and
+     * blank on any failure to read, both of which mean "make no call".
+     */
+    override fun baseUrl(): String = try {
+        remoteConfig.getString(CodeManagementConfig.KEY)
+    } catch (e: Exception) {
+        Log.w(TAG, "Could not read the code_management base URL: ${e.message}")
+        CodeManagementConfig.DEFAULT
+    }
+
+    /**
      * Fetches, activates, and answers with what is now in force.
      *
      * A failure is logged and rethrown: this is the only layer with an Android import, so it is
@@ -48,7 +63,7 @@ class FirebaseRemoteConfigSwitch : AnalyticsSwitch {
      */
     override suspend fun refresh(): Boolean = try {
         remoteConfig.setConfigSettingsAsync(SETTINGS).awaitResult()
-        remoteConfig.setDefaultsAsync(mapOf(AnalyticsConfig.KEY to AnalyticsConfig.DEFAULT)).awaitResult()
+        remoteConfig.setDefaultsAsync(DEFAULTS).awaitResult()
         remoteConfig.fetchAndActivate().awaitResult()
         enabled()
     } catch (e: CancellationException) {
@@ -60,6 +75,12 @@ class FirebaseRemoteConfigSwitch : AnalyticsSwitch {
 
     private companion object {
         const val TAG = "RemoteConfigSwitch"
+
+        /** Every key this file reads, so a device that has never fetched gets a value, not a missing key. */
+        val DEFAULTS: Map<String, Any> = mapOf(
+            AnalyticsConfig.KEY to AnalyticsConfig.DEFAULT,
+            CodeManagementConfig.KEY to CodeManagementConfig.DEFAULT,
+        )
 
         /**
          * Six hours in release: the owner's tolerance for a switch change reaching devices is

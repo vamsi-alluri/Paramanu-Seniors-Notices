@@ -63,6 +63,12 @@ enum class Importance { HIGH, LOW }
 object DispensaryConfig {
 
     /**
+     * The banner inside a dispensary node, which is what [org.paramanuseniorshealth.notices.data.InfoRepository.apply]
+     * takes. Handing it the whole node instead makes the banner silently disappear.
+     */
+    fun infoOf(node: Map<*, *>?): Map<*, *>? = node?.get("info") as? Map<*, *>
+
+    /**
      * Parses `/dispensaries/{id}` as Firebase hands it over: nested maps, numbers as Long.
      *
      * Returns null when there is no such dispensary, so a failed or empty read never replaces a

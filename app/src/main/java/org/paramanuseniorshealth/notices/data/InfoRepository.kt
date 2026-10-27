@@ -1,7 +1,7 @@
 package org.paramanuseniorshealth.notices.data
 
 import android.content.Context
-import com.google.firebase.database.DataSnapshot
+import android.content.SharedPreferences
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -17,12 +17,12 @@ import kotlinx.coroutines.flow.asStateFlow
  *
  * Edited in the code console, never in the app. A change reaches the phone two ways: pushed with the
  * html inside the message ([applyPushed]), and read along with the rest of the dispensary
- * ([applySnapshot]) when the app comes to the foreground, for a phone that was switched off when the
+ * ([apply]) when the app comes to the foreground, for a phone that was switched off when the
  * push went out.
  */
-class InfoRepository(context: Context) {
+class InfoRepository internal constructor(private val prefs: SharedPreferences) {
 
-    private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    constructor(context: Context) : this(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE))
 
     private val _info = MutableStateFlow(readCached())
 
@@ -36,14 +36,19 @@ class InfoRepository(context: Context) {
      */
     val info: StateFlow<OfficeInfo?> = _info.asStateFlow()
 
-    /** Applies `/dispensaries/{id}/info` as read by [DispensaryRepository]. */
-    fun applySnapshot(snapshot: DataSnapshot) {
-        val heading = snapshot.child("heading").getValue(String::class.java).orEmpty()
-        val body = snapshot.child("lines").getValue(String::class.java).orEmpty()
-        val html = snapshot.child("html").getValue(String::class.java).orEmpty()
+    /**
+     * Applies `/dispensaries/{id}/info` as read by [DispensaryRepository]. A plain map, so the same
+     * parser serves the database read and the HTTP one.
+     */
+    fun apply(info: Map<*, *>?) {
+        // A field that is present but the wrong type means the payload is malformed: leave the cache
+        // exactly as it was. (The database SDK threw here, which refresh() caught before any write.)
+        val heading = textField(info, "heading") ?: return
+        val body = textField(info, "lines") ?: return
+        val html = textField(info, "html") ?: return
         // The console stamps removal as well as saving, so a removed banner still carries a time and
         // is not mistaken for a dispensary whose banner was never filled in.
-        val htmlAt = snapshot.child("htmlUpdated").getValue(Long::class.java) ?: 0L
+        val htmlAt = timeField(info, "htmlUpdated") ?: return
         if (heading.isBlank() && body.isBlank() && html.isBlank() && htmlAt == 0L) return
 
         val editor = prefs.edit()
@@ -80,6 +85,29 @@ class InfoRepository(context: Context) {
             .apply()
         _info.value = readCached()
     }
+
+    /** Absent reads as empty; null means present but not a String. */
+    private fun textField(info: Map<*, *>?, key: String): String? =
+        when (val v = info?.get(key)) {
+            null -> ""
+            is String -> v
+            else -> null
+        }
+
+    /**
+     * Absent reads as 0; null means present but not a whole number. Any [Number] type is accepted
+     * because JSON over HTTP yields Int or Double, never Long.
+     */
+    private fun timeField(info: Map<*, *>?, key: String): Long? =
+        when (val v = info?.get(key)) {
+            null -> 0L
+            is Long, is Int, is Short, is Byte -> (v as Number).toLong()
+            is Double, is Float -> {
+                val d = (v as Number).toDouble()
+                if (d.isFinite() && d == Math.floor(d)) d.toLong() else null
+            }
+            else -> null
+        }
 
     private fun readCached(): OfficeInfo? {
         val html = prefs.getString(KEY_HTML, null)?.takeIf { it.isNotBlank() }
