@@ -18,8 +18,8 @@ android {
         applicationId "org.paramanuseniorshealth.notices"
         minSdk 26
         targetSdk 36
-        versionCode 20
-        versionName "0.8.4"
+        versionCode 21
+        versionName "0.8.5"
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -103,6 +103,10 @@ dependencies {
 
     // Play's in-app update prompt, driven by each release's priority. See update/PlayUpdatePrompt.
     implementation libs.play.app.update
+    // Not used directly. app-update pulls in fragment 1.1.0, and below 1.3.0 Fragment's own
+    // request codes can swallow an Activity Result -- PlayUpdatePrompt's launcher. Lint
+    // (InvalidFragmentVersionForActivityResult) fails the release build on it.
+    implementation libs.androidx.fragment
 
     implementation libs.androidx.room.runtime
     implementation libs.androidx.room.ktx

@@ -92,7 +92,7 @@ where there is one:
   envelope and one meaning. The new builds unsubscribe from it. The bridge goes when the rules
   close (plan phase 5).
 
-**Three levels of update pressure, and a kill switch.** *Built 2026-10-28 for 0.8.4; first designed
+**Three levels of update pressure, and a kill switch.** *Built 2026-10-28, shipped in 0.8.5; first designed
 here 2026-10-27 as a deferred version floor plus a `current_version` nudge.* Code in `update/`.
 
 - **Nudging is Play's release priority, not Remote Config.** Each release carries an in-app update
@@ -133,7 +133,7 @@ here 2026-10-27 as a deferred version floor plus a `current_version` nudge.* Cod
 - **The messaging service checks the gate before anything else**, from the activated values with no
   network, so a notice arriving while the app is closed does not wait on a fetch. Control messages
   other than `configStale` are ignored while the gate is closed; the daily check catches up after.
-- Only builds that carry the gate can be killed or floored: 0.8.4 is the first. Older builds go on
+- Only builds that carry the gate can be killed or floored: 0.8.5 is the first. Older builds go on
   as they are whatever Remote Config says.
 
 **The backend moves to Cloud Functions; the pages stay where they are.** The sender and console keep

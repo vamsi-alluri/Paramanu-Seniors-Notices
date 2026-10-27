@@ -390,7 +390,7 @@ problem that is already fixed.
 
 ## 6. Behavioural decisions worth preserving
 
-- **The app can be told to update, floored, or switched off** (from 0.8.4). Play's per-release
+- **The app can be told to update, floored, or switched off** (from 0.8.5). Play's per-release
   in-app update priority decides how hard an available update is asked for; Remote Config's
   `min_version_supported` (Number) and `app_killed` (Boolean) close the whole app behind one line
   and one button, with no notifications, keeping only `control-v2`. Every Remote Config publish

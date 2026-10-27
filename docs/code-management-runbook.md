@@ -358,7 +358,7 @@ Until a build that subscribes to `device-v1-<uid>` and `banner-v1-<id>` is out, 
 
 ## 9. Update pressure and the kill switch
 
-Design in `docs/decisions.md`, "Three levels of update pressure, and a kill switch". Only builds from 0.8.4 (versionCode 20) obey any of it.
+Design in `docs/decisions.md`, "Three levels of update pressure, and a kill switch". Only builds from 0.8.5 (versionCode 21) obey any of it.
 
 | Lever | Where | Effect |
 |---|---|---|
