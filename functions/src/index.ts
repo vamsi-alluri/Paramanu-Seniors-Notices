@@ -3,8 +3,10 @@ import * as admin from "firebase-admin";
 import { logger } from "firebase-functions";
 import { onValueWritten } from "firebase-functions/v2/database";
 import { onRequest } from "firebase-functions/v2/https";
+import { onConfigUpdated } from "firebase-functions/v2/remoteConfig";
 import { AuthError, verifyBearer } from "./auth";
 import { claim, statusFor } from "./codes";
+import { handleConfigUpdate } from "./config";
 import { handleBannerWrite, handleCodeWrite } from "./control";
 
 // Must match the Realtime Database region (paramanu-seniors-default-rtdb is in
@@ -193,4 +195,11 @@ export const bannerControl = onValueWritten(
       after: event.data.after.val(),
       eventId: event.id,
     }),
+);
+
+// configStale to every install on each Remote Config publish (src/config.ts). Publishes are rare
+// and hand-made, so one instance; retry for the same reason as the triggers above, and a repeat
+// costs each phone one extra fetch.
+export const configStale = onConfigUpdated({ region: REGION, maxInstances: 1, retry: true }, (event) =>
+  handleConfigUpdate({ at: eventMillis(event.time), eventId: event.id }),
 );

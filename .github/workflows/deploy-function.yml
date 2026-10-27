@@ -104,4 +104,4 @@ jobs:
       # --non-interactive turns into a failure. codeControl and bannerControl are the
       # database triggers in functions/src/control.ts (runbook section 8).
       - name: Deploy functions
-        run: ./functions/node_modules/.bin/firebase deploy --only functions:default:codeManagement,functions:default:codeControl,functions:default:bannerControl --project paramanu-seniors --non-interactive
+        run: ./functions/node_modules/.bin/firebase deploy --only functions:default:codeManagement,functions:default:codeControl,functions:default:bannerControl,functions:default:configStale --project paramanu-seniors --non-interactive
