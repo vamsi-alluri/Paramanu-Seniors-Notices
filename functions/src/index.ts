@@ -1,13 +1,17 @@
 import { IncomingMessage, ServerResponse } from "node:http";
 import * as admin from "firebase-admin";
 import { logger } from "firebase-functions";
+import { onValueWritten } from "firebase-functions/v2/database";
 import { onRequest } from "firebase-functions/v2/https";
 import { AuthError, verifyBearer } from "./auth";
 import { claim, statusFor } from "./codes";
+import { handleBannerWrite, handleCodeWrite } from "./control";
 
 // Must match the Realtime Database region (paramanu-seniors-default-rtdb is in
-// asia-southeast1) so the function sits next to the data it reads.
+// asia-southeast1) so the function sits next to the data it reads. Database
+// triggers must be deployed in the database's own region.
 const REGION = "asia-southeast1";
+const DATABASE_INSTANCE = "paramanu-seniors-default-rtdb";
 
 // Default app, once, from the runtime environment (Application Default
 // Credentials; project and database URL come from the environment). No key file.
@@ -155,3 +159,38 @@ const MAX_INSTANCES = 10;
 export const codeManagement = onRequest({ region: REGION, maxInstances: MAX_INSTANCES }, (req, res) => {
   handle(req, res);
 });
+
+// The database triggers behind pushed revokes, resumes and banners (src/control.ts).
+// They fire only when staff change a code or a banner -- a handful a day -- so two
+// instances is plenty, and each holds at most one RTDB connection for its re-read.
+// retry: a throw (FCM unavailable, a database fault) redelivers the event, and a
+// message sent twice is harmless because the phone ignores a stamp it has applied.
+const CONTROL_OPTIONS = { region: REGION, instance: DATABASE_INSTANCE, maxInstances: 2, retry: true };
+
+// The event's own time is the stamp the phone orders messages by. Every CloudEvent
+// carries one; Date.now() is only a guard against a malformed one.
+function eventMillis(time: string): number {
+  const at = Date.parse(time);
+  return Number.isFinite(at) ? at : Date.now();
+}
+
+export const codeControl = onValueWritten({ ...CONTROL_OPTIONS, ref: "/codes/{code}" }, (event) =>
+  handleCodeWrite({
+    code: event.params.code,
+    before: event.data.before.val(),
+    after: event.data.after.val(),
+    at: eventMillis(event.time),
+    eventId: event.id,
+  }),
+);
+
+export const bannerControl = onValueWritten(
+  { ...CONTROL_OPTIONS, ref: "/dispensaries/{dispensary}/info" },
+  (event) =>
+    handleBannerWrite({
+      dispensary: event.params.dispensary,
+      before: event.data.before.val(),
+      after: event.data.after.val(),
+      eventId: event.id,
+    }),
+);

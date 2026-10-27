@@ -99,5 +99,9 @@ jobs:
 
       # Runs the predeploy build from firebase.json. --only functions:... never
       # touches database rules.
-      - name: Deploy function
-        run: ./functions/node_modules/.bin/firebase deploy --only functions:default:codeManagement --project paramanu-seniors --non-interactive
+      # Every function is named, never the whole codebase: a bare functions:default
+      # would ask to delete anything deployed that is not in the source, which
+      # --non-interactive turns into a failure. codeControl and bannerControl are the
+      # database triggers in functions/src/control.ts (runbook section 8).
+      - name: Deploy functions
+        run: ./functions/node_modules/.bin/firebase deploy --only functions:default:codeManagement,functions:default:codeControl,functions:default:bannerControl --project paramanu-seniors --non-interactive
