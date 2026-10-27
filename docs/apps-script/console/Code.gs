@@ -24,17 +24,17 @@
  *  6. Run purgeInstallTrigger() once from the editor. On the 1st of each month it erases holders
  *     removed more than 30 days ago; purgeDryRun() lists what it would erase and changes nothing.
  *
- * This console never gets FCM credentials and cannot broadcast anything itself; issuing codes and
- * reaching four hundred phones stay separate jobs. Disable, Enable, removing or restoring a holder,
- * and banner changes write /controlQueue and a minute-ly trigger in the SENDER project broadcasts
- * them -- see Control.gs there. If that trigger is not installed, they still work: they are recorded in the database,
- * and phones catch up at their next daily check or app open. Only the speed depends on the trigger.
+ * This console never gets FCM credentials and cannot send anything itself; issuing codes and
+ * reaching four hundred phones stay separate jobs. Disable, Enable, Unlink, removing or restoring a
+ * holder, and banner changes are pushed to phones by database triggers in functions/src/control.ts,
+ * which watch the writes this console already makes -- nothing here has to ask for it. If those
+ * triggers are not deployed, all of it still works: phones catch up at their next check or app open.
  *
  * The service account key is a real credential. It lives in Script Properties, never in this file,
  * and never in the Android app.
  */
 
-var SCRIPT_VERSION = '2026-09-13-codes';
+var SCRIPT_VERSION = '2026-10-28-codes';
 
 // Must stay identical to ActivationCode.kt in the Android app. Crockford Base32: no I, L, O or U.
 // GeneratedCodeCompatibilityTest.kt pins this agreement; if you change the rule here, regenerate
@@ -352,42 +352,19 @@ function auditTimeline_(entries, node) {
   return out;
 }
 
-// ---------------------------------------------------------------- Control queue
+// ---------------------------------------------------------------- Banner size
 
 /**
- * Asks the sender to broadcast a control message, by writing where its trigger looks.
- *
- * PUT rather than PATCH, and keyed rather than pushed, so the latest decision replaces one still
- * waiting: disabling and enabling inside a minute leaves a single resume, never a revoke followed by
- * a resume that could arrive in either order. `at` is when staff acted; the phone uses it to ignore
- * a message older than one it has already applied.
- */
-function queueControl_(key, entry) {
-  firebase_('put', '/controlQueue/' + key + '.json', entry);
-}
-
-/**
- * Drops anything still waiting to be broadcast for [code].
- *
- * Used when a code's phone is unlinked, or the code is deleted or purged. A stale revoke firing
- * afterwards would cut off whoever types the code next -- they would enter their slip and be told at
- * once that they had been removed.
- */
-function clearCodeControl_(code) {
-  firebase_('delete', '/controlQueue/code_' + code + '.json');
-}
-
-/**
- * The most a banner may weigh, in UTF-8 bytes, to travel inside a control message.
+ * The most a banner may weigh, in UTF-8 bytes, to travel inside a pushed message.
  *
  * FCM refuses a data payload over 4096 bytes, keys included, and the html is sent inside the message
  * so four hundred phones do not all fetch /info at once (SYSTEM.md 5.14). Bytes rather than
- * characters: Marathi or Hindi costs three bytes a character. Must match BANNER_MAX_BYTES in the
- * sender's Code.gs.
+ * characters: Marathi or Hindi costs three bytes a character. Must match BANNER_MAX_BYTES in
+ * functions/src/control.ts, which drops a heavier banner rather than send it.
  */
 var BANNER_MAX_BYTES = 3500;
 
-/** UTF-8 length of [s] in bytes. Pure, and identical to the sender's copy. */
+/** UTF-8 length of [s] in bytes. Pure, so the limit can be tested without a service call. */
 function utf8Length_(s) {
   s = String(s === undefined || s === null ? '' : s);
   var bytes = 0;
@@ -603,27 +580,30 @@ function refuseOnHold_(state, action) {
 }
 
 /**
- * Unlinks the phone from a code, so the code can be typed on a new phone.
+ * Unlinks the phone from a code, returning the code to the pool.
  *
- * For a phone that is gone: the app was uninstalled, the phone was replaced, or its data was cleared.
- * The device stores the anonymous UID locally, so losing that storage orphans the claim -- the code
- * stays In use with no phone able to prove ownership of it.
+ * Disable pauses a code; Unlink recycles it. Afterwards the code is free exactly as an unclaimed slip
+ * is, and any phone that types it claims it -- the phone it was unlinked from included. That is
+ * deliberate: a code only unlocks notices that are public anyway, and a block on the old install
+ * alone would fall to a reinstall. See docs/decisions.md, "Disable pauses a code, Unlink recycles it".
+ *
+ * For a holder who has moved on: a new phone, the app uninstalled, or its data cleared. The device
+ * stores the anonymous UID locally, so losing that storage orphans the claim -- the code stays In use
+ * with no phone able to prove ownership of it.
  *
  * The note, the holder and the Printed status all stay: the usual case is the same person on a new
  * phone, still holding the same slip.
  *
- * WARNING: if a working phone still holds this claim, unlinking cuts that phone off. Its next check
- * finds no usedBy and stops. Use disableCode for a phone you mean to stop; use this only for one that
- * is genuinely gone.
+ * Not for a lost or stolen phone: whoever types the slip first gets the freed code. Disable that code
+ * and give the holder a new slip.
+ *
+ * WARNING: if a working phone still holds this claim, unlinking cuts that phone off: the trigger in
+ * functions/src/control.ts pushes it a revoke, and its next check finds no usedBy.
  */
 function unlinkPhone(code) {
   var by = requireEditor_();
   refuseOnHold_(loadCode_(code), 'unlinked');
   firebase_('patch', '/codes/' + code + '.json', { usedBy: null, activatedAt: null, revoked: null });
-
-  // The next phone to type this code must not be cut off by something queued for the last one.
-  clearCodeControl_(code);
-
   audit_(code, 'released', by);
   return listCodes();
 }
@@ -678,12 +658,6 @@ function disableCode(code) {
   var by = requireEditor_();
   refuseOnHold_(loadCode_(code), 'disabled');
   firebase_('patch', '/codes/' + code + '.json', { revoked: true });
-
-  // The database is the truth; the queue is only how the phone hears about it sooner. A minute-ly
-  // trigger in the sender drains this and broadcasts, because this console has no FCM credentials
-  // and is deliberately not given any (SYSTEM.md 2.3).
-  queueControl_('code_' + code, { type: 'revoke', code: code, at: Date.now(), by: by });
-
   audit_(code, 'revoked', by);
   return listCodes();
 }
@@ -772,10 +746,6 @@ function deleteCode(code) {
   }
 
   firebase_('delete', '/codes/' + code + '.json');
-  // Defensive: an unclaimed code should never have anything queued. The drain would drop a leftover
-  // entry on finding the code gone, but only after logging it as something to look at.
-  clearCodeControl_(code);
-
   audit_(code, 'deleted', by);
   return listCodes();
 }
@@ -785,14 +755,6 @@ function enableCode(code) {
   var by = requireEditor_();
   refuseOnHold_(loadCode_(code), 'enabled');
   firebase_('patch', '/codes/' + code + '.json', { revoked: null });
-
-  // Tells the phone to resume at once rather than at its next daily check, and replaces any revoke
-  // not yet broadcast, so disabling and enabling inside a minute sends one resume and no revoke.
-  //
-  // The drain sends the resume only if a phone holds the code, so enabling a code nobody has claimed
-  // broadcasts nothing.
-  queueControl_('code_' + code, { type: 'resume', code: code, at: Date.now(), by: by });
-
   audit_(code, 'restored', by);
   return listCodes();
 }
@@ -912,8 +874,6 @@ function removeHolder(id) {
 
   if (!wasDisabled) {
     firebase_('patch', '/codes/' + holder.code + '.json', { revoked: true });
-    // Only a code with a phone has anybody to tell.
-    if (state.node.usedBy) queueControl_('code_' + holder.code, { type: 'revoke', code: holder.code, at: at, by: by });
   }
   audit_(holder.code, 'holder-removed', by, { holder: holder.id });
   firebase_('patch', '/holders/' + holder.id + '.json', { removedAt: at, removedBy: by, wasDisabled: wasDisabled });
@@ -927,12 +887,12 @@ function restoreHolder(id) {
   var holder = loadHolder_(id);
   if (!holder.removedAt) throw new Error(holder.name + ' has not been removed.');
 
-  var state = loadCode_(holder.code);
+  // Refuses a code that no longer exists, rather than letting the patch below create one.
+  loadCode_(holder.code);
   var at = Date.now();
 
   if (holder.wasDisabled !== true) {
     firebase_('patch', '/codes/' + holder.code + '.json', { revoked: null });
-    if (state.node.usedBy) queueControl_('code_' + holder.code, { type: 'resume', code: holder.code, at: at, by: by });
   }
   audit_(holder.code, 'holder-restored', by, { holder: holder.id });
   firebase_('patch', '/holders/' + holder.id + '.json', { removedAt: null, removedBy: null, wasDisabled: null });
@@ -950,7 +910,7 @@ function restoreHolder(id) {
  * that it had a holder, by id, which after this names nobody.
  *
  * Back to Unused means: its phone is unlinked, it is no longer stopped, its Printed status is cleared
- * (by the holder-purged event), and anything queued for it is dropped. Its note stays.
+ * (by the holder-purged event). Its note stays.
  *
  * Returns one line per holder, saying what was done -- or with [dryRun], what would be.
  */
@@ -967,7 +927,6 @@ function purgeRemovedHolders_(dryRun, by) {
     var node = h.code ? firebase_('get', '/codes/' + h.code + '.json') : null;
     if (node) {
       firebase_('patch', '/codes/' + h.code + '.json', { usedBy: null, activatedAt: null, revoked: null });
-      clearCodeControl_(h.code);
       audit_(h.code, 'holder-purged', by, { holder: h.id });
     }
     firebase_('delete', '/holders/' + h.id + '.json');
@@ -1171,7 +1130,7 @@ function sanitiseBanner_(html) {
  * The dispensary this console issues codes for and whose banner it edits.
  *
  * A Script Property, set to `barc-vashi` today. The id must be lower-case letters, digits and dashes:
- * it is part of a database path and of the control queue key the sender matches on.
+ * it is part of a database path and of the banner topic phones subscribe to (banner-v1-<id>).
  */
 function dispensaryId_() {
   var id = property_('DISPENSARY_ID');
@@ -1199,7 +1158,7 @@ function getBanner() {
  * banner, and replacing the info node wholesale would delete them.
  */
 function saveBanner(html) {
-  var by = requireEditor_();
+  requireEditor_();
   var clean = sanitiseBanner_(html);
   if (clean.replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim() === '') {
     throw new Error('The banner is empty. Use Remove if that is what you meant.');
@@ -1212,22 +1171,17 @@ function saveBanner(html) {
   var id = dispensaryId_();
   var at = Date.now();
   firebase_('patch', dispensaryInfoPath_(id), { html: clean, htmlUpdated: at });
-  // Queued after the database write, never before: a phone that opens the app on seeing the change
-  // must find the new banner there. The drain reads it again when it broadcasts, so a second save
-  // inside the same minute sends the second banner. Keyed by dispensary, so each has its own entry.
-  queueControl_('banner_' + id, { dispensary: id, at: at, by: by });
   return getBanner();
 }
 
 /** Removes the banner, so the app falls back to the plain heading and lines. */
 function removeBanner() {
-  var by = requireEditor_();
+  requireEditor_();
   var id = dispensaryId_();
   var at = Date.now();
   // htmlUpdated is stamped rather than cleared, so a phone can tell a removed banner from one that was
   // never set, and ignore an older banner arriving after the removal.
   firebase_('patch', dispensaryInfoPath_(id), { html: null, htmlUpdated: at });
-  queueControl_('banner_' + id, { dispensary: id, at: at, by: by });
   return getBanner();
 }
 

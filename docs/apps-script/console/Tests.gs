@@ -207,7 +207,7 @@ function tc_utf8Length_() {
   // The case this exists for: a character count passes a Marathi banner that FCM then refuses.
   tc_eq_('devanagari is three bytes a character', utf8Length_('बंद'), 9);
   tc_eq_('an emoji is four bytes, not six', utf8Length_('🙏'), 4);
-  tc_eq_('the limit matches the sender', BANNER_MAX_BYTES, 3500);
+  tc_eq_('the limit matches functions/src/control.ts', BANNER_MAX_BYTES, 3500);
 }
 
 // ---------------------------------------------------------------- holders

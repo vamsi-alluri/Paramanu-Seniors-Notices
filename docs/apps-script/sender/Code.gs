@@ -33,26 +33,7 @@
  * Libraries and nothing to break when that library changes.
  */
 
-var SCRIPT_VERSION = '2026-09-13-sender';
-
-/**
- * Must match ActivationRepository.CONTROL_TOPIC. Revoke, resume and banner changes.
- *
- * Every activated phone holds it, revoked included, and nobody can switch it off -- which is the
- * point: a revoked phone is exactly the one that needs to hear a resume, and a user who has turned
- * notices off still has to receive a revoke.
- */
-var CONTROL_TOPIC = 'control-v1';
-
-/**
- * The most a banner may weigh, in UTF-8 bytes, to travel inside a control message.
- *
- * FCM refuses a data payload over 4096 bytes, keys included. The banner's html is by far the largest
- * value, and this leaves room for the rest. Bytes rather than characters: a banner in Marathi or
- * Hindi costs three bytes a character, so a character count would pass a banner FCM then rejects.
- * Must match BANNER_MAX_BYTES in the console.
- */
-var BANNER_MAX_BYTES = 3500;
+var SCRIPT_VERSION = '2026-10-28-sender';
 
 /**
  * Set by the test suite to divert sends to a scratch topic. Null in normal operation.
@@ -496,74 +477,6 @@ function listSent(limit) {
   }
   rows.sort(function (a, b) { return Number(b.logId) - Number(a.logId); });
   return rows;
-}
-
-// ---------------------------------------------------------------- Control messages
-
-/**
- * UTF-8 length of [s] in bytes. Pure, so the banner limit can be tested.
- *
- * Counted by hand rather than through Utilities.newBlob so the test suite can check it without a
- * service call, and so it matches the console's copy exactly.
- */
-function utf8Length_(s) {
-  s = String(s === undefined || s === null ? '' : s);
-  var bytes = 0;
-  for (var i = 0; i < s.length; i++) {
-    var c = s.charCodeAt(i);
-    if (c < 0x80) bytes += 1;
-    else if (c < 0x800) bytes += 2;
-    else if (c >= 0xD800 && c <= 0xDBFF && i + 1 < s.length) { bytes += 4; i++; }
-    else bytes += 3;
-  }
-  return bytes;
-}
-
-/**
- * The FCM request for one control message. Pure, so the envelope can be tested without sending.
- *
- * Data-only and deliberately without title or body: these show the user nothing. A notification
- * block here would be drawn by the SDK and onMessageReceived would never run, so a revoke would be
- * displayed and never applied. Every value is a string, as FCM v1 requires; empty values are kept,
- * because an empty banner html is how a removal is said.
- */
-function controlRequest_(topic, data) {
-  var strings = {};
-  for (var key in data) {
-    if (data.hasOwnProperty(key) && data[key] !== undefined && data[key] !== null) {
-      strings[key] = String(data[key]);
-    }
-  }
-  return { message: { topic: topic, android: { priority: 'high' }, data: strings } };
-}
-
-/**
- * Broadcasts one control message: a revoke, a resume or a banner change.
- *
- * A broadcast, not per-device addressing. onNewToken is deliberately not overridden in the app and
- * everything here is topic-addressed, so every phone receives a revoke or resume and tests the code
- * against its own. That publishes the code to all of them, which is harmless -- it says only that
- * the code was stopped or started -- but it is what is being sent.
- *
- * It cannot be authoritative. FCM is best-effort, and a phone switched off past the message TTL
- * never sees it, which is why the periodic verification on the device stays as the safety net. See
- * docs/decisions.md.
- *
- * Throws when FCM refuses. The caller leaves the entry queued and retries; a message that did go
- * out and is sent again is harmless, because the phone ignores a stamp it has already applied.
- */
-function pushControl_(data) {
-  var topic = TOPIC_OVERRIDE || CONTROL_TOPIC;
-  var response = UrlFetchApp.fetch(
-    'https://fcm.googleapis.com/v1/projects/' + property_('PROJECT_ID') + '/messages:send',
-    { method: 'post', contentType: 'application/json',
-      headers: { Authorization: 'Bearer ' + accessToken_() },
-      payload: JSON.stringify(controlRequest_(topic, data)), muteHttpExceptions: true });
-
-  if (response.getResponseCode() >= 300) {
-    throw new Error('FCM refused the ' + data.type + ': ' + response.getContentText());
-  }
-  return JSON.parse(response.getContentText()).name || '';
 }
 
 // ---------------------------------------------------------------- Web app
