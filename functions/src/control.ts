@@ -163,7 +163,7 @@ const PERMANENT = new Set([
   "messaging/invalid-data-payload-key",
 ]);
 
-async function deliver(push: Push, send: (p: Push) => Promise<void>, kind: string, eventId: string) {
+export async function deliver(push: Push, send: (p: Push) => Promise<void>, kind: string, eventId: string) {
   try {
     await send(push);
   } catch (e) {

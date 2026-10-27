@@ -352,3 +352,28 @@ Until a build that subscribes to `device-v1-<uid>` and `banner-v1-<id>` is out, 
 **Retiring the queue.** The repository copies no longer have it: `Control.gs` is deleted, and the sender's `pushControl_`/`controlRequest_` and the console's `queueControl_`/`clearCodeControl_` are gone. In the live Apps Script projects, in this order: run `controlStopTrigger()` in the sender (or delete the `controlRun` trigger under Triggers) before deleting `Control.gs`, or the one-minute trigger fails every minute on a missing handler; paste the new sender `Code.gs` and `Tests.gs` and the console `Code.gs`, `Tests.gs` and `Index.html`; then delete `/controlQueue` from the database.
 
 **The `control-v1` bridge.** Until the database rules close, both triggers also send a copy to `control-v1` for the builds that only listen there (up to 0.8.1): every banner, and every disable and enable of a code a phone still holds -- not an unlink or a delete. Its log lines read `control legacy-revoke sent`, `legacy-resume`, `legacy-banner`. Remove `LEGACY_CONTROL_TOPIC`, `legacyCodePush` and their two call sites in `functions/src/control.ts` in the same change that closes the rules.
+
+**`configStale`** (`functions/src/config.ts`) is the third trigger, on Remote Config rather than the database: every publish sends `{type: "configStale"}` to `control-v2`, and each phone fetches within 15 minutes. Deployed by the same workflow. Its event comes from Remote Config through Eventarc, so the first deploy may also enable `firebaseremoteconfig.googleapis.com` if it is not on already (the deployer can). Prove it after the first run: publish any harmless Remote Config change and look for `control configStale sent`:
+`gcloud logging read 'resource.labels.service_name="configstale"' --project paramanu-seniors --limit 5 --freshness 10m`
+
+## 9. Update pressure and the kill switch
+
+Design in `docs/decisions.md`, "Three levels of update pressure, and a kill switch". Only builds from 0.8.4 (versionCode 20) obey any of it.
+
+| Lever | Where | Effect |
+|---|---|---|
+| Release priority 0-2 | Play Developer API, at release creation | Play's flexible prompt, once per version |
+| Release priority 3-4 | same | flexible prompt on every open (at most hourly) |
+| Release priority 5 | same | Play's immediate full-screen update, every open |
+| `min_version_supported` | Remote Config, **Number** | builds below it: update screen, no notifications |
+| `app_killed` | Remote Config, **Boolean** | every build: switched-off screen, no notifications |
+
+**Setting a release's priority.** The Play Console has no field for it. It is `inAppUpdatePriority` on the track release, set in the same edit that creates the release, and it cannot be changed once the release is committed: a wrong priority needs a new release. With `gradle-play-publisher`, `track { updatePriority = 3 }`; with fastlane, `upload_to_play_store(in_app_update_priority: 3)`; by hand, `edits.insert`, upload the bundle, `edits.tracks.update` with `releases[].inAppUpdatePriority`, `edits.commit`. A release uploaded through the console has priority 0, which is the right default for a routine release.
+
+**Forcing everyone off a broken build.** Publish the fix first and let it reach Play, then raise `min_version_supported` to the fix's versionCode and publish Remote Config. The `configStale` push has every phone fetch within about 15 minutes. **Never set it above the newest versionCode Play is serving**: every phone would be told to update with nothing to update to. During a staged rollout, the phones outside the rollout percentage cannot get the fix yet either, so raise the floor only once the fix is at 100%.
+
+**Killing the app.** Set `app_killed` to `true` and publish. It must be a Boolean parameter: Remote Config's boolean read coerces strings, so `1`, `yes` or `on` typed into a String parameter does the same. Phones drop every topic but `control-v2` and show a single line with a button to the website.
+
+**Recovering either.** Lower the floor or set `app_killed` back to `false` and publish. A phone with a closed gate fetches on every resume and on the `configStale` push, so it opens again within minutes. Nothing on the phone needs clearing.
+
+**Checking on a phone** (Play-installed, since the prompts need Play): Remote Config's activated values are not readable from adb in a release build, so test on an internal-app-sharing install or a debug build pointed at a Remote Config condition that matches only it.

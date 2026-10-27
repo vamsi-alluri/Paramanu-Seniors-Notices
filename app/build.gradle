@@ -101,6 +101,9 @@ dependencies {
     // Verification runs here rather than in onMessageReceived: see docs/decisions.md.
     implementation libs.androidx.work.runtime.ktx
 
+    // Play's in-app update prompt, driven by each release's priority. See update/PlayUpdatePrompt.
+    implementation libs.play.app.update
+
     implementation libs.androidx.room.runtime
     implementation libs.androidx.room.ktx
     ksp libs.androidx.room.compiler

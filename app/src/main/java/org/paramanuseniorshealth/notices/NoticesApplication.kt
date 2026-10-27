@@ -7,6 +7,9 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.paramanuseniorshealth.notices.activation.ActivationRefreshWorker
 import org.paramanuseniorshealth.notices.activation.ActivationRepository
@@ -21,8 +24,11 @@ import org.paramanuseniorshealth.notices.data.DispensaryRepository
 import org.paramanuseniorshealth.notices.data.InfoRepository
 import org.paramanuseniorshealth.notices.data.NoticeRepository
 import org.paramanuseniorshealth.notices.data.NoticesDatabase
+import org.paramanuseniorshealth.notices.fcm.ControlTopics
 import org.paramanuseniorshealth.notices.fcm.NoticeChannel
 import org.paramanuseniorshealth.notices.fcm.NoticeNotifications
+import org.paramanuseniorshealth.notices.update.AppGate
+import org.paramanuseniorshealth.notices.update.ConfigRefreshWorker
 
 class NoticesApplication : Application() {
 
@@ -39,8 +45,42 @@ class NoticesApplication : Application() {
 
     val dispensaryRepository: DispensaryRepository by lazy { DispensaryRepository(this, infoRepository) }
 
-    /** The one Remote Config reader: it answers both the analytics switch and the function's base URL. */
-    private val remoteConfigSwitch by lazy { FirebaseRemoteConfigSwitch() }
+    /**
+     * The one Remote Config reader: it answers the analytics switch, the function's base URL and the
+     * app gate.
+     */
+    private val remoteConfigSwitch by lazy { FirebaseRemoteConfigSwitch(this) }
+
+    /**
+     * Whether this build may run: open, below the version floor, or switched off. See [AppGate].
+     *
+     * Starts open and is corrected by the first [evaluateGate], which [onCreate] launches off the
+     * main thread. A closed app therefore shows its notice list for the moment before that, which
+     * is the price of never reading Remote Config on the main thread (see [refreshRemoteConfig]).
+     */
+    private val _appGate = MutableStateFlow<AppGate>(AppGate.Open)
+    val appGate: StateFlow<AppGate> = _appGate.asStateFlow()
+
+    /**
+     * Decides the gate from Remote Config's activated values, publishes it, and returns it. No
+     * network, but a disk read the first time in a process, so never on the main thread. The
+     * messaging service calls it directly rather than reading [appGate], because a message can start
+     * the process before anything else has evaluated it.
+     */
+    fun evaluateGate(): AppGate = AppGate.decide(
+        installedVersion = BuildConfig.VERSION_CODE.toLong(),
+        minVersion = remoteConfigSwitch.minVersionSupported(),
+        killed = remoteConfigSwitch.killed(),
+    ).also { _appGate.value = it }
+
+    /**
+     * Asks that the next Remote Config fetch ignore its six-hour interval. Set by a `configStale`
+     * push, which is sent on every publish.
+     */
+    fun markRemoteConfigStale() = remoteConfigSwitch.markStale()
+
+    /** Whether a fetch owed after [markRemoteConfigStale] has still not succeeded. */
+    val remoteConfigStale: Boolean get() = remoteConfigSwitch.isStale
 
     /**
      * Resolves the base URL on every call, because Remote Config fetches after the process starts.
@@ -52,7 +92,7 @@ class NoticesApplication : Application() {
     }
 
     val activationRepository: ActivationRepository by lazy {
-        ActivationRepository(this, dispensaryRepository, codeManagementApi)
+        ActivationRepository(this, dispensaryRepository, codeManagementApi) { evaluateGate() == AppGate.Open }
     }
 
     /**
@@ -117,7 +157,7 @@ class NoticesApplication : Application() {
 
         // The value already in force applies first, so a launch while offline behaves as the last
         // known state -- which on a first install is off. The fetch then corrects it.
-        refreshAnalyticsSwitch()
+        refreshRemoteConfig()
     }
 
     /**
@@ -166,7 +206,8 @@ class NoticesApplication : Application() {
     }
 
     /**
-     * Brings the switch into line with Remote Config. Safe to call on every foreground.
+     * Brings the analytics switch and the app gate into line with Remote Config. Safe to call on
+     * every foreground.
      *
      * Called from [onCreate] (process start) and from MainActivity's ON_RESUME effect (every
      * foreground), which is what lets "off" reach a process that stays alive for days. Neither
@@ -184,11 +225,27 @@ class NoticesApplication : Application() {
      * start early: both SDKs ship disabled by manifest meta-data, so the pre-gate state of a phone
      * that has never been enabled is already off.
      */
-    fun refreshAnalyticsSwitch() {
-        appScope.launch {
-            applyCollectionSwitch(analyticsConfig.cached())
-            applyCollectionSwitch(analyticsConfig.refresh())
-        }
+    fun refreshRemoteConfig() {
+        appScope.launch { syncRemoteConfig() }
+    }
+
+    /**
+     * [refreshRemoteConfig]'s work, callable from [ConfigRefreshWorker], which must wait for it.
+     *
+     * A closed gate forces the fetch past the six-hour interval. Without that, a gate opened in
+     * the console stays shut on a phone for up to six hours after the owner fixed the mistake --
+     * and the person holding it sees only a screen that says the app does not work. A closed gate
+     * is rare, so the extra fetches are too.
+     *
+     * When the gate moves either way, the subscriptions move with it: closed keeps only
+     * [ControlTopics.CONFIG], so nothing more arrives; open restores the rest.
+     */
+    suspend fun syncRemoteConfig() {
+        applyCollectionSwitch(analyticsConfig.cached())
+        val before = evaluateGate()
+        if (before != AppGate.Open) remoteConfigSwitch.markStale()
+        applyCollectionSwitch(analyticsConfig.refresh())
+        if (evaluateGate() != before) activationRepository.syncSubscriptions()
     }
 
     /**

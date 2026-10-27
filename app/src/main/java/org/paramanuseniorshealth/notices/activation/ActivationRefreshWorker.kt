@@ -12,6 +12,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import org.paramanuseniorshealth.notices.NoticesApplication
+import org.paramanuseniorshealth.notices.update.AppGate
 import java.util.concurrent.TimeUnit
 import kotlin.random.Random
 
@@ -36,8 +37,9 @@ class ActivationRefreshWorker(
         val app = applicationContext as NoticesApplication
         val activation = app.activationRepository
 
-        // A device with no claim has nothing to check.
+        // A device with no claim has nothing to check, and a closed app gate checks nothing.
         if (!activation.isActivated) return Result.success()
+        if (app.evaluateGate() != AppGate.Open) return Result.success()
 
         return try {
             when (activation.verify()) {

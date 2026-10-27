@@ -67,6 +67,7 @@ from `docs/privacy-policy.md`. Keep the two pages distinct.
     │  RTDB   /codes  /dispensaries  /sent        │                     │
     │  Auth   anonymous only                      │                     │
     │  FCM    notices-v1, device-v1-*, banner-v1-*│                     │
+    │         control-v2                          │                     │
     └───────────────────┬─────────────────────────┘                     │
                         │  data-only, priority high                     │
                         ▼                                               ▼
@@ -388,6 +389,13 @@ problem that is already fixed.
 ---
 
 ## 6. Behavioural decisions worth preserving
+
+- **The app can be told to update, floored, or switched off** (from 0.8.4). Play's per-release
+  in-app update priority decides how hard an available update is asked for; Remote Config's
+  `min_version_supported` (Number) and `app_killed` (Boolean) close the whole app behind one line
+  and one button, with no notifications, keeping only `control-v2`. Every Remote Config publish
+  pushes `configStale` there, so a change reaches phones in minutes. Correcting the value reopens
+  it. Operating it: runbook section 9; reasoning: decisions.md, "Three levels of update pressure".
 
 - **`Unknown` entitlement permits delivery.** Only a definitive `Revoked` suppresses a notice.
   Failing closed would mean someone in their eighties misses a closure notice because of a weak

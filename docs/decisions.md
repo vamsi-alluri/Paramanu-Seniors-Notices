@@ -46,8 +46,8 @@ The rule is also simpler: unlinked means free, for every phone, decided in one p
 ## Topics are split by audience, and the backend moves to Cloud Functions
 
 *Decided 2026-10-27. Built: the two triggers (`functions/src/control.ts`, deployed by the workflow,
-runbook section 8) and the app's subscriptions (`ControlTopics`). `control-v2` is not subscribed
-yet: it waits for the deferred kill switch below.*
+runbook section 8) and the app's subscriptions (`ControlTopics`). `control-v2` was added with the
+kill switch below, 2026-10-28.*
 
 **Question.** Every revoke and resume goes to `control-v1`, so all four hundred phones receive every
 stopped code and test it against their own, like an ARP broadcast. But the address is already
@@ -61,7 +61,7 @@ where there is one:
 
 | Topic | Carries | Subscribed by |
 |---|---|---|
-| `control-v2` | "Remote Config is stale", for the version floor below. Nothing else. | Every install, claimed or not |
+| `control-v2` | "Remote Config is stale", for the kill switch below. Nothing else. | Every install, claimed or not |
 | `banner-v1-<dispensaryId>` | That dispensary's banner | Phones whose claim names that dispensary |
 | `device-v1-<uid>` | Revoke (disable and unlink) and resume for this install | The install holding a claim, revoked or not |
 | the dispensary's notice topics | Notices | Unchanged |
@@ -92,42 +92,49 @@ where there is one:
   envelope and one meaning. The new builds unsubscribe from it. The bridge goes when the rules
   close (plan phase 5).
 
-**The version kill switch lives in Remote Config.** Kept for a version that must be forced to
-update; it may never be used. **Deferred** -- recorded so the design is not lost, and not part of
-the topic and trigger work above.
+**Three levels of update pressure, and a kill switch.** *Built 2026-10-28 for 0.8.4; first designed
+here 2026-10-27 as a deferred version floor plus a `current_version` nudge.* Code in `update/`.
 
-- Two parameters beside the analytics switch: `min_version_supported` and `current_version`, both
-  versionCodes, never versionNames (as text, 0.8.10 sorts below 0.8.9).
-- **Below `min_version_supported`:** an update screen with no way past it, pointing at the Play
-  listing, and the build posts no notifications. **Recovery is lowering the minimum**, so there is
-  no separate un-kill to get wrong.
-- **Supported but below `current_version`:** a dismissable prompt, using Play's own in-app update
-  dialog (Play Core's flexible update) rather than a screen of ours. Asking Remote Config as well as
-  Play means the nudge starts when `current_version` is raised, not the moment a staged rollout
-  reaches the phone. Dismissed once per `current_version`, so it does not nag on every open. Play's
-  dialog only appears for a build installed from Play: a debug build never shows it, and testing it
-  needs internal app sharing.
+- **Nudging is Play's release priority, not Remote Config.** Each release carries an in-app update
+  priority, 0 to 5, set through the Play Developer API when the release is created and fixed after
+  that (runbook section 9). `UpdatePrompt` maps it: 0-2 Play's flexible prompt, once per version;
+  3-4 flexible on every open; 5 Play's immediate full-screen flow, every open. "Every open" is at
+  most once an hour, so a return from the external PDF viewer does not raise it again. A flexible
+  download is installed when the app next goes to the background, where Play does it silently.
+  Replaces `current_version`: the priority travels with the release, and the prompt starts only
+  once the staged rollout has reached the phone, which is when the phone can act on it anyway.
+  Play's prompts appear only on a build installed from Play; a debug build never shows them, and
+  testing needs internal app sharing.
+- **`min_version_supported`** (Remote Config, Number, a versionCode -- as text 0.8.10 sorts below
+  0.8.9). Below it: one line and an Update button to the Play listing, no way past it, no
+  notifications, and every topic but `control-v2` dropped. For a build broken badly enough that it
+  must not run, which Play's priority cannot force.
+- **`app_killed`** (Remote Config, Boolean). Every version: one line and a button to the website,
+  nothing else, no notifications, every topic but `control-v2` dropped, no background checks. For
+  the day the service has to stop -- a compromised build, the programme ending. It must stay
+  Boolean-typed in the console: `getBoolean` coerces a String parameter, so `1` or `yes` typed into
+  one would kill every phone. Killed wins over the version check.
+- **Recovery is correcting the value**, with nothing remembered on the phone, so there is no
+  separate un-kill to get wrong. A closed gate forces a fetch past the interval on every resume, so
+  a mistake lifts itself within minutes of being corrected, without anybody reinstalling.
+- **Defaults are open** (0 and false), so a phone that has never fetched, or cannot, is never
+  locked out by a missing value. A failed fetch keeps the last activated value.
 - Read from Remote Config because it already exists for the analytics switch, is fetched on every
   foreground, and costs no database connection and no function execution.
-- The in-app default is 0, so a phone that has never fetched, or cannot, is never locked out by a
-  missing value. A failed fetch keeps the last activated value.
-- The update screen keeps fetching on every resume. A minimum set too high by mistake must lift
-  itself once it is corrected, without anybody reinstalling.
-- In a release build a fetch is skipped for six hours after the last one (`FETCH_INTERVAL_SECONDS`),
-  so a kill lands on a phone's first foreground after its window runs out -- and a phone nobody
-  opens never fetches at all, so it would go on posting notifications. `control-v2` exists to close
-  both: a `{type: "configStale"}` message enqueues a background fetch and activate with no interval,
-  in a `OneTimeWorkRequest` like the activation refresher: `NetworkType.CONNECTED`, a unique name with
-  `KEEP`, and a random 0-15 minute initial delay so four hundred phones do not fetch in the same
-  second. A Remote Config fetch is not a database connection, so it adds nothing to the RTDB
-  ceiling. If the work cannot run, the foreground fetch still catches up, and the stale mark makes
-  that one skip the six-hour interval too. Firebase documents this pattern for pushing Remote
-  Config changes.
-- A killed build stops posting notifications as well. A build is most likely killed because
-  something in it is broken, and notices arrive in the background without passing through the
-  screen. The check in the messaging service reads the last activated value, with no network, so a
-  notice arriving while the app is closed does not wait on a fetch.
-- Only builds that carry the gate can be killed, so it has to ship before it is needed.
+- **`control-v2` carries `configStale`** on every Remote Config publish, from the `configStale`
+  function (`functions/src/config.ts`). In a release build a fetch is skipped for six hours after
+  the last one, so a kill would land only at a phone's first foreground after its window -- and a
+  phone nobody opens never fetches, so it would go on posting notifications. The message enqueues
+  `ConfigRefreshWorker`: `NetworkType.CONNECTED`, a unique name with `KEEP`, a random 0-15 minute
+  delay so four hundred phones do not fetch in the same second, and a fetch with no interval. A
+  Remote Config fetch is not a database connection. If the work cannot run, the stale mark makes
+  the next foreground fetch skip the interval too. Firebase documents this pattern. Every install
+  holds the topic, claimed or not, and a closed gate keeps it: it is how the gate is lifted.
+- **The messaging service checks the gate before anything else**, from the activated values with no
+  network, so a notice arriving while the app is closed does not wait on a fetch. Control messages
+  other than `configStale` are ignored while the gate is closed; the daily check catches up after.
+- Only builds that carry the gate can be killed or floored: 0.8.4 is the first. Older builds go on
+  as they are whatever Remote Config says.
 
 **The backend moves to Cloud Functions; the pages stay where they are.** The sender and console keep
 their Apps Script URLs and HtmlService pages. What moves is the server side behind them, one piece at

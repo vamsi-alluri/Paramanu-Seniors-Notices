@@ -33,6 +33,11 @@ class ActivationRepository(
     private val dispensaries: DispensaryRepository,
     /** Makes the claim. Injected, as [AnalyticsConfig] takes its switch. */
     private val api: CodeManagementApi,
+    /**
+     * Whether the app gate is open (see AppGate). Evaluated afresh on every sync, so a sync after
+     * the gate moves follows it.
+     */
+    private val gateOpen: () -> Boolean,
 ) {
 
     private val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -177,10 +182,14 @@ class ActivationRepository(
      * unsubscribed rather than left behind. A failed unsubscribe stays in that record and is tried
      * again next time. That record is also how the retired `control-v1` is left: every build that
      * subscribed to it recorded it, and nothing wants it now.
+     *
+     * [ControlTopics.CONFIG] is held by every install, claimed or not, and is all a closed gate
+     * keeps: it is how the push that lifts the gate arrives.
      */
     suspend fun syncSubscriptions() {
         val desired = buildSet {
-            if (isActivated) {
+            add(ControlTopics.CONFIG)
+            if (isActivated && gateOpen()) {
                 storedUid?.let(ControlTopics::device)?.let { add(it) }
                 if (!isRevoked) {
                     dispensaryId?.let(ControlTopics::banner)?.let { add(it) }

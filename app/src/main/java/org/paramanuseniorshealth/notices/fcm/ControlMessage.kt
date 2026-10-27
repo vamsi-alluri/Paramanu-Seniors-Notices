@@ -31,6 +31,13 @@ sealed interface ControlMessage {
      */
     data class Banner(val dispensary: String, val html: String, override val at: Long) : ControlMessage
 
+    /**
+     * Remote Config was published, on [ControlTopics.CONFIG]: fetch past the six-hour interval.
+     * Its [at] is not compared with the others': a fetch takes whatever is current, so a late or
+     * repeated one costs a request and nothing else.
+     */
+    data class ConfigStale(override val at: Long) : ControlMessage
+
     companion object {
 
         fun parse(data: Map<String, String>): ControlMessage? {
@@ -47,6 +54,7 @@ sealed interface ControlMessage {
                     val dispensary = data["dispensary"]?.trim().orEmpty()
                     if (dispensary.isEmpty()) null else data["html"]?.let { Banner(dispensary, it, at) }
                 }
+                "configStale" -> ConfigStale(at)
                 // Unknown types are ignored, so a later sender can add one without breaking phones
                 // that have not updated.
                 else -> null

@@ -115,6 +115,21 @@ class ControlMessageTest {
         assertNull(ControlMessage.parse(mapOf("type" to "ping", "code" to "A1B2C3D4", "at" to "5")))
     }
 
+    // ---- configStale
+
+    @Test
+    fun `reads a configStale with its stamp`() {
+        assertEquals(
+            ControlMessage.ConfigStale(5L),
+            ControlMessage.parse(mapOf("type" to "configStale", "at" to "5")),
+        )
+    }
+
+    @Test
+    fun `a configStale without a stamp is ignored like any other`() {
+        assertNull(ControlMessage.parse(mapOf("type" to "configStale")))
+    }
+
     // ---- ordering
 
     @Test
