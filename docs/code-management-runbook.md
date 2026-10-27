@@ -98,6 +98,8 @@ gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
 | `roles/iam.serviceAccountUser` (on the runtime SA only) | deploying a function that runs as that account |
 | `roles/artifactregistry.admin` (expected, unverified) | a gen2 deploy has firebase-tools create and set a cleanup policy on the `gcf-artifacts` repository, which needs `artifactregistry.repositories.update`; none of the roles above carries it. Add it with the same loop if the first deploy reports that permission |
 
+**What is actually granted differs** (read from the project IAM policy on 2026-10-28): `roles/cloudfunctions.admin`, `roles/firebase.managementServiceAgent`, `roles/firebaseextensions.viewer`, `roles/serviceusage.serviceUsageConsumer`, and `roles/iam.serviceAccountUser` project-wide rather than on the runtime account alone. `roles/run.admin` and `roles/firebase.viewer` are not granted. `roles/firebase.managementServiceAgent` carries `resourcemanager.projects.setIamPolicy`, which makes the deployer owner-equivalent: whatever reaches `main` can grant itself any role. Once the database triggers have deployed once (section 8), consider dropping it, since later deploys need no IAM change and no new API.
+
 The `principalSet` binding above is scoped to the repository only. `refs/heads/main` is enforced in one place, the provider's attribute condition, so loosening that condition silently widens the binding as well.
 
 These roles were derived from what the Firebase CLI documents. They have not been exercised against the live project. If the first deploy fails with `PERMISSION_DENIED`, add the smallest role that grants the one named permission, record it here, and do not reach for a broad role. The deployer has no database, Remote Config or rules permissions, by design.
@@ -321,3 +323,32 @@ rm code-management-alert.json
 The filter assumes the Cloud Run service is `codemanagement` (see section 3; still unverified). A log-based metric only counts entries written after it exists, so create it before the verification below.
 
 **Verification not done.** This alert has not been created and has not been seen to fire: nothing is deployed yet. Once the function is live, force one fault against it (for example deploy a revision whose database URL is wrong, or temporarily make `statusFor` throw), call `/status` twice with a valid token, and confirm the email arrives within about 15 minutes. Then restore the revision (section 3). If the metric stays at zero, check that the service name in the filter matches section 3's `gcloud run services describe`.
+
+## 8. Control triggers: `codeControl` and `bannerControl`
+
+Two Realtime Database triggers in the same codebase (`functions/src/control.ts`), replacing the console's `/controlQueue` and the sender's one-minute `Control.gs` drain. The design is in `docs/decisions.md`, "Topics are split by audience".
+
+| Function | Fires on | Sends to |
+|---|---|---|
+| `codeControl` | any write to `/codes/{code}` | `device-v1-<uid>` of the install that held the code before the write: `revoke` when its claim stops standing (disable, unlink, delete), `resume` when it comes back |
+| `bannerControl` | a write to `/dispensaries/{id}/info` that changes `html` or `htmlUpdated` | `banner-v1-<id>` |
+
+Both re-read the node before sending and drop a message the database no longer supports. They log the message type, the event id and a reason; never the UID (it is the topic) and never the code.
+
+**Deployed by the workflow**, beside `codeManagement`. The first deploy of a database trigger does more than an HTTP function's: the Firebase CLI reads the project IAM policy and, where missing, grants the runtime account (`188591874425-compute@developer.gserviceaccount.com`) `roles/eventarc.eventReceiver` and `roles/run.invoker`, and may grant the Pub/Sub service agent `roles/iam.serviceAccountTokenCreator`; Cloud Functions then creates one Eventarc trigger per function. The deployer can do all of it (checked 2026-10-28): `roles/cloudfunctions.admin` carries `eventarc.triggers.*` and `resourcemanager.projects.getIamPolicy`, and `roles/firebase.managementServiceAgent` carries `resourcemanager.projects.setIamPolicy` and `serviceusage.services.enable`. Eventarc's API was already enabled by the first `codeManagement` deploy. Later deploys find the bindings in place and change no IAM.
+
+After the first run that carries them:
+
+- [ ] 1. Both exist and have triggers:
+  `gcloud functions list --project paramanu-seniors` shows `codeControl` and `bannerControl` as `Event Trigger`;
+  `gcloud eventarc triggers list --location asia-southeast1 --project paramanu-seniors` shows one trigger each.
+- [ ] 2. Prove one: disable a test code that a phone holds, in the console. Within seconds the logs should show `control revoke sent`:
+  `gcloud logging read 'resource.labels.service_name="codecontrol"' --project paramanu-seniors --limit 5 --freshness 10m`
+  Enable it again and look for `control resume sent`. Save a banner and look for `control banner sent` under `bannercontrol`.
+- [ ] 3. If the deploy fails on IAM instead, the CLI prints the exact `gcloud projects add-iam-policy-binding` commands it wanted: run those as the owner, then re-run the workflow.
+
+Until a build that subscribes to `device-v1-<uid>` and `banner-v1-<id>` is out, these sends reach no phone. That is harmless: FCM accepts a send to a topic nobody holds.
+
+**Retiring the queue.** The repository copies no longer have it: `Control.gs` is deleted, and the sender's `pushControl_`/`controlRequest_` and the console's `queueControl_`/`clearCodeControl_` are gone. In the live Apps Script projects, in this order: run `controlStopTrigger()` in the sender (or delete the `controlRun` trigger under Triggers) before deleting `Control.gs`, or the one-minute trigger fails every minute on a missing handler; paste the new sender `Code.gs` and `Tests.gs` and the console `Code.gs`, `Tests.gs` and `Index.html`; then delete `/controlQueue` from the database.
+
+**The `control-v1` bridge.** Until the database rules close, both triggers also send a copy to `control-v1` for the builds that only listen there (up to 0.8.1): every banner, and every disable and enable of a code a phone still holds -- not an unlink or a delete. Its log lines read `control legacy-revoke sent`, `legacy-resume`, `legacy-banner`. Remove `LEGACY_CONTROL_TOPIC`, `legacyCodePush` and their two call sites in `functions/src/control.ts` in the same change that closes the rules.

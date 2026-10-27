@@ -2,6 +2,142 @@
 
 Standing decisions and the questions that prompted them. Newest first.
 
+## Disable pauses a code, Unlink recycles it
+
+*Decided 2026-10-28.*
+
+**Question.** Should a phone that has been unlinked be able to claim its own code again? Until now it
+could not: the app answered "same code" itself and never asked the server, on the thinking that
+unlinking should keep that install out for good.
+
+**Decision.** It can. The two console actions now mean two different things:
+
+- **Disable** pauses the code. `usedBy` keeps the phone's UID, `revoked` is set, and the server
+  refuses the code to every phone until Enable. This is the only way to keep someone out.
+- **Unlink** recycles it. `usedBy`, `activatedAt` and `revoked` are all cleared, and the code is free
+  exactly as an unclaimed slip is. Whichever phone types it first claims it, the old one included.
+
+**Why the block on the old install was worth nothing.**
+
+- A code unlocks notices that are public on the website anyway. `/status` returns only the code's own
+  fields and the dispensary's public info, and holder details never leave the console. The gate is
+  cooperative, not access control (SYSTEM.md §6).
+- The block held only for the one install that had just been unlinked, and only while it kept its
+  data. A reinstall or a data clear gives a new UID, and the slip works again. Any other phone holding
+  the slip claims it by design.
+- The code is not secret from that phone. The revoked banner prints it, and so does the code screen.
+- It was enforced only in the app. The server never knew which UID had held the code.
+
+**What allowing it buys.** The real case is staff unlinking a phone that was not gone, which the
+console warns about. That person now recovers by retyping their own slip, with no trip to the counter.
+The rule is also simpler: unlinked means free, for every phone, decided in one place, the server.
+
+**Consequences.**
+
+- In the app, `RedeemPolicy.localAnswer` answers "same code" only for a phone that is not revoked. A
+  revoked phone's own code goes to the server: an unlinked code is claimed again, and a refusal (still
+  disabled, or taken by another phone) is shown as the same-code message. An activation link on a
+  revoked phone always opens the code screen, its own code included.
+- **A lost or stolen phone is Disabled, not unlinked**, and its holder gets a new slip. Unlinking it
+  would only start a race for the freed code. The console's Unlink confirmation and SYSTEM.md say so.
+- Considered and not built: on unlink, record the old UID (or a hash of it) and have `/activate`
+  refuse it. That keeps a UID in the database after the unlink, and still falls to a reinstall.
+
+## Topics are split by audience, and the backend moves to Cloud Functions
+
+*Decided 2026-10-27. Built: the two triggers (`functions/src/control.ts`, deployed by the workflow,
+runbook section 8) and the app's subscriptions (`ControlTopics`). `control-v2` is not subscribed
+yet: it waits for the deferred kill switch below.*
+
+**Question.** Every revoke and resume goes to `control-v1`, so all four hundred phones receive every
+stopped code and test it against their own, like an ARP broadcast. But the address is already
+known: `usedBy` holds the phone's UID. Unlink also sends nothing at all, because a code-addressed
+message could cut off whoever claims the code next. Meanwhile the control drain runs on a one-minute
+Apps Script trigger -- 1,440 runs a day against the account-wide UrlFetch quota that ran out in
+September.
+
+**Decision.** One topic family per audience, named `<family>-v<N>`, with an id after the version
+where there is one:
+
+| Topic | Carries | Subscribed by |
+|---|---|---|
+| `control-v2` | "Remote Config is stale", for the version floor below. Nothing else. | Every install, claimed or not |
+| `banner-v1-<dispensaryId>` | That dispensary's banner | Phones whose claim names that dispensary |
+| `device-v1-<uid>` | Revoke (disable and unlink) and resume for this install | The install holding a claim, revoked or not |
+| the dispensary's notice topics | Notices | Unchanged |
+
+- **Device topic.** The UID is the Firebase anonymous UID exactly as issued: topics are
+  case-sensitive, so it is never lowercased. A reinstall gets a new UID and so a new topic, which is
+  what makes unlink safe to push -- the next holder of the code has a different UID and cannot
+  receive the old phone's revoke. Dispensary topics hand-edited in RTDB must never start with
+  `device-` or `banner-`.
+- **Pushed from database triggers, not a queue.** A Cloud Function on `/codes/{code}` compares the
+  node before and after the write: `usedBy` X to empty is a revoke to `device-v1-X`, `revoked`
+  becoming true is a revoke to the holder, `revoked` true to false is a resume. The UID comes from
+  the before-image, so the console never writes it anywhere and the function must not log it. A
+  second trigger on `/dispensaries/{id}/info` sends the banner. `/controlQueue`, `queueControl_`,
+  `clearCodeControl_` and the sender's `Control.gs` all go. Events can arrive out of order, so each
+  message is stamped with the event's own time and the phone's `acceptControl` drops the older; the
+  function re-reads the node before sending, as the drain does now.
+- **Push is a courtesy, the API is the truth.** Once the remaining RTDB reads move behind
+  `codeManagement`, the app checks the API for its state and relies on push only to hear about a
+  change sooner. The periodic check stays, rare, as the net for a phone that was off past the
+  message TTL.
+- **`control-v1` is retired, with a bridge.** Older builds only listen on `control-v1`. Until the
+  database rules close, the triggers also send a copy there, in the same envelope, so those builds
+  keep hearing about a disable, an enable and a banner while they age out (amended 2026-10-28; first
+  decided as a clean break). The copy is only what the old drain sent: never an unlink or a delete,
+  because a code-addressed revoke for a freed code can reach the next phone to claim it, from FCM's
+  queue if it was offline. Nothing new is ever added to `control-v1`: a version number means one
+  envelope and one meaning. The new builds unsubscribe from it. The bridge goes when the rules
+  close (plan phase 5).
+
+**The version kill switch lives in Remote Config.** Kept for a version that must be forced to
+update; it may never be used. **Deferred** -- recorded so the design is not lost, and not part of
+the topic and trigger work above.
+
+- Two parameters beside the analytics switch: `min_version_supported` and `current_version`, both
+  versionCodes, never versionNames (as text, 0.8.10 sorts below 0.8.9).
+- **Below `min_version_supported`:** an update screen with no way past it, pointing at the Play
+  listing, and the build posts no notifications. **Recovery is lowering the minimum**, so there is
+  no separate un-kill to get wrong.
+- **Supported but below `current_version`:** a dismissable prompt, using Play's own in-app update
+  dialog (Play Core's flexible update) rather than a screen of ours. Asking Remote Config as well as
+  Play means the nudge starts when `current_version` is raised, not the moment a staged rollout
+  reaches the phone. Dismissed once per `current_version`, so it does not nag on every open. Play's
+  dialog only appears for a build installed from Play: a debug build never shows it, and testing it
+  needs internal app sharing.
+- Read from Remote Config because it already exists for the analytics switch, is fetched on every
+  foreground, and costs no database connection and no function execution.
+- The in-app default is 0, so a phone that has never fetched, or cannot, is never locked out by a
+  missing value. A failed fetch keeps the last activated value.
+- The update screen keeps fetching on every resume. A minimum set too high by mistake must lift
+  itself once it is corrected, without anybody reinstalling.
+- In a release build a fetch is skipped for six hours after the last one (`FETCH_INTERVAL_SECONDS`),
+  so a kill lands on a phone's first foreground after its window runs out -- and a phone nobody
+  opens never fetches at all, so it would go on posting notifications. `control-v2` exists to close
+  both: a `{type: "configStale"}` message enqueues a background fetch and activate with no interval,
+  in a `OneTimeWorkRequest` like the activation refresher: `NetworkType.CONNECTED`, a unique name with
+  `KEEP`, and a random 0-15 minute initial delay so four hundred phones do not fetch in the same
+  second. A Remote Config fetch is not a database connection, so it adds nothing to the RTDB
+  ceiling. If the work cannot run, the foreground fetch still catches up, and the stale mark makes
+  that one skip the six-hour interval too. Firebase documents this pattern for pushing Remote
+  Config changes.
+- A killed build stops posting notifications as well. A build is most likely killed because
+  something in it is broken, and notices arrive in the background without passing through the
+  screen. The check in the messaging service reads the last activated value, with no network, so a
+  notice arriving while the app is closed does not wait on a fetch.
+- Only builds that carry the gate can be killed, so it has to ship before it is needed.
+
+**The backend moves to Cloud Functions; the pages stay where they are.** The sender and console keep
+their Apps Script URLs and HtmlService pages. What moves is the server side behind them, one piece at
+a time, each shipping on its own: control first (above), then sending a notice, then the RSS poller
+(a scheduled function, off the Apps Script quota), then the console's issue, disable, unlink, purge
+and audit. Each Apps Script server function becomes a thin call to the function. How the page proves
+the staff member's identity to the function is the open question -- the `getOAuthToken()` route
+returned 401 (below), so the candidate, a Google ID token checked against `ALLOWED_EDITORS` inside
+the function, needs a spike before anything depends on it.
+
 ## What a phone can receive comes from its code's dispensary
 
 **Question.** "What you receive" was compiled into the app as Notices and Daily open and closed. The
@@ -70,6 +206,8 @@ clean-up has to deal with holders as well as codes (SYSTEM.md §10).
 
 ## Revoke, resume and the banner share one control topic
 
+*Superseded 2026-10-28 by "Topics are split by audience": `control-v1` is retired.*
+
 **Question.** A banner edited in the console did not reach a phone for days: the app read `/info`
 only when its view model was created, and a phone left in recents never recreated it. Revoke already
 rode on `notices-v1`. Where do banner updates go, and how does a restore reach a revoked phone
@@ -105,6 +243,9 @@ banner over the limit is refused at save, with the byte count, instead of silent
 phones.
 
 ## The console queues a revoke; a trigger in the sender drains it
+
+*Superseded 2026-10-28: the queue, `Control.gs` and its trigger are removed, and database triggers in
+`functions/src/control.ts` push instead. Kept for the `getOAuthToken()` evidence below.*
 
 **Question.** The decision below — the console POSTs to the sender's web app, forwarding the staff
 member's identity with `ScriptApp.getOAuthToken()` — does not work. What replaces it?

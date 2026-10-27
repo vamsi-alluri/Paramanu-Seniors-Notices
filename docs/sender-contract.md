@@ -129,53 +129,63 @@ you which code is live.
 
 ## Control messages
 
-A second kind of message, sent by `pushControl_`, that manages the app rather than informing its
-user. All go to **`control-v1`**, which every activated phone holds — revoked included — and which
-never appears in Settings.
+A second kind of message, sent by the database triggers in `functions/src/control.ts`, that manages
+the app rather than informing its user. Neither topic appears in Settings.
+
+| Topic | Carries | Held by |
+|---|---|---|
+| `device-v1-<uid>` | `revoke`, `resume` | the install whose anonymous UID holds the claim, revoked included |
+| `banner-v1-<dispensaryId>` | `banner` | phones whose code names that dispensary, while not revoked |
 
 ```json
-{ "message": { "topic": "control-v1", "android": { "priority": "high" },
+{ "message": { "topic": "device-v1-AbCdEf0123456789xyzUVW012345", "android": { "priority": "high" },
   "data": { "type": "revoke", "code": "A1B2C3D4", "at": "1789338553684" } } }
 ```
 
 | `type`   | Other keys          | The phone                                                          |
 |----------|---------------------|--------------------------------------------------------------------|
-| `revoke` | `code`, `at`        | holding `code`: leaves the notice topics, keeps `control-v1`, shows the banner |
+| `revoke` | `code`, `at`        | holding `code`, not already revoked: leaves the notice and banner topics, keeps its device topic, shows the banner |
 | `resume` | `code`, `at`        | holding `code` and revoked: rejoins the notice topics, clears the banner |
 | `banner` | `dispensary`, `html`, `at` | of that dispensary, not revoked: replaces the cached banner; `html: ""` means removed |
+
+`control-v1`, which carried all three to every phone, is retired, and builds that know the topics
+above leave it at their next subscription sync. **Until the database rules close**, the triggers
+also send a copy of each disable, enable and banner there, unchanged, for the builds that still
+listen on it -- never an unlink or a delete, since a revoke broadcast by code could reach whoever
+claims a freed code next.
 
 No `title`, no `body`, and — as ever — no `notification` block. They show the user nothing. The app
 checks for `type` before it looks for a title, because a payload with no title is otherwise dropped
 as malformed. An unknown `type` is ignored, so new ones can be added without breaking older phones.
 
-**`at` is epoch millis of the staff action**, as a string. FCM does not promise order, so a phone
+**`at` is epoch millis of the database write**, as a string (for a banner, its `htmlUpdated`). FCM does not promise order, so a phone
 ignores a revoke or resume stamped no newer than the last one it applied, and a banner stamped no
 newer than the one it holds. Without it, a Disable and Enable seconds apart could land reversed and
 leave the phone off. A message without `at` is ignored.
 
 **The banner's html travels inside the message** rather than prompting phones to fetch it,
 which would open four hundred database connections at once (SYSTEM.md §5.14). FCM refuses a data
-payload over 4096 bytes, so the console refuses a banner over **3500 UTF-8 bytes**, and the drain
+payload over 4096 bytes, so the console refuses a banner over **3500 UTF-8 bytes**, and the trigger
 drops one that somehow exceeds it rather than retrying it forever.
 
-These are **broadcasts**, not per-device addressing: every phone receives every revoke and resume
-and compares the code with its own. That publishes the code to all of them, which is harmless, but
-it is what goes out.
+Revoke and resume are **addressed to one install**, by the UID in the code's `usedBy` before the
+write. The code still travels in the message and the phone still compares it with its own, because
+the topic follows the UID, not the code: a late revoke for a code the phone has since replaced must
+not stop the new one. Unlinking a code sends a revoke too; a reinstall has a new UID, so the next
+holder of that code cannot receive it.
 
 They are **not authoritative**. FCM is best-effort and a phone switched off past the message TTL
 never sees them, so the device's own periodic verification remains the safety net, and a phone
 rereads its dispensary when it comes to the foreground. See `docs/decisions.md`.
 
-The console cannot send these itself, and has no HTTP route into the sender either — an OAuth-token
-call returns 401, because `ScriptApp.getOAuthToken()` cannot authorize a call into another project's
-web app. Instead the console writes `/controlQueue/code_{CODE}` or `/controlQueue/banner_{DISPENSARY}`,
-and `Control.gs` drains them on a one-minute trigger, re-reading the code or the dispensary's banner
-first so a request
-that no longer applies is dropped rather than broadcast.
+Neither Apps Script project sends these. The console only writes `/codes/{CODE}` and
+`/dispensaries/{id}/info` as it always has, and the database triggers react to those writes: the
+code trigger compares the node before and after, and both re-read the database before sending, so a
+change that no longer applies is dropped rather than sent. (The earlier `/controlQueue` and the
+sender's one-minute `Control.gs` drain are removed.)
 
-Delivery is at-least-once: a queue entry is cleared only once FCM has accepted the message, and only
-if the console has not replaced it in the meantime. A device receiving the same message twice applies
-it once.
+Delivery is at-least-once: a trigger that fails to reach FCM is retried. A device receiving the same
+message twice applies it once.
 
 ## Who can send
 
