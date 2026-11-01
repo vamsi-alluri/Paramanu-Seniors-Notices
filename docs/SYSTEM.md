@@ -154,8 +154,8 @@ each dispensary's `info` and send to the holding install's `device-v1-<uid>` or 
 these still work — they are recorded in the database, and phones catch up at their next check or
 app open. Only the speed depends on them.
 
-The codes table has a search box (a code with or without its dash, a name, CHSS number, telephone
-digits, or note text — and a removed holder's details, for an On hold code) and a Status filter
+The codes table has a search box (a code with or without its dash, a name, CHSS number or telephone
+digits — and a removed holder's details, for an On hold code) and a Status filter
 beside it. The filter used to sit inside the Status header, where it set the column's width. Neither
 affects printing, which always covers every eligible code.
 
@@ -655,7 +655,7 @@ counters. See section 6a on where they should live if they are built.
 
 ## 10. Runbooks
 
-**Issue codes** — console → count + optional note → Generate → Print slips.
+**Issue codes** — console → count → Generate → Print slips.
 
 Printing covers every code that is unclaimed, unrevoked **and not yet printed**, across all pages,
 not only the page on screen. After the print dialog closes the console asks whether the slips came
