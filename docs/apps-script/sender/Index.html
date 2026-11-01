@@ -6,53 +6,75 @@
   /* 100% on the root means the browser's own default text size, and every size below is in rem,
      so a reader who has set a larger default -- or pressed Ctrl and + -- gets the whole page
      larger, tables included. Nothing here may be set in px, or it will ignore them. */
-  :root { color-scheme: light; font-size: 100%;
+  :root { color-scheme: light dark; font-size: 100%;
           /* The width of a field and of anything that has to line up with one. In rem, not ch:
              ch is the width of a "0" in the element's own font, so the counters at .85rem came out
              a good deal narrower than the fields they sit under and stopped short of the edge.
              rem is the same length everywhere, and still scales with the reader's text size. */
           --measure: 42rem; }
+
+  /* Colours follow the computer's light/dark setting and nothing else, as the app does. The dark
+     values are the app's own (ui/theme/Color.kt) wherever it has one, and match the admin console. */
+  :root {
+    --page: #f4f6fb; --card: #fff; --field: #fff; --topbar: #fcfcffee;
+    --ink: #10131a; --ink-2: #3c4455; --primary: #14315c; --on-primary: #fff;
+    --outline: #c3c9d6; --border: #e0e4ee; --rule: #e6e9f0;
+    --row-alt: #f7f9fc; --row-hover: #eef3fb;
+    --info-bg: #d6e2f5; --info-ink: #03152e; --err-bg: #f9dedc; --err-ink: #410e0b;
+    --error: #b3261e;
+  }
+  @media screen and (prefers-color-scheme: dark) {
+    :root {
+      --page: #11131a; --card: #191c24; --field: #11131a; --topbar: #11131aee;
+      --ink: #e4e6ec; --ink-2: #c6cad4; --primary: #afc8f0; --on-primary: #04203f;
+      --outline: #454b57; --border: #2c313b; --rule: #2c313b;
+      --row-alt: #1e222b; --row-hover: #243149;
+      --info-bg: #23446f; --info-ink: #d6e2f5; --err-bg: #8c1d18; --err-ink: #f9dedc;
+      --error: #f2b8b5;
+    }
+  }
+
   html { scroll-behavior: smooth; }
   body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
-         background: #f4f6fb; color: #10131a; font-size: 1rem; line-height: 1.5; }
+         background: var(--page); color: var(--ink); font-size: 1rem; line-height: 1.5; }
 
   /* The window, like the admin console. The sent list is what wants the room; the fields and the
      prose are capped on their own below, so widening the page does not stretch them. */
   .page { max-width: 1760px; margin: 0 auto; padding: 0 24px 60px; }
 
   /* Sticky so the section links stay reachable from anywhere on a long page. */
-  .topbar { position: sticky; top: 0; z-index: 10; background: #fcfcffee;
-            backdrop-filter: blur(6px); border-bottom: 1px solid #e0e4ee;
+  .topbar { position: sticky; top: 0; z-index: 10; background: var(--topbar);
+            backdrop-filter: blur(6px); border-bottom: 1px solid var(--border);
             padding: 12px 20px; margin-bottom: 24px; }
   .topbar .inner { max-width: 1760px; margin: 0 auto; display: flex; gap: 18px;
                    align-items: baseline; flex-wrap: wrap; }
-  .topbar .brand { font-weight: 600; font-size: 1.05rem; color: #14315c; margin-right: 4px; }
-  .topbar a { font-size: 1rem; color: #3c4455; text-decoration: none; padding: 4px 0;
+  .topbar .brand { font-weight: 600; font-size: 1.05rem; color: var(--primary); margin-right: 4px; }
+  .topbar a { font-size: 1rem; color: var(--ink-2); text-decoration: none; padding: 4px 0;
               border-bottom: 2px solid transparent; cursor: pointer; }
-  .topbar a:hover { color: #14315c; border-bottom-color: #14315c; }
+  .topbar a:hover { color: var(--primary); border-bottom-color: var(--primary); }
   /* Leaves this page rather than jumping within it, so it sits apart at the far end. */
   .topbar a.away { margin-left: auto; }
 
   /* Each section is its own card, so it is obvious where one job ends and the next begins. */
-  .card { background: #fff; border: 1px solid #e0e4ee; border-radius: 14px;
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px;
           padding: 22px 24px; margin-bottom: 22px; }
   /* Clears the sticky bar when a section is jumped to. */
   .card { scroll-margin-top: 76px; }
 
   h1 { font-size: 1.4rem; margin: 0 0 4px; }
-  h2 { font-size: 1.15rem; margin: 0 0 4px; color: #10131a; }
+  h2 { font-size: 1.15rem; margin: 0 0 4px; color: var(--ink); }
   /* Darker than it was: this text carries real instructions, not decoration, and #4a5162 on white
      was being read as greyed-out. */
-  .sub { color: #3c4455; font-size: .95rem; margin-bottom: 18px; line-height: 1.55; max-width: 90ch; }
-  .divider { height: 1px; background: #e6e9f0; margin: 22px 0; }
+  .sub { color: var(--ink-2); font-size: .95rem; margin-bottom: 18px; line-height: 1.55; max-width: 90ch; }
+  .divider { height: 1px; background: var(--rule); margin: 22px 0; }
 
   .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
-  button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 1px solid #14315c;
-           background: #14315c; color: #fff; cursor: pointer; }
-  button.ghost { background: #fff; color: #14315c; }
+  button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 1px solid var(--primary);
+           background: var(--primary); color: var(--on-primary); cursor: pointer; }
+  button.ghost { background: var(--card); color: var(--primary); }
   button:disabled { opacity: .5; cursor: default; }
-  input, textarea { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
-                    background: #fff; color: #10131a; }
+  input, textarea { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--outline);
+                    background: var(--field); color: var(--ink); }
   /*
     A field is its label, its box and its counter in one container, and the container holds the
     measure. Everything inside fills it, so the counter ends exactly where the box ends however the
@@ -64,21 +86,22 @@
   .field input, .field textarea { width: 100%; box-sizing: border-box; }
   .field textarea { min-height: 120px; resize: vertical; line-height: 1.55; }
 
-  label { display: block; font-size: 1rem; color: #3c4455; margin: 0 0 6px; }
-  .count { font-size: .85rem; color: #3c4455; text-align: right; margin-top: 4px; }
-  .count.over { color: #b3261e; font-weight: 600; }
+  label { display: block; font-size: 1rem; color: var(--ink-2); margin: 0 0 6px; }
+  .count { font-size: .85rem; color: var(--ink-2); text-align: right; margin-top: 4px; }
+  .count.over { color: var(--error); font-weight: 600; }
 
   /* One-tap saved messages. Dashed means "start from nothing" rather than from a saved wording. */
   .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
   .chip { font: inherit; font-size: 1rem; padding: 9px 16px; border-radius: 999px;
-          border: 1px solid #c3c9d6; background: #fff; color: #14315c; cursor: pointer; }
-  .chip:hover { border-color: #14315c; }
+          border: 1px solid var(--outline); background: var(--card); color: var(--primary); cursor: pointer; }
+  .chip:hover { border-color: var(--primary); }
   .chip.blank { border-style: dashed; }
 
-  /* Deliberately styled like the phone's notification, so what you approve is what they see. */
-  .preview { border: 1px solid #e6e9f0; border-radius: 12px; padding: 14px 16px; background: #fff;
+  /* Deliberately styled like the phone's notification, so what you approve is what they see.
+     Themed with the page, since the phone's notification shade goes dark as well. */
+  .preview { border: 1px solid var(--rule); border-radius: 12px; padding: 14px 16px; background: var(--card);
              max-width: 420px; }
-  .preview .who { font-size: .85rem; color: #3c4455; }
+  .preview .who { font-size: .85rem; color: var(--ink-2); }
   .preview .t { font-size: 1.2rem; font-weight: 600; margin-top: 4px; word-wrap: break-word; }
   .preview .b { font-size: 1.1rem; margin-top: 4px; white-space: pre-wrap; word-wrap: break-word;
                 line-height: 1.55; }
@@ -86,16 +109,16 @@
   table { border-collapse: collapse; width: 100%; font-size: 1rem; }
   /* Tall rows. Space between lines does more for reading across a wide row than any rule drawn
      down it. */
-  th, td { text-align: left; padding: 12px; border-bottom: 1px solid #e6e9f0;
+  th, td { text-align: left; padding: 12px; border-bottom: 1px solid var(--rule);
            vertical-align: top; line-height: 1.55; }
   /* Sentence case, not capitals: word shape is one of the strongest cues a reader has. */
-  th { font-size: .95rem; font-weight: 600; color: #3c4455; }
+  th { font-size: .95rem; font-weight: 600; color: var(--ink-2); }
   /* A tinted band binds a row together, where a line only separates it from the next one. The
      class is set in script, matching how the admin console does it. */
-  tr.alt > td { background: #f7f9fc; }
-  tbody tr:hover > td { background: #eef3fb; }
+  tr.alt > td { background: var(--row-alt); }
+  tbody tr:hover > td { background: var(--row-hover); }
   .tablewrap { overflow-x: auto; }
-  .failed { color: #b3261e; }
+  .failed { color: var(--error); }
 
   /*
     Sits with the Send button rather than at the top of the page.
@@ -107,8 +130,8 @@
   */
   .msg { padding: 10px 12px; border-radius: 8px; margin: 0 0 14px; display: none;
          max-width: var(--measure); box-sizing: border-box; }
-  .msg.err { background: #f9dedc; color: #410e0b; display: block; }
-  .msg.ok { background: #d6e2f5; color: #03152e; display: block; }
+  .msg.err { background: var(--err-bg); color: var(--err-ink); display: block; }
+  .msg.ok { background: var(--info-bg); color: var(--info-ink); display: block; }
 </style>
 </head>
 <body>

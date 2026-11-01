@@ -6,10 +6,41 @@
   /* 100% on the root means the browser's own default text size, and every size below is in rem,
      so a reader who has set a larger default -- or pressed Ctrl and + -- gets the whole page
      larger, tables included. Nothing here may be set in px, or it will ignore them. */
-  :root { color-scheme: light; font-size: 100%; }
+  :root { color-scheme: light dark; font-size: 100%; }
+
+  /* Colours follow the computer's light/dark setting and nothing else, as the app does. The dark
+     values are the app's own (ui/theme/Color.kt) wherever it has one. Screen only: a slip printed
+     from a laptop in dark mode must still come out dark ink on white paper. */
+  :root {
+    --page: #f4f6fb; --card: #fff; --field: #fff; --topbar: #fcfcffee;
+    --ink: #10131a; --ink-2: #3c4455; --muted: #5a6478; --locked: #4a5467;
+    --primary: #14315c; --on-primary: #fff;
+    --outline: #c3c9d6; --border: #e0e4ee; --rule: #e6e9f0; --col-rule: #cdd3e0;
+    --inset: #f8f9fc; --hist: #f6f8fc; --row-alt: #f7f9fc; --row-hover: #eef3fb;
+    --info-bg: #d6e2f5; --info-ink: #03152e; --err-bg: #f9dedc; --err-ink: #410e0b;
+    --printed-bg: #dff0e2; --printed-ink: #0d2f16; --used-bg: #e6e9f0; --used-ink: #2a2f3a;
+    --hold-bg: #fbe6bd; --hold-ink: #3f2a00;
+    --danger: #8c1d18; --danger-edge: #e5c3c0; --backdrop: #10131a66; --banner-edge: #e0e4ee;
+  }
+  @media screen and (prefers-color-scheme: dark) {
+    :root {
+      --page: #11131a; --card: #191c24; --field: #11131a; --topbar: #11131aee;
+      --ink: #e4e6ec; --ink-2: #c6cad4; --muted: #a7adbb; --locked: #b4bac7;
+      --primary: #afc8f0; --on-primary: #04203f;
+      --outline: #454b57; --border: #2c313b; --rule: #2c313b; --col-rule: #3a404b;
+      --inset: #1e222b; --hist: #1e222b; --row-alt: #1e222b; --row-hover: #243149;
+      --info-bg: #23446f; --info-ink: #d6e2f5; --err-bg: #8c1d18; --err-ink: #f9dedc;
+      --printed-bg: #1f3d26; --printed-ink: #c8e8cf; --used-bg: #262a33; --used-ink: #c6cad4;
+      --hold-bg: #5a4200; --hold-ink: #fbe6bd;
+      --danger: #f2b8b5; --danger-edge: #8c1d18; --backdrop: #000000aa;
+      /* The banner stays paper in dark mode (below), so it needs an edge, as it has in the app. */
+      --banner-edge: #e0d3b0;
+    }
+  }
+
   html { scroll-behavior: smooth; }
   body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 0;
-         background: #f4f6fb; color: #10131a; font-size: 1rem; line-height: 1.5; }
+         background: var(--page); color: var(--ink); font-size: 1rem; line-height: 1.5; }
 
   /* The codes table is nine columns wide. Penning it into 1040px and letting it scroll sideways
      cost more than the long measure saved, so the page takes the window and the blocks of prose
@@ -17,48 +48,48 @@
   .page { max-width: 1760px; margin: 0 auto; padding: 0 24px 60px; }
 
   /* Sticky so the section links stay reachable from anywhere on a long page. */
-  .topbar { position: sticky; top: 0; z-index: 10; background: #fcfcffee;
-            backdrop-filter: blur(6px); border-bottom: 1px solid #e0e4ee;
+  .topbar { position: sticky; top: 0; z-index: 10; background: var(--topbar);
+            backdrop-filter: blur(6px); border-bottom: 1px solid var(--border);
             padding: 12px 20px; margin-bottom: 24px; }
   .topbar .inner { max-width: 1760px; margin: 0 auto; display: flex; gap: 18px;
                    align-items: baseline; flex-wrap: wrap; }
-  .topbar .brand { font-weight: 600; font-size: 1.05rem; color: #14315c; margin-right: 4px; }
-  .topbar a { font-size: 1rem; color: #3c4455; text-decoration: none; padding: 4px 0;
+  .topbar .brand { font-weight: 600; font-size: 1.05rem; color: var(--primary); margin-right: 4px; }
+  .topbar a { font-size: 1rem; color: var(--ink-2); text-decoration: none; padding: 4px 0;
               border-bottom: 2px solid transparent; cursor: pointer; }
-  .topbar a:hover { color: #14315c; border-bottom-color: #14315c; }
+  .topbar a:hover { color: var(--primary); border-bottom-color: var(--primary); }
   /* Leaves this page rather than jumping within it, so it sits apart at the far end. */
   .topbar a.away { margin-left: auto; }
 
   /* Each section is its own card, so it is obvious where one job ends and the next begins. */
-  .card { background: #fff; border: 1px solid #e0e4ee; border-radius: 14px;
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px;
           padding: 22px 24px; margin-bottom: 22px; }
   /* Clears the sticky bar when a section is jumped to. */
   .card { scroll-margin-top: 76px; }
 
   h1 { font-size: 1.4rem; margin: 0 0 4px; }
-  h2 { font-size: 1.15rem; margin: 0 0 4px; color: #10131a; }
+  h2 { font-size: 1.15rem; margin: 0 0 4px; color: var(--ink); }
   /* Darker than it was: this text carries real instructions, not decoration, and #4a5162 on white
      was being read as greyed-out. */
-  .sub { color: #3c4455; font-size: .95rem; margin-bottom: 18px; line-height: 1.55; max-width: 90ch; }
-  .divider { height: 1px; background: #e6e9f0; margin: 22px 0; }
+  .sub { color: var(--ink-2); font-size: .95rem; margin-bottom: 18px; line-height: 1.55; max-width: 90ch; }
+  .divider { height: 1px; background: var(--rule); margin: 22px 0; }
 
   .bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
-  button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 1px solid #14315c;
-           background: #14315c; color: #fff; cursor: pointer; }
-  button.ghost { background: #fff; color: #14315c; }
+  button { font: inherit; padding: 9px 16px; border-radius: 8px; border: 1px solid var(--primary);
+           background: var(--primary); color: var(--on-primary); cursor: pointer; }
+  button.ghost { background: var(--card); color: var(--primary); }
   /* Irreversible, and sits beside four buttons that are not. */
-  button.ghost.danger { color: #8c1d18; border-color: #e5c3c0; }
-  button.ghost.danger:hover { border-color: #8c1d18; }
+  button.ghost.danger { color: var(--danger); border-color: var(--danger-edge); }
+  button.ghost.danger:hover { border-color: var(--danger); }
   button:disabled { opacity: .5; cursor: default; }
-  input, textarea, select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid #c3c9d6;
-                    background: #fff; color: #10131a; }
+  input, textarea, select { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--outline);
+                    background: var(--field); color: var(--ink); }
   input[type=number] { width: 72px; }
   input[type=text], input[type=search] { min-width: 280px; flex: 1; }
 
   /* Draws a line round the three things Generate uses, so the count and note are not read as
      belonging to Refresh or Print sitting beside them. */
   .group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; flex: 1;
-           border: 1px solid #c3c9d6; border-radius: 10px; padding: 10px 12px; background: #f8f9fc; }
+           border: 1px solid var(--outline); border-radius: 10px; padding: 10px 12px; background: var(--inset); }
 
   input[type=color] { padding: 2px; width: 38px; }
   .wide { width: 100%; box-sizing: border-box; }
@@ -66,38 +97,38 @@
   table { border-collapse: collapse; width: 100%; font-size: 1rem; }
   /* Tall rows. Space between lines does more for reading across a wide row than any rule drawn
      down it, and the eye losing its place mid-row was the actual complaint. */
-  th, td { text-align: left; padding: 11px 8px; border-bottom: 1px solid #e6e9f0;
+  th, td { text-align: left; padding: 11px 8px; border-bottom: 1px solid var(--rule);
            vertical-align: top; line-height: 1.55; }
   /* A dotted rule between columns rather than a solid one. Enough to hold the eye inside a column
      on a nine-column row, faint enough that the row still reads across as one thing -- a solid
      grid chops it into boxes, which is the opposite of what reading a row needs. Left-hand border
      only, so the first column and a full-width history cell keep a clean edge. */
-  th + th, td + td { border-left: 1px dotted #cdd3e0; }
+  th + th, td + td { border-left: 1px dotted var(--col-rule); }
   /* Sentence case, not capitals: word shape is one of the strongest cues a reader has and
      uppercase throws it away. */
-  th { font-size: .95rem; font-weight: 600; color: #3c4455; }
+  th { font-size: .95rem; font-weight: 600; color: var(--ink-2); }
   /* A tinted band binds a row together, where a line only separates it from the next one. The
      class is set in script rather than with :nth-child, because an open history is a sibling row
      and would otherwise flip the stripes of everything under it. */
-  tr.alt > td { background: #f7f9fc; }
-  tbody tr:hover > td { background: #eef3fb; }
+  tr.alt > td { background: var(--row-alt); }
+  tbody tr:hover > td { background: var(--row-hover); }
   th.sort { cursor: pointer; user-select: none; white-space: nowrap; }
-  th.sort:hover { color: #14315c; }
-  th .arrow { font-size: .7rem; margin-left: 5px; color: #14315c; }
+  th.sort:hover { color: var(--primary); }
+  th .arrow { font-size: .7rem; margin-left: 5px; color: var(--primary); }
   .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
           font-size: 1.15rem; letter-spacing: .06em; }
   /* nowrap matters now the column is sized by its content: "On hold" broke over two lines and the
      999px radius turned the pill into a circle. The words set the column's width instead. */
   .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: .9rem;
           white-space: nowrap; }
-  .free { background: #d6e2f5; color: #03152e; }
+  .free { background: var(--info-bg); color: var(--info-ink); }
   /* Between free and used: a slip exists, but nobody has activated it yet. */
-  .printed { background: #dff0e2; color: #0d2f16; }
-  .used { background: #e6e9f0; color: #2a2f3a; }
-  .revoked { background: #f9dedc; color: #410e0b; }
+  .printed { background: var(--printed-bg); color: var(--printed-ink); }
+  .used { background: var(--used-bg); color: var(--used-ink); }
+  .revoked { background: var(--err-bg); color: var(--err-ink); }
   /* On hold: stopped and locked until the holder is restored. Amber, so it is not read as Disabled. */
-  .hold { background: #fbe6bd; color: #3f2a00; }
-  .hist { background: #f6f8fc; }
+  .hold { background: var(--hold-bg); color: var(--hold-ink); }
+  .hist { background: var(--hist); }
   .hist ol + .sub { margin: 12px 0 4px; }
   /* Nine columns do not fit a narrow window; the table scrolls on its own rather than the page. */
   .tablewrap { overflow-x: auto; }
@@ -105,23 +136,23 @@
      row grew to match. Wide enough for three across now, and they wrap only when they must. */
   .actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 340px; }
   .actions button { padding: 6px 11px; font-size: .9rem; white-space: nowrap; }
-  .locked { color: #4a5467; font-size: .95rem; }
+  .locked { color: var(--locked); font-size: .95rem; }
   /* Takes its own line, so it reads as a note about the button above it rather than a label beside it. */
   .actions .locked { flex: 1 0 100%; }
-  .gone { color: #5a6478; font-style: italic; }
+  .gone { color: var(--muted); font-style: italic; }
 
-  dialog { border: 1px solid #c3c9d6; border-radius: 12px; padding: 20px 22px; max-width: 420px;
-           width: calc(100% - 40px); color: #10131a; }
-  dialog::backdrop { background: #10131a66; }
-  dialog label { display: block; font-size: .95rem; color: #3c4455; margin: 12px 0 4px; }
+  dialog { border: 1px solid var(--outline); border-radius: 12px; padding: 20px 22px; max-width: 420px;
+           width: calc(100% - 40px); color: var(--ink); background: var(--card); }
+  dialog::backdrop { background: var(--backdrop); }
+  dialog label { display: block; font-size: .95rem; color: var(--ink-2); margin: 12px 0 4px; }
   dialog input[type=text], dialog input[type=tel] { width: 100%; box-sizing: border-box; min-width: 0; }
   dialog .msg { position: static; margin: 12px 0 0; }
   .hist td { padding: 10px 14px 16px; }
   .hist ol { margin: 0; padding-left: 20px; }
   .hist li { padding: 4px 0; }
-  .who { color: #5a6478; }
+  .who { color: var(--muted); }
   .toggle { font: inherit; font-size: .95rem; background: none; border: 0; padding: 0;
-            color: #14315c; cursor: pointer; text-decoration: underline; white-space: nowrap; }
+            color: var(--primary); cursor: pointer; text-decoration: underline; white-space: nowrap; }
 
   /*
     The banner editor is its own preview. It carries the app's own banner colours, width and type,
@@ -130,17 +161,21 @@
 
     420px is a phone's width. Writing a banner on a line twice that long is how a two-line note
     turns into five lines on the device.
+
+    Paper and ink are fixed, not themed, for the same reason the app fixes them: the colours an
+    author picks here are chosen against paper and saved into the banner, and the phone shows them
+    on paper in dark mode too.
   */
-  .bannerbox { background: #faf4e6; border: 1px solid #e0e4ee; border-radius: 12px; padding: 16px;
+  .bannerbox { background: #faf4e6; border: 1px solid var(--banner-edge); border-radius: 12px; padding: 16px;
                min-height: 120px; max-width: 420px; font-size: 1rem; line-height: 1.55;
-               color: #10131a; }
-  .bannerbox:focus { outline: 2px solid #14315c; outline-offset: 2px; }
+               color: #10131a; color-scheme: light; }
+  .bannerbox:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
 
   /* Sticky as well: a failure reported while you are at the bottom must not scroll away. */
   .msg { position: sticky; top: 60px; z-index: 9; padding: 10px 12px; border-radius: 8px;
          margin-bottom: 16px; display: none; }
-  .msg.err { background: #f9dedc; color: #410e0b; display: block; }
-  .msg.ok { background: #d6e2f5; color: #03152e; display: block; }
+  .msg.err { background: var(--err-bg); color: var(--err-ink); display: block; }
+  .msg.ok { background: var(--info-bg); color: var(--info-ink); display: block; }
 
   /* Slips: one code per cut-out, big enough to read and to type from. */
   #slips { display: none; }
