@@ -86,8 +86,8 @@
   input[type=number] { width: 72px; }
   input[type=text], input[type=search] { min-width: 280px; flex: 1; }
 
-  /* Draws a line round the three things Generate uses, so the count and note are not read as
-     belonging to Refresh or Print sitting beside them. */
+  /* Draws a line round the count and Generate, so the count is not read as belonging to Refresh
+     or Print sitting beside them. */
   .group { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; flex: 1;
            border: 1px solid var(--outline); border-radius: 10px; padding: 10px 12px; background: var(--inset); }
 
@@ -233,7 +233,6 @@
       <div class="bar">
         <div class="group" role="group" aria-label="Generate codes">
           <input type="number" id="count" value="10" min="1" max="200" oninput="labelGenerate()">
-          <input type="text" id="note" maxlength="120" placeholder="Note [Optional Field] e.g. Printed for 12 Sep counter">
           <button id="make" onclick="makeCodes()">Generate 10</button>
         </div>
       </div>
@@ -252,7 +251,7 @@
 
       <div class="bar">
         <input type="search" id="search" oninput="setSearch(this.value)"
-               placeholder="Search by code, name, CHSS number, telephone or note">
+               placeholder="Search by code, name, CHSS number or telephone">
         <!-- Out of the Status header and in beside the search: a select inside a column heading
              sets that column's width, and it was the widest thing in it by far. -->
         <label class="sub" style="margin:0">Status
@@ -270,14 +269,13 @@
             <th class="sort" onclick="sortCodes('name')">Name<span class="arrow" id="ac-name"></span></th>
             <th class="sort" onclick="sortCodes('chss')">CHSS number<span class="arrow" id="ac-chss"></span></th>
             <th class="sort" onclick="sortCodes('phone')">Telephone<span class="arrow" id="ac-phone"></span></th>
-            <th class="sort" onclick="sortCodes('note')">Note<span class="arrow" id="ac-note"></span></th>
             <th class="sort" onclick="sortCodes('issued')">Issued<span class="arrow" id="ac-issued"></span></th>
             <th class="sort" onclick="sortCodes('lastChange')">Last change<span class="arrow" id="ac-lastChange"></span></th>
             <th></th>
           </tr>
         </thead>
         <tbody id="rows">
-          <tr><td colspan="9">Loading...</td></tr>
+          <tr><td colspan="8">Loading...</td></tr>
         </tbody>
       </table>
       </div>
@@ -442,8 +440,8 @@
     el.className = 'msg ' + (isError ? 'err' : 'ok');
   }
 
-  // Notes are free text typed by whoever staffs the counter and are rendered back into the page,
-  // so they are escaped rather than trusted.
+  // Holder details are free text typed by whoever staffs the counter and are rendered back into the
+  // page, so they are escaped rather than trusted.
   function escapeHtml(s) {
     return String(s || '').replace(/[&<>"']/g, function (c) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
@@ -462,8 +460,8 @@
   // the page, so a click costs no round trip and cannot fail halfway. Clicking the column you are
   // already sorted by flips the direction.
 
-  // Blank cells sort to the bottom whichever way the column is pointing: most notes are empty, and
-  // a screen of blank rows is never what somebody clicking "Note" was looking for.
+  // Blank cells sort to the bottom whichever way the column is pointing: most codes have no holder,
+  // and a screen of blank rows is never what somebody clicking "Name" was looking for.
   function compareValues(x, y, dir) {
     var xBlank = x === '' || x === null || x === undefined;
     var yBlank = y === '' || y === null || y === undefined;
@@ -495,7 +493,7 @@
   // Newest first, matching the order the server hands them over in.
   var CODE_SORT = { key: 'issued', dir: -1 };
 
-  var CODE_KEYS = ['code', 'status', 'name', 'chss', 'phone', 'note', 'issued', 'lastChange'];
+  var CODE_KEYS = ['code', 'status', 'name', 'chss', 'phone', 'issued', 'lastChange'];
 
   // Which codes have their history open. Keyed by code rather than by row index so an expansion
   // survives a re-sort and a page turn -- both of which redraw the whole table.
@@ -532,7 +530,7 @@
     var text = String(query || '').trim().toLowerCase();
     if (!text) return true;
     var h = row.holder || {};
-    if ([row.note, h.name, h.chss].join('\n').toLowerCase().indexOf(text) >= 0) return true;
+    if ([h.name, h.chss].join('\n').toLowerCase().indexOf(text) >= 0) return true;
 
     // A removed holder's name is still worth finding: their code is sitting On hold in this table
     // and their name is the only thing staff remember about it.
@@ -638,7 +636,6 @@
     // column gets asked most.
     if (key === 'status') return row.onHold ? 4 : row.revoked ? 3 : row.claimed ? 2 : row.printed ? 1 : 0;
     if (key === 'issued') return row.issued || 0;
-    if (key === 'note') return row.note || '';
     // An On hold code has no holder of its own, so it sorts under the name of the holder it is
     // waiting for -- the same name the Name column shows.
     if (key === 'name') return row.holder ? row.holder.name : removedOf(row) ? removedOf(row).name : '';
@@ -729,7 +726,7 @@
     var pager = document.getElementById('pager');
 
     if (!rows.length) {
-      body.innerHTML = '<tr><td colspan="9">' +
+      body.innerHTML = '<tr><td colspan="8">' +
         (CODES.length ? 'No codes match. Clear the search or set Status back to All.'
                       : 'No codes yet. Generate some.') + '</td></tr>';
       pager.style.display = 'none';
@@ -787,7 +784,6 @@
         // hand one code to two people. The reserved review code is left out for the reason printing
         // leaves it out.
         if (status === 'unused' && !r.reserved) actions.push(actionButton('Copy link', 'copyLink', r.code));
-        actions.push(actionButton('Edit note', 'editNote', r.code));
         if (h) {
           actions.push(actionButton('Edit holder', 'editHolder', r.code));
           actions.push(actionButton('Move holder', 'moveHolder', r.code));
@@ -814,7 +810,7 @@
       var html = '<tr class="' + (i % 2 ? 'alt' : '') + '"><td class="mono">' + r.formatted + '</td><td>' + state +
                  '</td><td>' + nameCell + '</td><td>' + chssCell +
                  '</td><td>' + phoneCell +
-                 '</td><td>' + escapeHtml(r.note) + '</td><td>' + stamp(r.issued) +
+                 '</td><td>' + stamp(r.issued) +
                  '</td><td>' + last +
                  '</td><td><div class="actions">' + actions.join('') + '</div></td></tr>';
 
@@ -825,7 +821,7 @@
             h.history.map(function (entry) { return '<li>' + holderLine(entry) + '</li>'; }).join('') + '</ol>'
           : '';
         if (codeLines || holderLines) {
-          html += '<tr class="hist"><td colspan="9"><ol>' + codeLines + '</ol>' + holderLines + '</td></tr>';
+          html += '<tr class="hist"><td colspan="8"><ol>' + codeLines + '</ol>' + holderLines + '</td></tr>';
         }
       }
       return html;
@@ -852,18 +848,7 @@
         refresh();
       })
       .withFailureHandler(function (e) { busy(false); show(e.message, true); })
-      .createCodes(document.getElementById('count').value,
-                   document.getElementById('note').value);
-  }
-
-  function editNote(code) {
-    var current = '';
-    for (var i = 0; i < CODES.length; i++) if (CODES[i].code === code) current = CODES[i].note || '';
-    var next = prompt('Note for ' + code + ' (leave blank to clear):', current);
-    if (next === null) return;
-    google.script.run.withSuccessHandler(render)
-      .withFailureHandler(function (e) { show(e.message, true); })
-      .setNote(code, next);
+      .createCodes(document.getElementById('count').value);
   }
 
   // The codes currently on the print sheet, and whether already-printed ones are included.
@@ -1182,7 +1167,7 @@
       'Unlink the phone from ' + formatCode(code) + '?\n\n' +
       'This returns the code to the pool: any phone with this slip can claim it, the old phone included. ' +
       'Use it when the holder has moved to a new phone, or reinstalled the app or cleared its data. ' +
-      'The note and the holder stay.\n\n' +
+      'The holder stays.\n\n' +
       'For a lost or stolen phone, Disable instead and give the holder a new slip.\n\n' +
       'If a working phone still holds this code, unlinking cuts that phone off.'
     )) return;
