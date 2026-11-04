@@ -143,12 +143,12 @@ Rollback is not finished at step 3. `--to-revisions NAME=100` clears the "latest
 
 ## 5. Outage or silence? (GA4 in BigQuery)
 
-Every call reports `code_management_call` with `operation` (`status` or `activate`), `outcome` (`active`, `revoked`, `refused`, `inconclusive`), `duration_ms`, and `http_status` (omitted when no response arrived). The export is `analytics_552268879`, a daily batch, so expect about a one-day lag; today's table does not exist yet. Dev and robo traffic mixes in, so every query below filters on `app_info.version = release_version`. The `DECLARE` default `0.8.1` is the `versionName` in `app/build.gradle` today; set it to the build you are asking about (it is a single exact match, so run once per version).
+Every call reports `code_management_call` with `operation` (`status` or `activate`), `outcome` (`active`, `revoked`, `refused`, `inconclusive`), `duration_ms`, and `http_status` (omitted when no response arrived). The export is `analytics_552268879`, a daily batch, so expect about a one-day lag; today's table does not exist yet. Dev and robo traffic mixes in, so every query below filters on `app_info.version = release_version`. The `DECLARE` default `0.8.5` is the `versionName` in `app/build.gradle` today and the build production is migrating onto; set it to the build you are asking about (it is a single exact match, so run once per version). 0.8.5 is the first shipped build that makes `code_management_call` (0.8.2 and 0.8.3 were development builds), so 0.8.1 and earlier return nothing from the call queries. The dev and robo filtering that the saved views use lives in `notices_analytics.real_events` (source: `docs/analytics/views/real_events.sql`); these queries filter only by version, so on a quiet day a development handset on the same build can dominate the counts.
 
 Daily outcome mix:
 
 ```sql
-DECLARE release_version STRING DEFAULT '0.8.1';
+DECLARE release_version STRING DEFAULT '0.8.5';
 SELECT
   PARSE_DATE('%Y%m%d', event_date) AS day,
   (SELECT value.string_value FROM UNNEST(event_params) WHERE key='operation') AS operation,
@@ -168,7 +168,7 @@ Run with: `bq query --project_id paramanu-seniors --use_legacy_sql=false '<query
 **Outage signature** (calls are happening but failing): the `inconclusive` share jumps, with 5xx or absent `http_status`.
 
 ```sql
-DECLARE release_version STRING DEFAULT '0.8.1';
+DECLARE release_version STRING DEFAULT '0.8.5';
 SELECT
   PARSE_DATE('%Y%m%d', event_date) AS day,
   COUNT(*) AS calls,
@@ -194,7 +194,7 @@ A third shape is a malformed-request regression: 100% `inconclusive` with a 4xx 
 **Silence signature** (no events at all): compare call events with other app activity per day.
 
 ```sql
-DECLARE release_version STRING DEFAULT '0.8.1';
+DECLARE release_version STRING DEFAULT '0.8.5';
 SELECT
   PARSE_DATE('%Y%m%d', event_date) AS day,
   COUNTIF(event_name = 'code_management_call') AS cm_calls,
@@ -217,7 +217,7 @@ ORDER BY day DESC;
 The discriminator is `duration_ms`. The unusable-URL guard returns before any token fetch or socket work, so those calls cluster at about 0-1 ms. A real transport failure, timeout or 5xx has measurable time in it.
 
 ```sql
-DECLARE release_version STRING DEFAULT '0.8.1';
+DECLARE release_version STRING DEFAULT '0.8.5';
 SELECT
   PARSE_DATE('%Y%m%d', event_date) AS day,
   COUNTIF(dur <= 5)  AS inconclusive_instant,
