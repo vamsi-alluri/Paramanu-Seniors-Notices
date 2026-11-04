@@ -33,7 +33,7 @@
  *  1. Paste this into the sender project as a new file, Poller.gs.
  *  2. Script Properties. SERVICE_ACCOUNT_JSON, DATABASE_URL and PROJECT_ID are already set for the
  *     sender and are reused as-is. Optionally add:
- *       ALERTS_FEED_URL    = https://parmanuseniorhealth-github-io.vercel.app/alerts/index.xml   (the default)
+ *       ALERTS_FEED_URL    = https://paramanuseniorshealth.org/alerts/index.xml   (the default)
  *       ALERTS_MAX_PER_RUN = 5                                                    (see the ceiling)
  *  3. Run testPollerParseFixture(). No network, no credentials, sends nothing.
  *  4. Run pollerDryRun(). Reads the real feed, logs what a real run would send, sends nothing.
@@ -46,9 +46,15 @@
  * half-way.
  */
 
-var POLLER_VERSION = '2026-09-13-poller';
+var POLLER_VERSION = '2026-11-04-poller';
 
-var POLLER_DEFAULT_FEED_URL = 'https://parmanuseniorhealth-github-io.vercel.app/alerts/index.xml';
+/**
+ * The live website's feed. The default must be production: a blank ALERTS_FEED_URL, or the repo
+ * copy pasted over the project, falls back to this. When it named the vercel.app build of the
+ * website fork, the poller read a valid feed that lacked new alerts and sent nothing, with no
+ * error, from 2026-10-27 to 2026-11-04.
+ */
+var POLLER_DEFAULT_FEED_URL = 'https://paramanuseniorshealth.org/alerts/index.xml';
 
 /**
  * Most alerts the poller will send in one run.
